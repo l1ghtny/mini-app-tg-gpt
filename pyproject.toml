@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "mini-app-tg-gpt"
+version = "0.1.0"
+description = ""
+authors = ["l1ghtny <ankoshenkov@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+openai = ">=1.109.1"
+python-dotenv = ">=1.0.1"
+sqlmodel = ">=0.0.25"
+SQLAlchemy = ">=2.0.30"
+python-telegram-bot = ">=21.4"
+requests = ">=2.31.0"
+langchain = ">=0.0.268"
+typing_extensions = ">=4.11.0"
+langgraph = ">=0.1.6"
+langchain-openai = ">=0.1.15"
+fastapi = {extras = ["standard"], version = "^0.118.0"}
+pydantic = ">=2.5.2"
+psycopg2 = "^2.9.10"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
