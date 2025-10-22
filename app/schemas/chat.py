@@ -49,6 +49,6 @@ class RenameRequest(BaseModel):
 
 class NewMessageRequest(BaseModel):
     content: List[MessageContent]
-    system_prompt = Optional[str]
-    model = AllowedModels
-    tool_choice = Optional[AllowedToolChoices]
+    system_prompt: Optional[str] = None
+    model: AllowedModels
+    tool_choice: Optional[AllowedToolChoices]
