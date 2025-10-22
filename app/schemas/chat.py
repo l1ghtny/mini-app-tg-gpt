@@ -52,3 +52,8 @@ class NewMessageRequest(BaseModel):
     system_prompt: Optional[str] = None
     model: AllowedModels
     tool_choice: Optional[AllowedToolChoices]
+
+
+class UpdateConversationSettingsRequest(BaseModel):
+    system_prompt: Optional[str] = None
+    model: Optional[AllowedModels] = None

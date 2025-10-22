@@ -10,7 +10,8 @@ from app.api.dependencies import get_current_user
 from app.db import models
 from app.db.database import get_session
 from app.db.models import AppUser
-from app.schemas.chat import Conversation, ConversationWithMessages, NewMessageRequest, RenameRequest
+from app.schemas.chat import Conversation, ConversationWithMessages, NewMessageRequest, RenameRequest, \
+    UpdateConversationSettingsRequest
 from app.services.openai_service import get_openai_response as get_openai_response
 from app.services.tasks import generate_and_save_title
 
@@ -204,3 +205,30 @@ def delete_conversation(
     session.delete(conversation)
     session.commit()
     return
+
+
+@router.put("/conversations/{conversation_id}/settings", response_model=Conversation)
+def update_conversation_settings(
+        conversation_id: uuid.UUID,
+        request: UpdateConversationSettingsRequest,
+        session: Session = Depends(get_session),
+        current_user: models.AppUser = Depends(get_current_user)  # Secure the endpoint
+):
+    """
+    Updates the settings (like system prompt) for a specific conversation.
+    """
+    conversation = session.get(models.Conversation, conversation_id)
+    if not conversation or conversation.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Update fields if they were provided in the request
+    if request.system_prompt is not None:
+        conversation.system_prompt = request.system_prompt
+
+    if request.model is not None:
+        conversation.model = request.model
+
+    session.add(conversation)
+    session.commit()
+    session.refresh(conversation)
+    return conversation
