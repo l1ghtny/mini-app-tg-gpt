@@ -1,6 +1,12 @@
-from pydantic import BaseModel
-from typing import List, Literal, Union
 import uuid
+from typing import List, Literal, Optional
+
+
+from pydantic import BaseModel
+
+
+AllowedModels = Literal["gpt-5", "gpt-5-mini", "gpt-5-nano"]
+AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter"]
 
 
 class TextContent(BaseModel):
@@ -10,7 +16,7 @@ class TextContent(BaseModel):
 class ImageUrlContent(BaseModel):
     type: Literal["image_url"]
     image_url: str
-    quality: Literal["medium"]
+    quality: Optional[Literal["medium"]]
 
 # --- A schema for content when reading from the DB ---
 class MessageContent(BaseModel):
@@ -37,9 +43,12 @@ class ConversationWithMessages(Conversation):
     messages: List[Message] = []
 
 
-class NewMessageRequest(BaseModel):
-    content: List[MessageContent]
-
-
 class RenameRequest(BaseModel):
     title: str
+
+
+class NewMessageRequest(BaseModel):
+    content: List[MessageContent]
+    system_prompt = Optional[str]
+    model = AllowedModels
+    tool_choice = Optional[AllowedToolChoices]

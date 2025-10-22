@@ -4,7 +4,6 @@ from pprint import pprint
 from openai import AsyncOpenAI, AuthenticationError, NotFoundError
 from typing import AsyncGenerator, List
 
-from openai.types.responses.tool_param import WebSearchTool
 
 from app.schemas.chat import Message
 
@@ -12,20 +11,28 @@ client = AsyncOpenAI()
 
 
 # TODO: add conversation_id from openai API so that it can be used to identify the conversation
-async def get_openai_response(messages: List[Message]) -> AsyncGenerator[str, None]:
+async def get_openai_response(
+        messages: List[Message],
+        model: str,
+        instructions: str = "You are a helpful assistant.",
+        tool_choice: str = "auto",
+) -> AsyncGenerator[str, None]:
     try:
         response = await client.responses.create(
-            model="gpt-5-mini",
+            model=model,
             tools=[{"type": "web_search"}, {"type": "image_generation"}],
-            tool_choice="auto",
-            instructions="You are a helpful assistant.",
+            tool_choice=tool_choice,
+            instructions=instructions,
             input=messages,
             stream=True
         )
 
         async for event in response:
-            pprint(event)
+            # pprint(event)
             event_type = event.type
+
+            if event_type == 'response.output_item.added' and hasattr(event, 'item') and event.item.type == 'reasoning':
+                yield json.dumps({"type": "status", "data": "thinking"}) + "\n"
 
             # Event: Text chunk is received
             if event_type == 'response.output_text.delta':
@@ -48,8 +55,29 @@ async def get_openai_response(messages: List[Message]) -> AsyncGenerator[str, No
                     b64_data = event.item.result
                     # We'll construct the data URL on the frontend
                     yield json.dumps({"type": "image", "format": "b64_json", "data": b64_data}) + "\n"
+        yield json.dumps({"type": "status", "data": "complete"}) + "\n"
 
     except AuthenticationError as e:
         yield json.dumps({"type": "error", "data": "OpenAI authentication failed. Check API key."}) + "\n"
     except NotFoundError as e:
         yield json.dumps({"type": "error", "data": "Model not found. Please check the model name."}) + "\n"
+
+
+async def generate_conversation_title(first_message: str) -> str:
+    try:
+        # We use a simple, fast model for this non-streaming task.
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert at creating short, concise titles. Summarize the user's message in 5 words or less. Do not use quotation marks or punctuation."},
+                {"role": "user", "content": first_message}
+            ],
+            temperature=0,
+            max_tokens=20,
+        )
+        print(response)
+        title = response.choices[0].message.content.strip().strip('"').strip('.')
+        return title if title else "New Chat"
+    except Exception as e:
+        print(f"Error generating title: {e}")
+        return "New Chat" # Fallback title
