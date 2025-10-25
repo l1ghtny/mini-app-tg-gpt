@@ -16,7 +16,7 @@ class Conversation(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     title: str = Field(index=True, default="New Chat")
     user_id: uuid.UUID = Field(foreign_key="app_user.id")
-    model: str = Field(default="gpt-4o-mini")
+    model: str = Field(default="gpt-5-nano")
     system_prompt: Optional[str] = Field(default="You are a helpful assistant.")
 
 

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 AllowedModels = Literal["gpt-5", "gpt-5-mini", "gpt-5-nano"]
-AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter"]
+AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter", "auto"]
 
 
 class TextContent(BaseModel):
@@ -49,11 +49,11 @@ class RenameRequest(BaseModel):
 
 class NewMessageRequest(BaseModel):
     content: List[MessageContent]
-    system_prompt: Optional[str] = None
     model: AllowedModels
-    tool_choice: Optional[AllowedToolChoices]
+    tool_choice: Optional[AllowedToolChoices] = None
 
 
 class UpdateConversationSettingsRequest(BaseModel):
     system_prompt: Optional[str] = None
     model: Optional[AllowedModels] = None
+    tool_choice: Optional[AllowedToolChoices] = None

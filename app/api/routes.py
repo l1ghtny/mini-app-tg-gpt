@@ -54,10 +54,6 @@ async def chat_with_conversation(
         conversation.model = request.model
         session.add(conversation)
 
-
-    if request.system_prompt is not None and conversation.system_prompt != request.system_prompt:
-        conversation.system_prompt = request.system_prompt
-        session.add(conversation)
     session.commit()
     # -------------------------
 
