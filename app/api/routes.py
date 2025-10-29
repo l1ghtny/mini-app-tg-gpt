@@ -18,6 +18,7 @@ from app.db.models import AppUser, Conversation, Message
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import ConversationAPI, ConversationWithMessages, NewMessageRequest, RenameRequest, \
     UpdateConversationSettingsRequest, MessageCreated
+from app.services.tasks import generate_and_save_title
 
 router = APIRouter()
 
@@ -32,10 +33,10 @@ async def create_message(
         bus: RedisEventBus = Depends(get_bus),
 ):
     # 1) Ensure the conversation exists & belongs to the user (add your auth checks)
-    conv = await load_conversation(session, conversation_id)
-    if not conv:
+    conversation = await load_conversation(session, conversation_id)
+    if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    if conv.user_id != current_user.id:
+    if conversation.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to send messages to this conversation")
 
     # 2) Create a USER message and contents
@@ -46,11 +47,13 @@ async def create_message(
     for part in request.content:
         mc = models.MessageContent(message_id=user_msg.id, type=part.type, value=part.value)
         session.add(mc)
+        if part.type == "text":
+            background_tasks.add_task(generate_and_save_title, conversation_id, part.value)
 
     # Optional: update model used for conv
-    if getattr(conv, "model", None) != request.model:
-        conv.model = request.model
-        session.add(conv)
+    if getattr(conversation, "model", None) != request.model:
+        conversation.model = request.model
+        session.add(conversation)
 
     await session.commit()
     await session.refresh(user_msg)
@@ -87,7 +90,7 @@ async def create_message(
         user_id=current_user.id,
         history_for_openai=history_for_openai,
         bus=bus,
-        instructions=request.system_prompt,
+        instructions=conversation.system_prompt,
         model=request.model,
         tool_choice=request.tool_choice
     )

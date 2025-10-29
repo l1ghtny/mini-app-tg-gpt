@@ -8,7 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.models import Conversation, MessageContent
 from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
-from app.services.streaming.events import coalesced_openai_events
+from app.services.openai_service import stream_normalized_openai_response
 from app.db.database import engine
 
 
@@ -32,45 +32,94 @@ async def generate_and_publish(
 
 ):
     async with AsyncSession(engine, expire_on_commit=False) as session:
-        buf = []
-        bytes_since_ckpt = 0
+        buffers: dict[int, str] = {}
+        last_ckpt: dict[int, int] = {}
+
         try:
-            async for evt in coalesced_openai_events(history_for_openai, model=model, tool_choice=tool_choice, instructions=instructions, user_id=user_id, conversation_id=conversation_id):
-                t = evt.get("type")
-                if t == "start":
-                    await bus.publish(str(assistant_message_id), {"type": "start"})
-                elif t == "delta":
-                    text = evt["text"]
-                    buf.append(text)
-                    bytes_since_ckpt += len(text)
-                    await bus.publish(str(assistant_message_id), {"type": "delta", "text": text})
-                    if bytes_since_ckpt >= settings.CHECKPOINT_BYTES:
-                        await _upsert_text_checkpoint(session, assistant_message_id, "".join(buf))
-                        bytes_since_ckpt = 0
-                elif t == "done":
-                    # Final write
-                    if buf:
-                        await _upsert_text_checkpoint(session, assistant_message_id, "".join(buf))
-                    await bus.mark_done(str(assistant_message_id), ok=True)
+            # Optional: publish a global "start"
+            await bus.publish(str(assistant_message_id), {"type": "start"})
+
+            async for ev in stream_normalized_openai_response(
+                    history_for_openai, model,
+                    instructions=instructions,
+                    tool_choice=tool_choice,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    request_id=None,
+            ):
+                await bus.publish(str(assistant_message_id), ev)
+
+                t = ev["type"]
+
+                if t == "part.start":
+                    # You can pre-create row if you like; not required.
+
+                    pass
+
+                elif t == "text.delta":
+                    i = ev["index"]
+                    txt = ev["text"]
+                    buffers[i] = buffers.get(i, "") + txt
+                    if len(buffers[i]) - last_ckpt.get(i, 0) >= settings.CHECKPOINT_BYTES:
+                        await _upsert_text(session, assistant_message_id, i, buffers[i])
+                        last_ckpt[i] = len(buffers[i])
+
+                elif t == "text.done":
+                    i = ev["index"]
+                    if i in buffers:
+                        await _upsert_text(session, assistant_message_id, i, buffers[i])
+
+                elif t == "image.ready":
+                    await _upsert_rich(session, assistant_message_id, ev["index"], "image", {
+                        "format": ev.get("format"), "mime": ev.get("mime"), "data": ev.get("data"),
+                        "url": ev.get("url"), "file_id": ev.get("file_id"),
+                    })
+
+                elif t == "tool_call":
+                    await _upsert_rich(session, assistant_message_id, ev["index"], "tool_call", {
+                        "name": ev["name"], "arguments": ev["arguments"]
+                    })
+
+                elif t in ("done", "error"):
+                    # optional: mark message status in DB
+                    pass
+
         except Exception as e:
             await bus.publish(str(assistant_message_id), {"type": "error", "error": str(e)})
             await bus.mark_done(str(assistant_message_id), ok=False, error=str(e))
+        else:
+            await bus.mark_done(str(assistant_message_id), ok=True)
 
-async def _upsert_text_checkpoint(session: AsyncSession, msg_id: uuid.UUID, text: str):
-    # Store or update the assistant text as a single content row.
-    # If you want “streaming transcript”, you can update same row; elsewhere you can keep checkpoints in a temp table.
-    existing = await session.exec(
+async def _upsert_text(session, message_id, ordinal, text):
+    res = await session.exec(
         select(MessageContent).where(
-            MessageContent.message_id == msg_id,
-            MessageContent.type == "text"
+            MessageContent.message_id == message_id,
+            MessageContent.ordinal == ordinal,
+            MessageContent.type == "text",
         )
     )
-    message_content = existing.first()
-    if message_content:
-        message_content.value = text
+    row = res.first()
+    if row:
+        row.text = text
     else:
-        message_content = MessageContent(message_id=msg_id, type="text", value=text)
-        session.add(message_content)
+        row = MessageContent(message_id=message_id, ordinal=ordinal, type="text", text=text, value=text)
+        session.add(row)
+    await session.commit()
+
+async def _upsert_rich(session, message_id, ordinal, type_, data: dict):
+    res = await session.exec(
+        select(MessageContent).where(
+            MessageContent.message_id == message_id,
+            MessageContent.ordinal == ordinal,
+            MessageContent.type == type_,
+        )
+    )
+    row = res.first()
+    if row:
+        row.data = data
+    else:
+        row = MessageContent(message_id=message_id, ordinal=ordinal, type=type_, data=data, value='data')
+        session.add(row)
     await session.commit()
 
 

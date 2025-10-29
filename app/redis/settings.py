@@ -1,4 +1,6 @@
-﻿from pydantic import Field, BaseModel
+﻿import os
+
+from pydantic import Field, BaseModel
 
 
 class Settings(BaseModel):
@@ -9,3 +11,5 @@ class Settings(BaseModel):
     CHECKPOINT_BYTES: int = 2048           # write checkpoint to DB every N bytes
 
 settings = Settings()
+
+settings.REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")

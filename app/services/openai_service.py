@@ -1,4 +1,5 @@
-from typing import AsyncGenerator, List, Optional
+import asyncio
+from typing import AsyncGenerator, List, Optional, Dict, Any
 import json
 from pprint import pprint
 import uuid
@@ -9,6 +10,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import TokenUsage
 from app.db.database import get_session
+from app.redis.settings import settings
+from app.schemas.chat import Message
+from app.services.background.save_openai_usage import log_usage
 from app.services.pricing_service import PricingService
 
 STYLE_GUIDE = (
@@ -22,25 +26,35 @@ STYLE_GUIDE = (
 client = AsyncOpenAI()
 
 
-async def stream_openai_response(
-        messages: List["Message"],
-        model: str,
-        instructions: Optional[str] = "You are a helpful assistant.",
-        tool_choice: Optional[str] = "auto",
-        *,
-        user_id: Optional[uuid.UUID] = None,
-        conversation_id: Optional[uuid.UUID] = None,
-        request_id: Optional[str] = None
-) -> AsyncGenerator[str, None]:
-    input_tokens = 0
-    output_tokens = 0
-    reasoning_tokens = 0
-    web_search_calls = 0
-    images_generated = 0
-
+async def stream_normalized_openai_response(
+    messages: List["Message"],
+    model: Optional[str] = 'gpt-5-nano',
+    *,
+    instructions: Optional[str] = "You are a helpful assistant.",
+    tool_choice: Optional[str] = "auto",
+    user_id: Optional[uuid.UUID] = None,
+    conversation_id: Optional[uuid.UUID] = None,
+    request_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """
+    Adapts OpenAI Responses API stream into part-oriented events.
+    """
+    input_tokens = output_tokens = reasoning_tokens = 0
+    web_search_calls = images_generated = 0
     corr_id = request_id or str(uuid.uuid4())
 
-    print(f'MESSAGES: {messages}')
+    # coalescing buffer for text by content_index
+    text_buf: Dict[int, str] = {}
+    last_flush: Dict[int, float] = {}
+
+    async def flush(index: int, force=False):
+        if not text_buf.get(index):
+            return
+        now = asyncio.get_running_loop().time()
+        if force or (now - last_flush.get(index, 0)) * 1000 >= settings.COALESCE_MS:
+            yield {"type": "text.delta", "index": index, "text": text_buf[index]}
+            text_buf[index] = ""
+            last_flush[index] = now
 
     try:
         response = await client.responses.create(
@@ -49,45 +63,96 @@ async def stream_openai_response(
             tool_choice=tool_choice,
             instructions=instructions,
             input=messages,
-            stream=True
+            stream=True,
         )
 
+        # This maps OpenAI event names to our normalised events
+        seen_text_part_started: Dict[int, bool] = {}
+
         async for event in response:
-            pprint(event)
-            event_type = event.type
+            et = event.type
 
-            if event_type == 'response.output_item.added' and hasattr(event, 'item') and event.item.type == 'reasoning':
-                yield json.dumps({"type": "status", "data": "thinking"}) + "\n"
+            # Reasoning “thinking” status
+            if et == "response.output_item.added" and getattr(event, "item", None) and event.item.type == "reasoning":
+                yield {"type": "status", "stage": "thinking"}
+                continue
 
-            if event_type == 'response.output_text.delta':
-                yield json.dumps({"type": "text_chunk", "data": event.delta}) + "\n"
+            # Start of the assistant message text part (Responses API uses content parts)
+            if et == "response.content_part.added":
+                # content_index numbers the part; map types
+                i = event.content_index
+                p = event.part
+                if getattr(p, "type", None) in ("output_text", "text", "output_text_delta"):
+                    if not seen_text_part_started.get(i):
+                        seen_text_part_started[i] = True
+                        yield {"type": "part.start", "index": i, "content_type": "text"}
+                        # init buffers
+                        text_buf.setdefault(i, ""); last_flush.setdefault(i, 0)
+                # You can add branches for other part types here if Responses starts sending them
+                continue
 
-            elif event_type == 'response.web_search_call.in_progress':
-                yield json.dumps({"type": "tool_status", "tool": "web_search", "status": "Searching the web..."}) + "\n"
+            # Text token deltas
+            if et == "response.output_text.delta":
+                i = event.content_index
+                if not seen_text_part_started.get(i):
+                    seen_text_part_started[i] = True
+                    yield {"type": "part.start", "index": i, "content_type": "text"}
+                    text_buf.setdefault(i, ""); last_flush.setdefault(i, 0)
+                text_buf[i] += event.delta
+                # try flushing (coalesce)
+                async for out in flush(i):
+                    yield out
+                continue
 
-            elif event_type == 'response.web_search_call.searching':
-                yield json.dumps({"type": "tool_status", "tool": "web_search", "status": "Searching the web..."}) + "\n"
+            # End of a text part
+            if et == "response.output_text.done":
+                i = event.content_index
+                # force-flush remainder
+                if text_buf.get(i):
+                    yield {"type": "text.delta", "index": i, "text": text_buf[i]}
+                    text_buf[i] = ""
+                yield {"type": "text.done", "index": i}
+                continue
 
-            elif event_type == 'response.web_search_call.completed':
+            # Web search tool lifecycle (keep as UI-only status + count)
+            if et in ("response.web_search_call.in_progress", "response.web_search_call.searching"):
+                yield {"type": "status", "stage": "web_search.in_progress"}
+                continue
+            if et == "response.web_search_call.completed":
                 web_search_calls += 1
-                yield json.dumps({"type": "tool_status", "tool": "web_search", "status": "Found sources"}) + "\n"
+                yield {"type": "status", "stage": "web_search.completed"}
+                continue
 
-            elif event_type == 'response.image_generation_call.generating':
-                yield json.dumps({"type": "tool_status", "tool": "image_generation", "status": "Generating image..."}) + "\n"
-
-            elif event_type == 'response.output_item.done' and hasattr(event, 'item') and event.item.type == 'image_generation_call':
+            # Image generation result (Responses emits this as an “image_generation_call” output item)
+            if et == "response.output_item.done" and getattr(event, "item", None) and event.item.type == "image_generation_call":
                 if getattr(event.item, "result", None):
                     images_generated += 1
-                    yield json.dumps({"type": "image", "format": "b64_json", "data": event.item.result}) + "\n"
+                    # If you base64-save: format=b64. Better: upload -> url.
+                    yield {"type": "part.start", "index": 999, "content_type": "image"}  # choose next ordinal if mixed
+                    yield {
+                        "type": "image.ready",
+                        "index": 999,
+                        "format": "b64",
+                        "mime": "image/png",  # Responses uses 'png' by default; pass through if present
+                        "data": event.item.result,
+                    }
+                continue
 
-            elif event_type in ('response.completed', 'response.completed.successfully'):
+            # Stream lifecycle: completed and usage
+            if et in ("response.completed", "response.completed.successfully"):
                 usage = getattr(event, "usage", None)
                 if usage:
                     input_tokens = getattr(usage, "input_tokens", input_tokens) or input_tokens
                     output_tokens = getattr(usage, "output_tokens", output_tokens) or output_tokens
                     reasoning_tokens = getattr(usage, "reasoning_tokens", reasoning_tokens) or reasoning_tokens
-
-        yield json.dumps({"type": "status", "data": "complete"}) + "\n"
+                # force-flush any lingering text buffers
+                for i, buf in list(text_buf.items()):
+                    if buf:
+                        yield {"type": "text.delta", "index": i, "text": buf}
+                        yield {"type": "text.done", "index": i}
+                        text_buf[i] = ""
+                yield {"type": "done"}
+                continue
 
         async for session in get_session():
             await log_usage(

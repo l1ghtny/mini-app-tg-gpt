@@ -2,7 +2,8 @@ from datetime import datetime, UTC
 from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime
+from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey, Integer
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 import uuid
 
@@ -46,9 +47,12 @@ class Message(SQLModel, table=True):
 class MessageContent(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     message_id: uuid.UUID = Field(foreign_key="message.id")
+    ordinal: int = Field(sa_column=Column(Integer, default=0))
+    data: Optional[dict] = Field(default=None, sa_column=Column(JSONB))
 
     type: str  # "text" or "image_url"
     value: str  # The actual text or the URL for the image
+
 
     message: Message = Relationship(back_populates="content")
 
@@ -85,7 +89,13 @@ class TokenUsage(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime, index=True))
 
     user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="app_user.id")
-    conversation_id: Optional[uuid.UUID] = Field(default=None, foreign_key="conversation.id")
+    conversation_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(
+            ForeignKey("conversation.id", ondelete="SET NULL"),
+            nullable=True,
+        )
+    )
 
     provider: str = Field(default="openai", index=True)
     model_name: str = Field(index=True)
