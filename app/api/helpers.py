@@ -100,9 +100,9 @@ async def _upsert_text(session, message_id, ordinal, text):
     )
     row = res.first()
     if row:
-        row.text = text
+        row.value = text
     else:
-        row = MessageContent(message_id=message_id, ordinal=ordinal, type="text", text=text, value=text)
+        row = MessageContent(message_id=message_id, ordinal=ordinal, type="text", value=text)
         session.add(row)
     await session.commit()
 

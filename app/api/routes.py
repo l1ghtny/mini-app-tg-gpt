@@ -3,6 +3,7 @@ import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Request, Response
+from pydantic import RootModel
 from redis.asyncio import Redis
 from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
@@ -101,56 +102,55 @@ async def create_message(
     }
 
 
+bus_event = RootModel(dict)
+
+
 @router.get("/conversations/{conversation_id}/messages/{message_id}/stream")
 async def stream_message(
     conversation_id: uuid.UUID,
     message_id: uuid.UUID,
     request: Request,
-    last_event_id: Optional[str] = Header(default=None, convert_underscores=False, alias="Last-Event-ID"),
-    bus: RedisEventBus = Depends(get_bus),
+    bus: RedisEventBus = Depends(get_bus),  # your DI
+    current_user=Depends(get_current_user),
+    last_event_id: str | None = Header(None, convert_underscores=False, alias="Last-Event-ID"),
     session: AsyncSession = Depends(get_session),
-    current_user: AppUser = Depends(get_current_user),
 ):
-    # Auth
-    conv = await load_conversation(session, conversation_id)
-    if not conv:
+    conversation = await load_conversation(session, conversation_id)
+    if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    if conv.user_id != current_user.id:
+    if conversation.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to stream messages from this conversation")
 
 
-    async def event_gen():
-        # If the stream doesn’t exist yet, wait; producer will create it on first publish.
-        # If it never appears and DB says the message is already finalised, just send done + end.
-        started = False
-        # Quick check: if the Redis key doesn’t exist, peek DB for final content
-        if not await bus.exists(str(message_id)):
-            # optimistic: if assistant text exists, emit start + delta + done once and exit
-            text = await fetch_assistant_text(session, message_id)
-            if text is not None:
-                yield {"id": "0-1", "event": "start", "data": "{}"}
-                if text:
-                    yield {"id": "0-2", "event": "delta", "data": json.dumps({"text": text})}
-                yield {"id": "0-3", "event": "done", "data": "{}"}
-                return
-            # else fall through and block on stream creation
+    start_id = last_event_id or "0-0"
 
-        async for sid, evt in bus.read(str(message_id), last_id=last_event_id):
+    async def gen():
+        # If stream missing (expired) you can synthesize from DB here if you want.
+        async for sid, ev in bus.read(str(message_id), start_id):
             if await request.is_disconnected():
-                break
-            t = evt.get("type", "delta")
-            data = evt.get("text") if t == "delta" else json.dumps(evt)
-            yield {"id": sid, "event": t, "data": data}
-            if t in ("done", "error"):
+                return
+            # Send the exact type + JSON you stored
+            print(ev)
+            print('\n')
+            event_name = ev.get("type", "message")
+
+
+            payload = ev
+
+            yield {
+                "id": sid,
+                "event": event_name,
+                "data": json.dumps(payload, separators=(",", ":")),
+            }
+
+            if event_name in ("done", "error"):
                 return
 
-    return EventSourceResponse(
-        event_gen(),
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",  # for nginx
+    }
+    return EventSourceResponse(gen(), headers=headers)
 
 
 @router.post("/conversations", response_model=ConversationAPI)
