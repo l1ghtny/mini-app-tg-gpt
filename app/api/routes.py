@@ -1,219 +1,264 @@
 import json
 import uuid
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
-from sqlmodel import Session, select
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Request, Response
+from redis.asyncio import Redis
+from sqlalchemy.orm import selectinload
+from sse_starlette.sse import EventSourceResponse
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+from starlette.responses import RedirectResponse
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, get_bus, get_redis
+from app.api.helpers import generate_and_publish, load_conversation, fetch_assistant_text
 from app.db import models
 from app.db.database import get_session
-from app.db.models import AppUser
-from app.schemas.chat import Conversation, ConversationWithMessages, NewMessageRequest, RenameRequest, \
-    UpdateConversationSettingsRequest
-from app.services.openai_service import get_openai_response as get_openai_response
-from app.services.tasks import generate_and_save_title
+from app.db.models import AppUser, Conversation, Message
+from app.redis.event_bus import RedisEventBus
+from app.schemas.chat import ConversationAPI, ConversationWithMessages, NewMessageRequest, RenameRequest, \
+    UpdateConversationSettingsRequest, MessageCreated
 
 router = APIRouter()
 
 
-@router.post("/conversations/{conversation_id}/messages")
-async def chat_with_conversation(
+@router.post("/conversations/{conversation_id}/messages", status_code=202, response_model=MessageCreated)
+async def create_message(
         conversation_id: uuid.UUID,
         request: NewMessageRequest,
         background_tasks: BackgroundTasks,
-        session: Session = Depends(get_session),
-        current_user: AppUser = Depends(get_current_user)
+        session: AsyncSession = Depends(get_session),
+        current_user: AppUser = Depends(get_current_user),
+        bus: RedisEventBus = Depends(get_bus),
 ):
-    conversation = session.get(models.Conversation, conversation_id)
-    if not conversation:
+    # 1) Ensure the conversation exists & belongs to the user (add your auth checks)
+    conv = await load_conversation(session, conversation_id)
+    if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if conv.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to send messages to this conversation")
 
-    # Checking if this is the first message in chat
-    is_first_message = len(conversation.messages) == 0 and conversation.title == "New Chat"
+    # 2) Create a USER message and contents
+    user_msg = models.Message(conversation_id=conversation_id, role="user")
+    session.add(user_msg)
+    await session.flush()
 
-    # 1. Create the parent Message object
-    user_message = models.Message(conversation_id=conversation_id, role="user")
-    session.add(user_message)
-    session.commit()
-    session.refresh(user_message)
-
-    # --- SIMPLIFIED LOGIC ---
-    # 2. Create MessageContent objects directly from the request
     for part in request.content:
-        message_content = models.MessageContent(
-            message_id=user_message.id,
-            type=part.type,
-            value=part.value
-        )
-        session.add(message_content)
+        mc = models.MessageContent(message_id=user_msg.id, type=part.type, value=part.value)
+        session.add(mc)
 
+    # Optional: update model used for conv
+    if getattr(conv, "model", None) != request.model:
+        conv.model = request.model
+        session.add(conv)
 
-    if conversation.model != request.model:
-        conversation.model = request.model
-        session.add(conversation)
+    await session.commit()
+    await session.refresh(user_msg)
 
-    session.commit()
-    # -------------------------
+    # 3) Create *assistant* a placeholder message to attach final content
+    assistant_msg = models.Message(conversation_id=conversation_id, role="assistant")
+    session.add(assistant_msg)
+    await session.commit()
+    await session.refresh(assistant_msg)
 
-    # Creating the task to generate the title
-    if is_first_message:
-        print('GENERATING TITLE')
-        first_user_message_content = ""
-        for part in request.content:
-            if part.type == 'text':
-                first_user_message_content = part.value
-                break  # We only need the first text part for the title
-
-        if first_user_message_content:
-            background_tasks.add_task(generate_and_save_title, conversation_id, first_user_message_content)
-
-    # 3. Prepare data for OpenAI (this part now also becomes simpler)
+    # 4) Build history for OpenAI
     history_for_openai = []
-    for msg in conversation.messages:
-        content_list = []
-        for part in msg.content:
-            if part.type == 'text' and msg.role == 'user':
-                content_list.append({"type": "input_text", "text": part.value})
-            elif part.type == 'text' and msg.role == 'assistant':
-                content_list.append({"type": "output_text", "text": part.value})
-            elif part.type == 'image_url':
-                content_list.append({"type": "input_image", "image_url": part.value})
-        history_for_openai.append({"role": msg.role, "content": content_list})
+    # Pull last N messages (optional optimisation); so far we fetch all:
+    result = await session.exec(select(Message).where(Message.conversation_id == conversation_id))
+    msgs = result.all()
+    for msg in msgs:
+        # lazy-load content
+        await session.refresh(msg, attribute_names=["content"])
+        parts = []
+        for c in msg.content:
+            if c.type == "text" and msg.role == "user":
+                parts.append({"type": "input_text", "text": c.value})
+            elif c.type == "text" and msg.role == "assistant":
+                parts.append({"type": "output_text", "text": c.value})
+            elif c.type == "image_url":
+                parts.append({"type": "input_image", "image_url": c.value})
+        history_for_openai.append({"role": msg.role, "content": parts})
 
-    async def stream_and_save():
-        # ... (streaming logic remains the same, but saving is different)
-        response_generator = get_openai_response(history_for_openai, model=request.model, tool_choice=request.tool_choice)
+    # 5) Kick off a background producer that streams to Redis and batches DB writes
+    background_tasks.add_task(
+        generate_and_publish,
+        conversation_id=conversation_id,
+        assistant_message_id=assistant_msg.id,
+        user_id=current_user.id,
+        history_for_openai=history_for_openai,
+        bus=bus,
+        instructions=request.system_prompt,
+        model=request.model,
+        tool_choice=request.tool_choice
+    )
 
-        # Create the parent assistant message first
-        assistant_message = models.Message(conversation_id=conversation_id, role="assistant")
-        session.add(assistant_message)
-        session.commit()
-        session.refresh(assistant_message)
-
-        # Variables to accumulate content before saving
-        current_text_chunk = ""
-
-        async for chunk_json in response_generator:
-            event = json.loads(chunk_json)
-
-            if event['type'] == 'text_chunk':
-                current_text_chunk += event['data']
-            elif event['type'] == 'image':
-                # Save the image part immediately
-                image_content = models.MessageContent(
-                    message_id=assistant_message.id, type="image_url", value=event['data']
-                )
-                session.add(image_content)
-
-            yield chunk_json
-
-        # 4. Save the final accumulated text chunk
-        if current_text_chunk:
-            text_content = models.MessageContent(
-                message_id=assistant_message.id, type="text", value=current_text_chunk
-            )
-            session.add(text_content)
-
-        session.commit()
-
-    return StreamingResponse(stream_and_save(), media_type="text/event-stream")
+    return {
+        "message_id": str(assistant_msg.id),
+        "stream_url": f"/api/v1/conversations/{conversation_id}/messages/{assistant_msg.id}/stream"
+    }
 
 
-@router.post("/conversations", response_model=Conversation)
-def create_conversation(session: Session = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+@router.get("/conversations/{conversation_id}/messages/{message_id}/stream")
+async def stream_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    request: Request,
+    last_event_id: Optional[str] = Header(default=None, convert_underscores=False, alias="Last-Event-ID"),
+    bus: RedisEventBus = Depends(get_bus),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    # Auth
+    conv = await load_conversation(session, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conv.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to stream messages from this conversation")
+
+
+    async def event_gen():
+        # If the stream doesn’t exist yet, wait; producer will create it on first publish.
+        # If it never appears and DB says the message is already finalised, just send done + end.
+        started = False
+        # Quick check: if the Redis key doesn’t exist, peek DB for final content
+        if not await bus.exists(str(message_id)):
+            # optimistic: if assistant text exists, emit start + delta + done once and exit
+            text = await fetch_assistant_text(session, message_id)
+            if text is not None:
+                yield {"id": "0-1", "event": "start", "data": "{}"}
+                if text:
+                    yield {"id": "0-2", "event": "delta", "data": json.dumps({"text": text})}
+                yield {"id": "0-3", "event": "done", "data": "{}"}
+                return
+            # else fall through and block on stream creation
+
+        async for sid, evt in bus.read(str(message_id), last_id=last_event_id):
+            if await request.is_disconnected():
+                break
+            t = evt.get("type", "delta")
+            data = evt.get("text") if t == "delta" else json.dumps(evt)
+            yield {"id": sid, "event": t, "data": data}
+            if t in ("done", "error"):
+                return
+
+    return EventSourceResponse(
+        event_gen(),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@router.post("/conversations", response_model=ConversationAPI)
+async def create_conversation(session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
     """
     Creates a new conversation for the user.
     """
     # First, ensure the temporary user exists
-    user = session.get(models.AppUser, current_user.id)
+    user = await session.get(models.AppUser, current_user.id)
     if not user:
         user = models.AppUser(id=current_user.id, telegram_id=current_user.telegram_id)  # Example telegram_id
         session.add(user)
-        session.commit()
-        session.refresh(user)
+        await session.commit()
+        await session.refresh(user)
 
     new_conversation = models.Conversation(title="New Chat", user_id=user.id)
     session.add(new_conversation)
-    session.commit()
-    session.refresh(new_conversation)
+    await session.commit()
+    await session.refresh(new_conversation)
     return new_conversation
 
 
 @router.get("/conversations", response_model=List[Conversation])
-def get_conversations(session: Session = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+async def get_conversations(session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
     """
     Gets all conversations for the user.
     """
-    conversations = session.exec(
-        select(models.Conversation).where(models.Conversation.user_id == current_user.id)
-    ).all()
+    conversations = await session.exec(
+        select(models.Conversation).where(models.Conversation.user_id == current_user.id))
+    conversations = conversations.all()
     return conversations
 
 
-@router.get("/conversations/{conversation_id}", response_model=ConversationWithMessages)
-def get_conversation_messages(conversation_id: uuid.UUID, session: Session = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+@router.get("/conversations/{conversation_id}/messages", response_model=ConversationWithMessages)
+async def get_conversation_messages(conversation_id: uuid.UUID, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
     """
     Gets a specific conversation and all its messages.
     """
-    conversation = session.get(models.Conversation, conversation_id)
+
+    query = select(Conversation).where(Conversation.id == conversation_id).options(selectinload(Conversation.messages).selectinload(models.Message.content))
+    conversation = await session.exec(query)
+    conversation = conversation.first()
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
 
+@router.get("/conversations/{cid}/stream")
+async def sse_conversation(cid: uuid.UUID, request: Request,
+                           r: Redis = Depends(get_redis), current_user: AppUser = Depends(get_current_user)):
+    mid = await r.get(f"conv:{cid}:current")
+    if not mid:
+        # Nothing active; you can 204, or synthesize from DB (like above), or 404.
+        # I’d recommend 204 No Content.
+        return Response(status_code=204)
+    # 307 preserves method and lets client follow transparently
+    return RedirectResponse(url=f"/api/v1/conversations/{cid}/messages/{mid}/stream", status_code=307)
+
+
+
 @router.put("/conversations/{conversation_id}", response_model=Conversation)
-def rename_conversation(
+async def rename_conversation(
     conversation_id: uuid.UUID,
     request: RenameRequest,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user)
 ):
     """
     Renames a specific conversation.
     """
-    conversation = session.get(models.Conversation, conversation_id)
+    conversation = await session.get(models.Conversation, conversation_id)
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     conversation.title = request.title
     session.add(conversation)
-    session.commit()
-    session.refresh(conversation)
+    await session.commit()
+    await session.refresh(conversation)
     return conversation
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
-def delete_conversation(
+async def delete_conversation(
     conversation_id: uuid.UUID,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user)
 ):
     """
     Deletes a specific conversation and all its messages.
     """
-    conversation = session.get(models.Conversation, conversation_id)
+    conversation = await session.get(models.Conversation, conversation_id)
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     # SQLModel will handle cascading deletes for messages if the relationship is set up correctly
-    session.delete(conversation)
-    session.commit()
+    await session.delete(conversation)
+    await session.commit()
     return
 
 
-@router.put("/conversations/{conversation_id}/settings", response_model=Conversation)
-def update_conversation_settings(
+@router.put("/conversations/{conversation_id}/settings", response_model=ConversationAPI)
+async def update_conversation_settings(
         conversation_id: uuid.UUID,
         request: UpdateConversationSettingsRequest,
-        session: Session = Depends(get_session),
+        session: AsyncSession = Depends(get_session),
         current_user: models.AppUser = Depends(get_current_user)  # Secure the endpoint
 ):
     """
     Updates the settings (like system prompt) for a specific conversation.
     """
-    conversation = session.get(models.Conversation, conversation_id)
+    conversation = await session.get(models.Conversation, conversation_id)
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -225,6 +270,6 @@ def update_conversation_settings(
         conversation.model = request.model
 
     session.add(conversation)
-    session.commit()
-    session.refresh(conversation)
+    await session.commit()
+    await session.refresh(conversation)
     return conversation

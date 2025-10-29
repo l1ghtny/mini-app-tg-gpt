@@ -31,7 +31,7 @@ class Message(BaseModel):
     content: List[MessageContent]
 
 
-class Conversation(BaseModel):
+class ConversationAPI(BaseModel):
     id: uuid.UUID
     title: str
 
@@ -39,7 +39,7 @@ class Conversation(BaseModel):
         from_attributes = True
 
 
-class ConversationWithMessages(Conversation):
+class ConversationWithMessages(ConversationAPI):
     messages: List[Message] = []
 
 
@@ -57,3 +57,8 @@ class UpdateConversationSettingsRequest(BaseModel):
     system_prompt: Optional[str] = None
     model: Optional[AllowedModels] = None
     tool_choice: Optional[AllowedToolChoices] = None
+
+
+class MessageCreated(BaseModel):
+    message_id: uuid.UUID
+    stream_url: str

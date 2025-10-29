@@ -20,6 +20,10 @@ langchain-openai = ">=0.1.15"
 fastapi = {extras = ["standard"], version = "^0.118.0"}
 pydantic = ">=2.5.2"
 psycopg2 = "^2.9.10"
+asyncpg = "^0.30.0"
+alembic = "^1.17.0"
+redis = "^7.0.1"
+sse-starlette = "^3.0.2"
 
 
 [build-system]

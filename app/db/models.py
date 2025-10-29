@@ -1,6 +1,8 @@
+from datetime import datetime, UTC
+from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Column
+from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime
 from sqlmodel import Field, Relationship, SQLModel
 import uuid
 
@@ -49,3 +51,66 @@ class MessageContent(SQLModel, table=True):
     value: str  # The actual text or the URL for the image
 
     message: Message = Relationship(back_populates="content")
+
+
+class AiModelPricing(SQLModel, table=True):
+    """
+    Pricing per 1,000,000 tokens for text/reasoning; per-call for search; per-image for image gen.
+    """
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    provider: str = Field(index=True)  # e.g., "openai"
+    model_name: str = Field(index=True)
+    currency: str = Field(default="USD")
+
+    # per-1M token prices
+    unit_price_input_per_1m: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    unit_price_output_per_1m: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    unit_price_reasoning_per_1m: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+
+    # per-call / per-item prices
+    unit_price_web_search_call: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    unit_price_image_generation: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+
+    is_active: bool = Field(default=True)
+
+    __table_args__ = (
+        Index("ix_pricing_provider_model_active", "provider", "model_name", "is_active"),
+    )
+
+class TokenUsage(SQLModel, table=True):
+    """
+    Ledger of usage per response/operation (no raw JSON payloads).
+    """
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime, index=True))
+
+    user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="app_user.id")
+    conversation_id: Optional[uuid.UUID] = Field(default=None, foreign_key="conversation.id")
+
+    provider: str = Field(default="openai", index=True)
+    model_name: str = Field(index=True)
+
+    # request correlation
+    request_id: Optional[str] = Field(default=None, index=True)
+    status: str = Field(default="success")  # success | error | cancelled
+    error_message: Optional[str] = Field(default=None)
+
+    # usage counters
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
+    reasoning_tokens: int = Field(default=0)
+    web_search_calls: int = Field(default=0)
+    images_generated: int = Field(default=0)
+
+    # cost breakdown (same currency as pricing)
+    currency: str = Field(default="USD")
+    cost_input: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    cost_output: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    cost_reasoning: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    cost_web_search: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    cost_images: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    total_cost: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+
+    __table_args__ = (
+        Index("ix_token_usage_user_created", "user_id", "created_at"),
+    )
