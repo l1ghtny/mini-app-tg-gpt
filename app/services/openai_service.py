@@ -6,6 +6,8 @@ import uuid
 
 from openai import AsyncOpenAI
 from openai import AuthenticationError, NotFoundError
+from openai.types.responses import FileSearchToolParam
+from openai.types.responses.tool_param import ImageGeneration, WebSearchTool
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import TokenUsage
@@ -59,7 +61,7 @@ async def stream_normalized_openai_response(
     try:
         response = await client.responses.create(
             model=model,
-            tools=[{"type": "web_search"}, {"type": "image_generation"}],
+            tools=[ImageGeneration(type="image_generation", model="gpt-image-1-mini"), WebSearchTool(type="web_search")],
             tool_choice=tool_choice,
             instructions=instructions,
             input=messages,
