@@ -13,12 +13,12 @@ class TextContent(BaseModel):
     type: Literal["text"]
     text: str
 
+# --- A schema for sending data to the OpenAI API ---
 class ImageUrlContent(BaseModel):
     type: Literal["image_url"]
     image_url: str
-    quality: Optional[Literal["medium"]]
 
-# --- A schema for content when reading from the DB ---
+# --- A schema for content when creating history for openAI API ---
 class MessageContent(BaseModel):
     type: str
     value: str

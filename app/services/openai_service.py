@@ -6,7 +6,8 @@ import uuid
 
 from openai import AsyncOpenAI
 from openai import AuthenticationError, NotFoundError
-from openai.types.responses import FileSearchToolParam
+from openai.types.responses import FileSearchToolParam, ResponseImageGenCallGeneratingEvent, \
+    ResponseImageGenCallInProgressEvent, ResponseImageGenCallPartialImageEvent
 from openai.types.responses.tool_param import ImageGeneration, WebSearchTool
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -61,100 +62,121 @@ async def stream_normalized_openai_response(
     try:
         response = await client.responses.create(
             model=model,
-            tools=[ImageGeneration(type="image_generation", model="gpt-image-1-mini"), WebSearchTool(type="web_search")],
+            tools=[ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium"), WebSearchTool(type="web_search")],
             tool_choice=tool_choice,
             instructions=instructions,
             input=messages,
             stream=True,
+            service_tier="flex"
         )
 
         # This maps OpenAI event names to our normalised events
         seen_text_part_started: Dict[int, bool] = {}
+        try:
+            async for event in response:
+                pprint(event)
+                et = event.type
 
-        async for event in response:
-            et = event.type
+                # Reasoning “thinking” status
+                if et == "response.output_item.added" and getattr(event, "item", None) and event.item.type == "reasoning":
+                    yield {"type": "status", "stage": "thinking"}
+                    continue
 
-            # Reasoning “thinking” status
-            if et == "response.output_item.added" and getattr(event, "item", None) and event.item.type == "reasoning":
-                yield {"type": "status", "stage": "thinking"}
-                continue
+                # Start of the assistant message text part (Responses API uses content parts)
+                if et == "response.content_part.added":
+                    # content_index numbers the part; map types
+                    i = event.content_index
+                    p = event.part
+                    if getattr(p, "type", None) in ("output_text", "text", "output_text_delta"):
+                        if not seen_text_part_started.get(i):
+                            seen_text_part_started[i] = True
+                            yield {"type": "part.start", "index": i, "content_type": "text"}
+                            # init buffers
+                            text_buf.setdefault(i, ""); last_flush.setdefault(i, 0)
+                    # You can add branches for other part types here if Responses starts sending them
+                    continue
 
-            # Start of the assistant message text part (Responses API uses content parts)
-            if et == "response.content_part.added":
-                # content_index numbers the part; map types
-                i = event.content_index
-                p = event.part
-                if getattr(p, "type", None) in ("output_text", "text", "output_text_delta"):
+                # Text token deltas
+                if et == "response.output_text.delta":
+                    i = event.content_index
                     if not seen_text_part_started.get(i):
                         seen_text_part_started[i] = True
                         yield {"type": "part.start", "index": i, "content_type": "text"}
-                        # init buffers
                         text_buf.setdefault(i, ""); last_flush.setdefault(i, 0)
-                # You can add branches for other part types here if Responses starts sending them
-                continue
+                    text_buf[i] += event.delta
+                    # try flushing (coalesce)
+                    async for out in flush(i):
+                        yield out
+                    continue
 
-            # Text token deltas
-            if et == "response.output_text.delta":
-                i = event.content_index
-                if not seen_text_part_started.get(i):
-                    seen_text_part_started[i] = True
-                    yield {"type": "part.start", "index": i, "content_type": "text"}
-                    text_buf.setdefault(i, ""); last_flush.setdefault(i, 0)
-                text_buf[i] += event.delta
-                # try flushing (coalesce)
-                async for out in flush(i):
-                    yield out
-                continue
-
-            # End of a text part
-            if et == "response.output_text.done":
-                i = event.content_index
-                # force-flush remainder
-                if text_buf.get(i):
-                    yield {"type": "text.delta", "index": i, "text": text_buf[i]}
-                    text_buf[i] = ""
-                yield {"type": "text.done", "index": i}
-                continue
-
-            # Web search tool lifecycle (keep as UI-only status + count)
-            if et in ("response.web_search_call.in_progress", "response.web_search_call.searching"):
-                yield {"type": "status", "stage": "web_search.in_progress"}
-                continue
-            if et == "response.web_search_call.completed":
-                web_search_calls += 1
-                yield {"type": "status", "stage": "web_search.completed"}
-                continue
-
-            # Image generation result (Responses emits this as an “image_generation_call” output item)
-            if et == "response.output_item.done" and getattr(event, "item", None) and event.item.type == "image_generation_call":
-                if getattr(event.item, "result", None):
-                    images_generated += 1
-                    # If you base64-save: format=b64. Better: upload -> url.
-                    yield {"type": "part.start", "index": 999, "content_type": "image"}  # choose next ordinal if mixed
-                    yield {
-                        "type": "image.ready",
-                        "index": 999,
-                        "format": "b64",
-                        "mime": "image/png",  # Responses uses 'png' by default; pass through if present
-                        "data": event.item.result,
-                    }
-                continue
-
-            # Stream lifecycle: completed and usage
-            if et in ("response.completed", "response.completed.successfully"):
-                usage = getattr(event, "usage", None)
-                if usage:
-                    input_tokens = getattr(usage, "input_tokens", input_tokens) or input_tokens
-                    output_tokens = getattr(usage, "output_tokens", output_tokens) or output_tokens
-                    reasoning_tokens = getattr(usage, "reasoning_tokens", reasoning_tokens) or reasoning_tokens
-                # force-flush any lingering text buffers
-                for i, buf in list(text_buf.items()):
-                    if buf:
-                        yield {"type": "text.delta", "index": i, "text": buf}
-                        yield {"type": "text.done", "index": i}
+                # End of a text part
+                if et == "response.output_text.done":
+                    i = event.content_index
+                    # force-flush remainder
+                    if text_buf.get(i):
+                        yield {"type": "text.delta", "index": i, "text": text_buf[i]}
                         text_buf[i] = ""
-                yield {"type": "done"}
-                continue
+                    yield {"type": "text.done", "index": i}
+                    continue
+
+                # Web search tool lifecycle (keep as UI-only status + count)
+                if et in ("response.web_search_call.in_progress", "response.web_search_call.searching"):
+                    yield {"type": "status", "stage": "web_search.in_progress"}
+                    continue
+                if et == "response.web_search_call.completed":
+                    web_search_calls += 1
+                    yield {"type": "status", "stage": "web_search.completed"}
+                    continue
+
+                # Image generation result (Responses emits this as an “image_generation_call” output item)
+                if et == "response.output_item.done" and getattr(event, "item", None) and event.item.type == "image_generation_call":
+                    if getattr(event.item, "result", None):
+                        images_generated += 1
+                        # If you base64-save: format=b64. Better: upload -> url.
+                        yield {"type": "part.start", "index": 999, "content_type": "image"}  # choose the next ordinal if mixed
+                        yield {
+                            "type": "image.ready",
+                            "index": 999,
+                            "format": "b64",
+                            "data": event.response.base64_encoded_image_data,
+                        }
+                    continue
+
+                elif event == ResponseImageGenCallGeneratingEvent | ResponseImageGenCallInProgressEvent | ResponseImageGenCallPartialImageEvent:
+                    yield {"type": "status", "stage": "image_generation.in_progress"}
+                    continue
+
+
+                # Stream lifecycle: completed and usage
+                if et in ("response.completed", "response.completed.successfully"):
+                    usage = event.response.usage
+                    if usage:
+                        input_tokens = usage.get("input_tokens") or input_tokens
+                        output_tokens = usage.output_tokens or output_tokens
+                        if input_tokens:
+                            input_tokens_details = usage.input_tokens_details
+                            print(f'\n\nINPUT TOKEN DETAILS: {input_tokens_details.cached_tokens}\n\n')
+                            cached_tokens = input_tokens_details.cached_tokens or 0
+                        else:
+                            input_tokens_details = 0
+                        if output_tokens:
+                            output_tokens_details = usage.output_tokens_details
+                            reasoning_tokens = output_tokens_details.get("reasoning_tokens") or reasoning_tokens
+                            web_search_calls = output_tokens_details.get("web_search_calls") or web_search_calls
+                            print(f'\n\nOUTPUT TOKEN DETAILS: {output_tokens_details.reasoning_tokens}\n\n')
+                        else:
+                            output_tokens_details = 0
+                    # force-flush any lingering text buffers
+                    for i, buf in list(text_buf.items()):
+                        if buf:
+                            yield {"type": "text.delta", "index": i, "text": buf}
+                            yield {"type": "text.done", "index": i}
+                            text_buf[i] = ""
+                    yield {"type": "done"}
+                    continue
+        except Exception as e:
+            yield {"type": "error", "data": str(e)}
+            raise
 
         async for session in get_session():
             await log_usage(
@@ -175,7 +197,7 @@ async def stream_normalized_openai_response(
             break
 
     except AuthenticationError:
-        yield json.dumps({"type": "error", "data": "OpenAI authentication failed. Check API key."}) + "\n"
+        yield {"type": "error", "data": "OpenAI authentication failed. Check API key."}
         async for session in get_session():
             await log_usage(
                 session,
@@ -194,7 +216,7 @@ async def stream_normalized_openai_response(
             )
             break
     except NotFoundError:
-        yield json.dumps({"type": "error", "data": "Model not found. Please check the model name."}) + "\n"
+        yield {"type": "error", "data": "Model not found. Please check the model name."}
         async for session in get_session():
             await log_usage(
                 session,

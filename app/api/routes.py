@@ -80,6 +80,7 @@ async def create_message(
             elif c.type == "text" and msg.role == "assistant":
                 parts.append({"type": "output_text", "text": c.value})
             elif c.type == "image_url":
+                # TODO: If there's a need, I should convert this to base64
                 parts.append({"type": "input_image", "image_url": c.value})
         history_for_openai.append({"role": msg.role, "content": parts})
 

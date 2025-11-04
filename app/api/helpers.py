@@ -1,4 +1,6 @@
-﻿import uuid
+﻿import base64
+import hashlib
+import uuid
 from typing import Optional
 
 from fastapi import HTTPException
@@ -6,6 +8,8 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import Conversation, MessageContent
+from app.r2.methods import put_bytes
+from app.r2.settings import Settings
 from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
 from app.services.openai_service import stream_normalized_openai_response
@@ -70,14 +74,12 @@ async def generate_and_publish(
                         await _upsert_text(session, assistant_message_id, i, buffers[i])
 
                 elif t == "image.ready":
-                    await _upsert_rich(session, assistant_message_id, ev["index"], "image", {
-                        "format": ev.get("format"), "mime": ev.get("mime"), "data": ev.get("data"),
-                        "url": ev.get("url"), "file_id": ev.get("file_id"),
-                    })
+                    url = await upload_openai_image_to_r2(ev["image_url"])
+                    await save_image_url_to_db(url, ev["ordinal"], assistant_message_id, session)
 
-                elif t == "tool_call":
+                elif t == "status":
                     await _upsert_rich(session, assistant_message_id, ev["index"], "tool_call", {
-                        "name": ev["name"], "arguments": ev["arguments"]
+                        "name": ev["name"], "stage": ev["stage"]
                     })
 
                 elif t in ("done", "error"):
@@ -106,7 +108,7 @@ async def _upsert_text(session, message_id, ordinal, text):
         session.add(row)
     await session.commit()
 
-async def _upsert_rich(session, message_id, ordinal, type_, data: dict):
+async def _upsert_rich(session, message_id, ordinal, type_, data: dict, value: str):
     res = await session.exec(
         select(MessageContent).where(
             MessageContent.message_id == message_id,
@@ -118,7 +120,7 @@ async def _upsert_rich(session, message_id, ordinal, type_, data: dict):
     if row:
         row.data = data
     else:
-        row = MessageContent(message_id=message_id, ordinal=ordinal, type=type_, data=data, value='data')
+        row = MessageContent(message_id=message_id, ordinal=ordinal, type=type_, data=data, value=value)
         session.add(row)
     await session.commit()
 
@@ -132,3 +134,18 @@ async def fetch_assistant_text(session: AsyncSession, message_id: uuid.UUID) -> 
     )
     message_content = res.first()
     return message_content.value if message_content else None
+
+
+async def upload_openai_image_to_r2(b64_png: str, prefix: str = "gen"):
+    data = base64.b64decode(b64_png)
+    sha = hashlib.sha256(data).hexdigest()
+    key = f"{prefix}/{sha[:2]}/{sha}.png"
+    bucket, key = await put_bytes(key, data, content_type="image/png", metadata={"source": "openai"})
+    return f'{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}'
+
+
+# To use this function, we need to have a message created already
+async def save_image_url_to_db(image_url: str, ordinal: int, message_id: uuid.UUID, session: AsyncSession):
+        addition = MessageContent(message_id=message_id, ordinal=ordinal, type="image_url", value=image_url)
+        session.add(addition)
+        await session.commit()
