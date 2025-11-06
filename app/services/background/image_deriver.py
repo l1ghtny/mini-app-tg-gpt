@@ -1,25 +1,24 @@
-﻿# app/services/image_deriver.py
-from __future__ import annotations
+﻿from __future__ import annotations
 import io
 import hashlib
 from typing import Optional, Tuple
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from PIL import Image, ImageOps
+
+from app.r2.settings import Settings
+from app.r2.client import R2_BUCKET
+from app.r2.methods import head_object, get_bytes, put_bytes
+from app.db.models import DerivedImage, MessageContent
 
 # Enable HEIC/HEIF if pillow-heif is installed
 try:
     import pillow_heif
     pillow_heif.register_heif_opener()
 except Exception:
-    pass
+    raise ImportError("pillow-heif is not installed")
 
-from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
-
-from app.r2.settings import Settings
-from app.r2.client import R2_BUCKET
-from app.r2.methods import head_object, get_bytes, put_bytes
-from app.db.models import DerivedImage
 
 SUPPORTED_DIRECT = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
@@ -135,3 +134,29 @@ async def ensure_openai_compatible_image_url(
     await session.commit()
 
     return _public_url(derived_key)
+
+
+async def rewrite_message_image_url(
+    session: AsyncSession,
+    old_url: str,
+    new_url: str,
+    message_id: str | None = None,
+) -> int:
+    """
+    Update MessageContent rows where value==old_url to new_url.
+    Optionally scope to a single message to keep the write tiny.
+    Returns number of rows updated.
+    """
+    q = select(MessageContent).where(
+        MessageContent.type == "image_url",
+        MessageContent.value == old_url,
+    )
+    if message_id:
+        q = q.where(MessageContent.message_id == message_id)
+
+    rows = (await session.exec(q)).all()
+    for r in rows:
+        r.value = new_url
+    if rows:
+        await session.commit()
+    return len(rows)
