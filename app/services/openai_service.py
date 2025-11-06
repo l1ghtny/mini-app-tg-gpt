@@ -132,13 +132,13 @@ async def stream_normalized_openai_response(
                 if et == "response.output_item.done" and getattr(event, "item", None) and event.item.type == "image_generation_call":
                     if getattr(event.item, "result", None):
                         images_generated += 1
-                        # If you base64-save: format=b64. Better: upload -> url.
-                        yield {"type": "part.start", "index": 999, "content_type": "image"}  # choose the next ordinal if mixed
+                        yield {"type": "part.start", "index": event.output_index, "content_type": "image"}  # choose the next ordinal if mixed
+                        ## There are more parameters you can extract from the ImageGeneration (event.item) object, like: status, quality, revised_prompt, background, output_format
                         yield {
                             "type": "image.ready",
-                            "index": 999,
+                            "index": event.output_index,
                             "format": "b64",
-                            "data": event.response.base64_encoded_image_data,
+                            "data": event.item.result,
                         }
                     continue
 
@@ -151,7 +151,7 @@ async def stream_normalized_openai_response(
                 if et in ("response.completed", "response.completed.successfully"):
                     usage = event.response.usage
                     if usage:
-                        input_tokens = usage.get("input_tokens") or input_tokens
+                        input_tokens = usage.input_tokens or input_tokens
                         output_tokens = usage.output_tokens or output_tokens
                         if input_tokens:
                             input_tokens_details = usage.input_tokens_details
@@ -161,8 +161,8 @@ async def stream_normalized_openai_response(
                             input_tokens_details = 0
                         if output_tokens:
                             output_tokens_details = usage.output_tokens_details
-                            reasoning_tokens = output_tokens_details.get("reasoning_tokens") or reasoning_tokens
-                            web_search_calls = output_tokens_details.get("web_search_calls") or web_search_calls
+                            reasoning_tokens = getattr(output_tokens_details, 'reasoning_tokens', None) or reasoning_tokens
+                            web_search_calls = getattr(output_tokens_details, 'websearch_details', None) or web_search_calls
                             print(f'\n\nOUTPUT TOKEN DETAILS: {output_tokens_details.reasoning_tokens}\n\n')
                         else:
                             output_tokens_details = 0

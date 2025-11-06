@@ -2,8 +2,7 @@ import uuid
 from typing import List, Literal, Optional
 
 
-from pydantic import BaseModel
-
+from pydantic import BaseModel, ConfigDict
 
 AllowedModels = Literal["gpt-5", "gpt-5-mini", "gpt-5-nano"]
 AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter", "auto"]
@@ -22,8 +21,10 @@ class ImageUrlContent(BaseModel):
 class MessageContent(BaseModel):
     type: str
     value: str
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(
+        from_attributes=True,
+        extra="forbid",
+    )
 
 
 class Message(BaseModel):
@@ -35,8 +36,11 @@ class ConversationAPI(BaseModel):
     id: uuid.UUID
     title: str
 
-    class Config:
-        from_attributes = True
+    class ConversationAPI(BaseModel):
+        model_config = ConfigDict(
+            from_attributes=True,
+            extra="ignore",
+        )
 
 
 class ConversationWithMessages(ConversationAPI):

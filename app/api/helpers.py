@@ -74,13 +74,13 @@ async def generate_and_publish(
                         await _upsert_text(session, assistant_message_id, i, buffers[i])
 
                 elif t == "image.ready":
-                    url = await upload_openai_image_to_r2(ev["image_url"])
-                    await save_image_url_to_db(url, ev["ordinal"], assistant_message_id, session)
+                    ordinal = ev.get("index", 0)
+                    url = await upload_openai_image_to_r2(ev["data"])
+                    await save_image_url_to_db(url, ordinal, assistant_message_id, session)
 
                 elif t == "status":
-                    await _upsert_rich(session, assistant_message_id, ev["index"], "tool_call", {
-                        "name": ev["name"], "stage": ev["stage"]
-                    })
+                    # not saving to DB
+                    pass
 
                 elif t in ("done", "error"):
                     # optional: mark message status in DB
@@ -89,6 +89,7 @@ async def generate_and_publish(
         except Exception as e:
             await bus.publish(str(assistant_message_id), {"type": "error", "error": str(e)})
             await bus.mark_done(str(assistant_message_id), ok=False, error=str(e))
+            raise e
         else:
             await bus.mark_done(str(assistant_message_id), ok=True)
 

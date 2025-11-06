@@ -5,6 +5,10 @@ description = ""
 authors = ["l1ghtny <ankoshenkov@gmail.com>"]
 readme = "README.md"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2"
+pytest-asyncio = "^0.24"
+
 [tool.poetry.dependencies]
 python = "^3.13"
 openai = ">=1.109.1"

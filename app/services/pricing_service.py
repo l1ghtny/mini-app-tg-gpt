@@ -1,7 +1,7 @@
 ﻿from decimal import Decimal
 from typing import Optional, Tuple
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlmodel import select
 from app.db.models import AiModelPricing
 
 ONE_MILLION = Decimal(1_000_000)
@@ -11,7 +11,7 @@ class PricingService:
         self.session = session
 
     async def get_pricing(self, provider: str, model_name: str) -> Optional[AiModelPricing]:
-        result = await self.session.execute(
+        result = await self.session.exec(
             select(AiModelPricing).where(
                 AiModelPricing.provider == provider,
                 AiModelPricing.model_name == model_name,
