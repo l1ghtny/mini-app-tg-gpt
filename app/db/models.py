@@ -2,7 +2,7 @@ from datetime import datetime, UTC
 from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey, Integer
+from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 import uuid
@@ -123,4 +123,24 @@ class TokenUsage(SQLModel, table=True):
 
     __table_args__ = (
         Index("ix_token_usage_user_created", "user_id", "created_at"),
+    )
+
+
+class DerivedImage(SQLModel, table=True):
+    __tablename__ = "derived_image"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    original_key: str = Field(index=True)
+    target_format: str = Field(index=True)  # "jpeg" | "png" | "webp"
+    max_side: int = Field(default=2048)
+
+    derived_key: str = Field(index=True, unique=True)
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC).replace(tzinfo=None),
+        sa_column=Column(DateTime, index=True)
+    )
+
+    __table_args__ = (
+        UniqueConstraint("original_key", "target_format", "max_side", name="uq_derived_image_variant"),
     )

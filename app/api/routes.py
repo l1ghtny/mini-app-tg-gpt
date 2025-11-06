@@ -19,6 +19,7 @@ from app.db.models import AppUser, Conversation, Message
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import ConversationAPI, ConversationWithMessages, NewMessageRequest, RenameRequest, \
     UpdateConversationSettingsRequest, MessageCreated
+from app.services.background.image_deriver import ensure_openai_compatible_image_url
 from app.services.tasks import generate_and_save_title
 
 router = APIRouter()
@@ -80,8 +81,8 @@ async def create_message(
             elif c.type == "text" and msg.role == "assistant":
                 parts.append({"type": "output_text", "text": c.value})
             elif c.type == "image_url":
-                # TODO: If there's a need, I should convert this to base64
-                parts.append({"type": "input_image", "image_url": c.value})
+                compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_side=2048)
+                parts.append({"type": "input_image", "image_url": compatible_url})
         history_for_openai.append({"role": msg.role, "content": parts})
 
     # 5) Kick off a background producer that streams to Redis and batches DB writes

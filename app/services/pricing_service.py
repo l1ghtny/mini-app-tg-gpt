@@ -18,7 +18,7 @@ class PricingService:
                 AiModelPricing.is_active == True,
             )
         )
-        return result.scalar_one_or_none()
+        return result.first()
 
     @staticmethod
     def cost_per_1m(price_per_1m: Decimal, tokens: int) -> Decimal:

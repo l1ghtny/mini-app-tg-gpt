@@ -74,3 +74,10 @@ async def head_object(key: str):
 async def delete_object(key: str):
     async with s3_client() as s3:
         await s3.delete_object(Bucket=R2_BUCKET, Key=key)
+
+
+async def get_bytes(key: str) -> bytes:
+    async with s3_client() as s3:
+        obj = await s3.get_object(Bucket=R2_BUCKET, Key=key)
+        body = obj["Body"]
+        return await body.read()
