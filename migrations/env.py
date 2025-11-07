@@ -9,6 +9,8 @@ from sqlmodel import SQLModel
 from alembic import context
 
 from app.db.models import *
+from app.db.subscription_tiers import *
+from app.db.usage import *
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config

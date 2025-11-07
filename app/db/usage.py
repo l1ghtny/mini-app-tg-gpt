@@ -1,8 +1,17 @@
 ﻿import uuid
 from datetime import datetime, UTC
+from enum import Enum
 from typing import Literal, Optional
-from sqlalchemy import Column, UniqueConstraint, DateTime
+from sqlalchemy import Column, UniqueConstraint, DateTime, CheckConstraint
 from sqlmodel import SQLModel, Field
+
+
+class State(str, Enum):
+    reserved = "reserved"
+    consumed = "consumed"
+    refunded = "refunded"
+    failed = "failed"
+
 
 class RequestLedger(SQLModel, table=True):
 
@@ -19,11 +28,16 @@ class RequestLedger(SQLModel, table=True):
 
     request_id: str = Field(index=True)  # client- or server-generated; used for idempotency
     model_name: str = Field(index=True)
-    feature: Literal["text","image","doc","deepsearch","web_search"] = Field(index=True)
+    feature: str = Field(index=True)
 
-    state: Literal["reserved","consumed","refunded","failed"] = Field(default="reserved", index=True)
+    state: State = Field(default=State.reserved, index=True)
     tool_choice: Optional[str] = None     # e.g., "auto" or "image_generation"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None),
                                  sa_column=Column(DateTime, index=True))
 
-    __table_args__ = (UniqueConstraint("user_id","request_id", name="uq_user_reqid"),)
+    __table_args__ = (UniqueConstraint("user_id","request_id", name="uq_user_reqid"),
+        CheckConstraint(
+            "feature IN ('text','image','doc','deepsearch','web_search')",
+            name="ck_request_feature",
+        ),
+    )
