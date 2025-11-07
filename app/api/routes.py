@@ -29,7 +29,7 @@ from app.services.tasks import generate_and_save_title
 router = APIRouter()
 
 
-@router.post("/conversations/{conversation_id}/messages", status_code=202, response_model=MessageCreated or RequestExists)
+@router.post("/conversations/{conversation_id}/messages", status_code=202, response_model=MessageCreated | RequestExists)
 async def create_message(
         conversation_id: uuid.UUID,
         request: NewMessageRequest,
@@ -82,7 +82,7 @@ async def create_message(
         })
 
     # 2. images
-    images_remaining = await remaining_images(session, current_user.id, tier.id)
+    images_remaining = await remaining_images(session, current_user.id, tier)
     image_allowed = True if images_remaining > 0 else False
 
     # 3. tools

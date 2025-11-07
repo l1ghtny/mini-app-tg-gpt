@@ -56,7 +56,7 @@ async def generate_and_publish(
                     tools=tools,
                     user_id=user_id,
                     conversation_id=conversation_id,
-                    request_id=None,
+                    request_id=request_id,
             ):
                 await bus.publish(str(assistant_message_id), ev)
 
@@ -164,6 +164,6 @@ async def update_request_ledger(session: AsyncSession, request_id: str, user_id:
     img_req_id = f"{request_id}:img:{ordinal}"
     await reserve_request(session, user_id=user_id, conversation_id=conversation_id,
                           assistant_message_id=assistant_message_id,
-                          request_id=img_req_id, model_name='chatgpt-image-mini', feature="image",
+                          request_id=img_req_id, model_name='gpt-image-1-mini', feature="image",
                           tool_choice="image_generation")
     await finalize_request(session, request_id=img_req_id, user_id=user_id, success=True)
