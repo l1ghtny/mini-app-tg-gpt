@@ -16,16 +16,20 @@ from app.api.helpers import generate_and_publish, load_conversation, fetch_assis
 from app.db import models
 from app.db.database import get_session
 from app.db.models import AppUser, Conversation, Message
+from app.db.usage import RequestLedger
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import ConversationAPI, ConversationWithMessages, NewMessageRequest, RenameRequest, \
-    UpdateConversationSettingsRequest, MessageCreated
+    UpdateConversationSettingsRequest, MessageCreated, RequestExists
 from app.services.background.image_deriver import ensure_openai_compatible_image_url, rewrite_message_image_url
+from app.services.streaming.test_idempotency import _choose_link_for_message
+from app.services.subscription_check.entitlements import remaining_requests_for_model, remaining_images, reserve_request
+from app.services.subscription_check.realtime_check import check_tier, create_tools_list
 from app.services.tasks import generate_and_save_title
 
 router = APIRouter()
 
 
-@router.post("/conversations/{conversation_id}/messages", status_code=202, response_model=MessageCreated)
+@router.post("/conversations/{conversation_id}/messages", status_code=202, response_model=MessageCreated or RequestExists)
 async def create_message(
         conversation_id: uuid.UUID,
         request: NewMessageRequest,
@@ -34,6 +38,64 @@ async def create_message(
         current_user: AppUser = Depends(get_current_user),
         bus: RedisEventBus = Depends(get_bus),
 ):
+
+    ## -- idempotency check --
+
+    idempotency_key = request.client_request_id
+
+    existing = await session.exec(
+        select(RequestLedger).where(
+            RequestLedger.user_id == current_user.id,
+            RequestLedger.request_id == idempotency_key,
+            RequestLedger.feature == "text"
+        )
+    )
+    rl = existing.first()
+    if rl and rl.assistant_message_id:
+        link = await _choose_link_for_message(session, bus, conversation_id, rl.assistant_message_id, rl.created_at)
+        if link["stream_url"]:
+            return RequestExists(
+                message_id=link["message_id"],
+                stream_url=link["stream_url"]
+            )
+        else:
+            return RequestExists(
+                message_id=link["message_id"],
+                messages_url=link["messages_url"]
+            )
+
+    # subscription check
+    tier = await check_tier(current_user, session)
+    if not tier:
+        raise HTTPException(status_code=402, detail="No active subscription")
+
+    # --- model and tools checks ---
+    # 1. requests for a model
+    remaining = await remaining_requests_for_model(session, current_user.id, tier.id, request.model)
+    if remaining <= 0:
+        # Suggest alternatives (models in allowlist with >0)
+        # Optional: compute available models by iterating tier.allowed_models and checking remaining for each
+        raise HTTPException(status_code=409, detail={
+            "error": "model_quota_exceeded",
+            "requested_model": request.model,
+            "available_models": tier.allowed_models  # refine to only those with remaining > 0
+        })
+
+    # 2. images
+    images_remaining = await remaining_images(session, current_user.id, tier.id)
+    image_allowed = True if images_remaining > 0 else False
+
+    # 3. tools
+    tools = await create_tools_list(image_allowed)
+
+    # 4. required tools
+
+    if "image_generation" in request.tool_choice and not image_allowed:
+        raise HTTPException(status_code=402, detail="image_quota_exceeded")
+
+
+
+
     # 1) Ensure the conversation exists & belongs to the user (add your auth checks)
     conversation = await load_conversation(session, conversation_id)
     if not conversation:
@@ -66,6 +128,15 @@ async def create_message(
     await session.commit()
     await session.refresh(assistant_msg)
 
+
+    # 3.5 create the request ledger
+
+    await reserve_request(session,
+                          user_id=current_user.id, conversation_id=conversation_id,
+                          assistant_message_id=assistant_msg.id,
+                          request_id=idempotency_key, model_name=request.model, feature="text",
+                          tool_choice=request.tool_choice)
+
     # 4) Build history for OpenAI
     history_for_openai = []
     # Pull last N messages (optional optimisation); so far we fetch all:
@@ -97,7 +168,9 @@ async def create_message(
         bus=bus,
         instructions=conversation.system_prompt,
         model=request.model,
-        tool_choice=request.tool_choice
+        tool_choice=request.tool_choice,
+        tools=tools,
+        request_id=idempotency_key
     )
 
     return {

@@ -1,9 +1,12 @@
 ﻿import base64
 import hashlib
 import uuid
-from typing import Optional
+from typing import Optional, Iterable
 
 from fastapi import HTTPException
+from openai.types.beta import FileSearchToolParam
+from openai.types.responses import WebSearchToolParam
+from openai.types.responses.tool import CodeInterpreter, ImageGeneration
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -14,6 +17,7 @@ from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
 from app.services.openai_service import stream_normalized_openai_response
 from app.db.database import engine
+from app.services.subscription_check.entitlements import reserve_request, finalize_request
 
 
 async def load_conversation(session: AsyncSession, conversation_id: uuid.UUID) -> Conversation | None:
@@ -33,6 +37,8 @@ async def generate_and_publish(
     instructions: Optional[str] = None,
     model: Optional[str] = 'gpt-5-nano',
     tool_choice: Optional[str] = 'auto',
+    tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]] = None,
+    request_id: Optional[str] = None,
 
 ):
     async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -47,6 +53,7 @@ async def generate_and_publish(
                     history_for_openai, model,
                     instructions=instructions,
                     tool_choice=tool_choice,
+                    tools=tools,
                     user_id=user_id,
                     conversation_id=conversation_id,
                     request_id=None,
@@ -77,6 +84,7 @@ async def generate_and_publish(
                     ordinal = ev.get("index", 0)
                     url = await upload_openai_image_to_r2(ev["data"])
                     await save_image_url_to_db(url, ordinal, assistant_message_id, session)
+                    await update_request_ledger(session, request_id, user_id, ordinal, conversation_id, assistant_message_id)
 
                 elif t == "status":
                     # not saving to DB
@@ -150,3 +158,12 @@ async def save_image_url_to_db(image_url: str, ordinal: int, message_id: uuid.UU
         addition = MessageContent(message_id=message_id, ordinal=ordinal, type="image_url", value=image_url)
         session.add(addition)
         await session.commit()
+
+
+async def update_request_ledger(session: AsyncSession, request_id: str, user_id: uuid.UUID, ordinal: int, conversation_id: uuid.UUID, assistant_message_id: uuid.UUID):
+    img_req_id = f"{request_id}:img:{ordinal}"
+    await reserve_request(session, user_id=user_id, conversation_id=conversation_id,
+                          assistant_message_id=assistant_message_id,
+                          request_id=img_req_id, model_name='chatgpt-image-mini', feature="image",
+                          tool_choice="image_generation")
+    await finalize_request(session, request_id=img_req_id, user_id=user_id, success=True)

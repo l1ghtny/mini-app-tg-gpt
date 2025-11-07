@@ -1,6 +1,5 @@
 import uuid
-from typing import List, Literal, Optional
-
+from typing import List, Literal, Optional, Iterable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -52,17 +51,25 @@ class RenameRequest(BaseModel):
 
 
 class NewMessageRequest(BaseModel):
+    client_request_id: str
+    role: Literal["user", "assistant"]
     content: List[MessageContent]
     model: AllowedModels
-    tool_choice: Optional[AllowedToolChoices] = None
+    tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
 
 
 class UpdateConversationSettingsRequest(BaseModel):
     system_prompt: Optional[str] = None
     model: Optional[AllowedModels] = None
-    tool_choice: Optional[AllowedToolChoices] = None
+    tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
 
 
 class MessageCreated(BaseModel):
     message_id: uuid.UUID
     stream_url: str
+
+
+class RequestExists(BaseModel):
+    message_id: uuid.UUID
+    stream_url: Optional[str]
+    messages_url: Optional[str]

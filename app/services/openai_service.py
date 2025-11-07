@@ -1,5 +1,5 @@
 import asyncio
-from typing import AsyncGenerator, List, Optional, Dict, Any
+from typing import AsyncGenerator, List, Optional, Dict, Any, Literal, Iterable
 import json
 from pprint import pprint
 import uuid
@@ -7,8 +7,11 @@ import uuid
 from openai import AsyncOpenAI
 from openai import AuthenticationError, NotFoundError
 from openai.types.responses import FileSearchToolParam, ResponseImageGenCallGeneratingEvent, \
-    ResponseImageGenCallInProgressEvent, ResponseImageGenCallPartialImageEvent
-from openai.types.responses.tool_param import ImageGeneration, WebSearchTool
+    ResponseImageGenCallInProgressEvent, ResponseImageGenCallPartialImageEvent, ToolChoiceAllowedParam, \
+    ToolChoiceTypesParam, ToolChoiceFunctionParam, ToolChoiceMcpParam, ToolChoiceCustomParam, WebSearchPreviewToolParam, \
+    WebSearchToolParam
+from openai.types.responses.tool import CodeInterpreter, WebSearchTool
+from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import TokenUsage
@@ -29,12 +32,19 @@ STYLE_GUIDE = (
 client = AsyncOpenAI()
 
 
+default_tools = [
+    ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium"),
+    WebSearchTool(type="web_search")
+]
+
+
 async def stream_normalized_openai_response(
     messages: List["Message"],
     model: Optional[str] = 'gpt-5-nano',
     *,
     instructions: Optional[str] = "You are a helpful assistant.",
-    tool_choice: Optional[str] = "auto",
+    tool_choice: Literal["none", "auto", "required"] | ToolChoiceAllowedParam | ToolChoiceTypesParam = "auto",
+    tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]] = default_tools,
     user_id: Optional[uuid.UUID] = None,
     conversation_id: Optional[uuid.UUID] = None,
     request_id: Optional[str] = None,
@@ -62,7 +72,7 @@ async def stream_normalized_openai_response(
     try:
         response = await client.responses.create(
             model=model,
-            tools=[ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium"), WebSearchTool(type="web_search")],
+            tools=tools,
             tool_choice=tool_choice,
             instructions=instructions,
             input=messages,
@@ -130,6 +140,7 @@ async def stream_normalized_openai_response(
 
                 # Image generation result (Responses emits this as an “image_generation_call” output item)
                 if et == "response.output_item.done" and getattr(event, "item", None) and event.item.type == "image_generation_call":
+
                     if getattr(event.item, "result", None):
                         images_generated += 1
                         yield {"type": "part.start", "index": event.output_index, "content_type": "image"}  # choose the next ordinal if mixed
