@@ -15,8 +15,7 @@ from app.api.dependencies import get_current_user, get_bus, get_redis
 from app.api.helpers import generate_and_publish, load_conversation, fetch_assistant_text
 from app.db import models
 from app.db.database import get_session
-from app.db.models import AppUser, Conversation, Message
-from app.db.usage import RequestLedger
+from app.db.models import AppUser, Conversation, Message, RequestLedger
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import ConversationAPI, ConversationWithMessages, NewMessageRequest, RenameRequest, \
     UpdateConversationSettingsRequest, MessageCreated, RequestExists

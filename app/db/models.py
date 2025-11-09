@@ -1,11 +1,14 @@
 from datetime import datetime, UTC
 from decimal import Decimal
+from enum import Enum
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey, Integer, UniqueConstraint, \
+    CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 import uuid
+
 
 class AppUser(SQLModel, table=True):
     __tablename__ = "app_user" # Explicitly name the table to avoid conflicts
@@ -14,6 +17,7 @@ class AppUser(SQLModel, table=True):
     telegram_id: int = Field(sa_column=Column(BigInteger, unique=True, index=True))
 
     conversations: List["Conversation"] = Relationship(back_populates="user")
+    requests: List["RequestLedger"] = Relationship(back_populates="user")
 
 class Conversation(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -144,3 +148,45 @@ class DerivedImage(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("original_key", "target_format", "max_side", name="uq_derived_image_variant"),
     )
+
+
+class State(str, Enum):
+    reserved = "reserved"
+    consumed = "consumed"
+    refunded = "refunded"
+    failed = "failed"
+
+
+class RequestLedger(SQLModel, table=True):
+
+    __tablename__ = "request_ledger"
+    """
+    One row per billable request (text generation) or per generated image.
+    Survives conversation/message deletions.
+    """
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    # nullable references for diagnostics; DO NOT FK so deletes don’t cascade
+    conversation_id: Optional[uuid.UUID] = Field(default=None, index=True)
+    assistant_message_id: Optional[uuid.UUID] = Field(default=None, index=True)
+
+    request_id: str = Field(index=True)  # client- or server-generated; used for idempotency
+    model_name: str = Field(index=True)
+    feature: str = Field(index=True)
+
+    state: State = Field(default=State.reserved, index=True)
+    tool_choice: Optional[str] = None     # e.g., "auto" or "image_generation"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None),
+                                 sa_column=Column(DateTime, index=True))
+
+    user: "AppUser" = Relationship(back_populates="requests")
+
+    __table_args__ = (UniqueConstraint("user_id","request_id", name="uq_user_reqid"),
+        CheckConstraint(
+            "feature IN ('text','image','doc','deepsearch','web_search')",
+            name="ck_request_feature",
+        ),
+    )
+
+
+

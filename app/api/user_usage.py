@@ -6,7 +6,7 @@ import uuid
 from app.api.dependencies import get_current_user
 from app.db.database import get_session
 from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription
-from app.db.usage import RequestLedger
+from app.db.models import RequestLedger
 
 user_usage = APIRouter(tags=['user_usage'], prefix="/user_usage")
 

@@ -42,7 +42,7 @@ async def test_r2_upload_and_db_persist_roundtrip(tmp_path):
         print(f"\nR2 URL (upload): {url}")  # <— full URL printed
 
         ordinal = 1
-        await helpers.save_image_url_to_db(url, ordinal, msg.id, session)
+        await helpers.save_image_url_to_db(url, ordinal, msg.id)
 
         res = await session.exec(
             select(m.MessageContent).where(

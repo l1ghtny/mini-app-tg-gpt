@@ -4,7 +4,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 import uuid
 
 from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription
-from app.db.usage import RequestLedger
+from app.db.models import RequestLedger
+
 
 async def month_start_expr():
     return func.date_trunc("month", func.now())

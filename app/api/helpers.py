@@ -1,6 +1,7 @@
 ﻿import base64
 import hashlib
 import uuid
+from pprint import pprint
 from typing import Optional, Iterable
 
 from fastapi import HTTPException
@@ -62,6 +63,8 @@ async def generate_and_publish(
 
                 t = ev["type"]
 
+                pprint(ev)
+
                 if t == "part.start":
                     # You can pre-create row if you like; not required.
 
@@ -72,25 +75,29 @@ async def generate_and_publish(
                     txt = ev["text"]
                     buffers[i] = buffers.get(i, "") + txt
                     if len(buffers[i]) - last_ckpt.get(i, 0) >= settings.CHECKPOINT_BYTES:
-                        await _upsert_text(session, assistant_message_id, i, buffers[i])
+                        await _upsert_text(assistant_message_id, i, buffers[i])
                         last_ckpt[i] = len(buffers[i])
 
                 elif t == "text.done":
                     i = ev["index"]
                     if i in buffers:
-                        await _upsert_text(session, assistant_message_id, i, buffers[i])
+                        await _upsert_text(assistant_message_id, i, buffers[i])
+                    await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
+                    print('UPDATED REQUEST LEDGER')
 
                 elif t == "image.ready":
                     ordinal = ev.get("index", 0)
-                    url = await upload_openai_image_to_r2(ev["data"])
-                    await save_image_url_to_db(url, ordinal, assistant_message_id, session)
-                    await update_request_ledger(session, request_id, user_id, ordinal, conversation_id, assistant_message_id)
+                    url = await upload_openai_image_to_r2(ev["data"], prefix="gen")
+                    await save_image_url_to_db(url, ordinal, assistant_message_id)
+                    await update_request_ledger_image(session, request_id, user_id, ordinal, conversation_id, assistant_message_id)
+                    print('SAVED THE IMAGE')
 
                 elif t == "status":
                     # not saving to DB
                     pass
 
-                elif t in ("done", "error"):
+                elif t == "error":
+                    await finalize_request(session, request_id=request_id, user_id=user_id, success=False)
                     # optional: mark message status in DB
                     pass
 
@@ -101,21 +108,22 @@ async def generate_and_publish(
         else:
             await bus.mark_done(str(assistant_message_id), ok=True)
 
-async def _upsert_text(session, message_id, ordinal, text):
-    res = await session.exec(
-        select(MessageContent).where(
-            MessageContent.message_id == message_id,
-            MessageContent.ordinal == ordinal,
-            MessageContent.type == "text",
+async def _upsert_text(message_id, ordinal, text):
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        res = await session.exec(
+            select(MessageContent).where(
+                MessageContent.message_id == message_id,
+                MessageContent.ordinal == ordinal,
+                MessageContent.type == "text",
+            )
         )
-    )
-    row = res.first()
-    if row:
-        row.value = text
-    else:
-        row = MessageContent(message_id=message_id, ordinal=ordinal, type="text", value=text)
-        session.add(row)
-    await session.commit()
+        row = res.first()
+        if row:
+            row.value = text
+        else:
+            row = MessageContent(message_id=message_id, ordinal=ordinal, type="text", value=text)
+            session.add(row)
+        await session.commit()
 
 async def _upsert_rich(session, message_id, ordinal, type_, data: dict, value: str):
     res = await session.exec(
@@ -154,13 +162,15 @@ async def upload_openai_image_to_r2(b64_png: str, prefix: str = "gen"):
 
 
 # To use this function, we need to have a message created already
-async def save_image_url_to_db(image_url: str, ordinal: int, message_id: uuid.UUID, session: AsyncSession):
-        addition = MessageContent(message_id=message_id, ordinal=ordinal, type="image_url", value=image_url)
-        session.add(addition)
-        await session.commit()
+async def save_image_url_to_db(image_url: str, ordinal: int, message_id: uuid.UUID):
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+            addition = MessageContent(message_id=message_id, ordinal=ordinal, type="image_url", value=image_url)
+            session.add(addition)
+            await session.commit()
+            await session.refresh(addition)
 
 
-async def update_request_ledger(session: AsyncSession, request_id: str, user_id: uuid.UUID, ordinal: int, conversation_id: uuid.UUID, assistant_message_id: uuid.UUID):
+async def update_request_ledger_image(session: AsyncSession, request_id: str, user_id: uuid.UUID, ordinal: int, conversation_id: uuid.UUID, assistant_message_id: uuid.UUID):
     img_req_id = f"{request_id}:img:{ordinal}"
     await reserve_request(session, user_id=user_id, conversation_id=conversation_id,
                           assistant_message_id=assistant_message_id,

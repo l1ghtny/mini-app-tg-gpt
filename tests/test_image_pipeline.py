@@ -52,7 +52,7 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
         # See real function for reference :contentReference[oaicite:1]{index=1}
         return "https://public.cdn.example/bucket/gen/aa/sha.png"
 
-    async def fake_save_image_url_to_db(image_url: str, ordinal: int, message_id, session):
+    async def fake_save_image_url_to_db(image_url: str, ordinal: int, message_id):
         captured["saved"] = (image_url, ordinal, message_id)
 
     monkeypatch.setattr(helpers, "upload_openai_image_to_r2", fake_upload_openai_image_to_r2)

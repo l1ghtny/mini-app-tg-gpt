@@ -1,25 +1,20 @@
 import asyncio
-from typing import AsyncGenerator, List, Optional, Dict, Any, Literal, Iterable
-import json
-from pprint import pprint
 import uuid
+from typing import AsyncGenerator, List, Optional, Dict, Any, Literal, Iterable
 
 from openai import AsyncOpenAI
 from openai import AuthenticationError, NotFoundError
 from openai.types.responses import FileSearchToolParam, ResponseImageGenCallGeneratingEvent, \
     ResponseImageGenCallInProgressEvent, ResponseImageGenCallPartialImageEvent, ToolChoiceAllowedParam, \
-    ToolChoiceTypesParam, ToolChoiceFunctionParam, ToolChoiceMcpParam, ToolChoiceCustomParam, WebSearchPreviewToolParam, \
-    WebSearchToolParam
+    ToolChoiceTypesParam, WebSearchToolParam
 from openai.types.responses.tool import CodeInterpreter, WebSearchTool
 from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.models import TokenUsage
-from app.db.database import get_session
+from app.db.database import get_session, engine
 from app.redis.settings import settings
 from app.schemas.chat import Message
 from app.services.background.save_openai_usage import log_usage
-from app.services.pricing_service import PricingService
 
 STYLE_GUIDE = (
     "Always format replies in Markdown:\n"
@@ -44,7 +39,7 @@ async def stream_normalized_openai_response(
     *,
     instructions: Optional[str] = "You are a helpful assistant.",
     tool_choice: Literal["none", "auto", "required"] | ToolChoiceAllowedParam | ToolChoiceTypesParam = "auto",
-    tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]] = default_tools,
+    tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]] = None,
     user_id: Optional[uuid.UUID] = None,
     conversation_id: Optional[uuid.UUID] = None,
     request_id: Optional[str] = None,
@@ -52,6 +47,10 @@ async def stream_normalized_openai_response(
     """
     Adapts OpenAI Responses API stream into part-oriented events.
     """
+
+    if not tools:
+        tools = default_tools
+
     input_tokens = output_tokens = reasoning_tokens = 0
     web_search_calls = images_generated = 0
     corr_id = request_id or str(uuid.uuid4())
@@ -84,7 +83,7 @@ async def stream_normalized_openai_response(
         seen_text_part_started: Dict[int, bool] = {}
         try:
             async for event in response:
-                pprint(event)
+                # pprint(event)
                 et = event.type
 
                 # Reasoning “thinking” status
@@ -189,7 +188,7 @@ async def stream_normalized_openai_response(
             yield {"type": "error", "data": str(e)}
             raise
 
-        async for session in get_session():
+        async with AsyncSession(engine, expire_on_commit=False) as session:
             await log_usage(
                 session,
                 user_id=user_id,
@@ -205,11 +204,10 @@ async def stream_normalized_openai_response(
                 web_search_calls=web_search_calls,
                 images_generated=images_generated,
             )
-            break
 
     except AuthenticationError:
         yield {"type": "error", "data": "OpenAI authentication failed. Check API key."}
-        async for session in get_session():
+        async with AsyncSession(engine, expire_on_commit=False) as session:
             await log_usage(
                 session,
                 user_id=user_id,
@@ -225,10 +223,9 @@ async def stream_normalized_openai_response(
                 web_search_calls=0,
                 images_generated=0,
             )
-            break
     except NotFoundError:
         yield {"type": "error", "data": "Model not found. Please check the model name."}
-        async for session in get_session():
+        async with AsyncSession(engine, expire_on_commit=False) as session:
             await log_usage(
                 session,
                 user_id=user_id,
@@ -244,8 +241,6 @@ async def stream_normalized_openai_response(
                 web_search_calls=0,
                 images_generated=0,
             )
-            break
-
 
 async def generate_conversation_title(first_message: str) -> str:
     try:

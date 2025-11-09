@@ -49,7 +49,7 @@ async def test_generate_and_publish_with_b64_image_real_r2():
             conversation_id=convo.id,
             assistant_message_id=msg.id,
             user_id=user.id,
-            history_for_openai=[{"role":"user","content":[{"type":"input_text","text":"draw"}]}],
+            history_for_openai=[{"role":"user","content":[{"type":"input_text","text":"create an image of a cat"}]}],
             bus=Bus(),
             instructions="You are helpful.",
             model="gpt-5-nano",
