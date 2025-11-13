@@ -1,10 +1,10 @@
 ﻿import uuid
 from datetime import datetime, UTC
 from enum import Enum
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from sqlalchemy import Column, UniqueConstraint, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import SQLModel, Field
+from sqlmodel import SQLModel, Field, Relationship
 
 
 class SubscriptionStatus(str, Enum):
@@ -28,6 +28,10 @@ class SubscriptionTier(SQLModel, table=True):
     monthly_deepsearch: int = Field(default=0)
     is_active: bool = Field(default=True)
 
+    user_subscriptions: List["UserSubscription"] = Relationship(back_populates="tier")
+    tier_model_limits: List["TierModelLimit"] = Relationship(back_populates="tier")
+    access_codes: List["AccessCode"] = Relationship(back_populates="tier")
+
 class TierModelLimit(SQLModel, table=True):
 
     __tablename__ = "tier_model_limit"
@@ -38,6 +42,8 @@ class TierModelLimit(SQLModel, table=True):
     model_name: str = Field(index=True)
     monthly_requests: int = Field(default=0)
     __table_args__ = (UniqueConstraint("tier_id", "model_name", name="uq_tier_model"),)
+
+    tier: SubscriptionTier = Relationship(back_populates="tier_model_limits")
 
 class UserSubscription(SQLModel, table=True):
 
@@ -52,6 +58,7 @@ class UserSubscription(SQLModel, table=True):
     discount_percent: int = Field(default=0)
     discount_expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
 
+    tier: SubscriptionTier = Relationship(back_populates="user_subscriptions")
 class AccessCode(SQLModel, table=True):
 
     __tablename__ = "access_code"
@@ -66,6 +73,8 @@ class AccessCode(SQLModel, table=True):
     expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
     note: Optional[str] = None
     created_by_user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="app_user.id")
+
+    tier: SubscriptionTier = Relationship(back_populates="access_codes")
 
 class Referral(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

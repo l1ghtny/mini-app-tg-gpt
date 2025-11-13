@@ -8,7 +8,7 @@ from app.db.database import get_session
 from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription
 from app.db.models import RequestLedger
 
-user_usage = APIRouter(tags=['user_usage'], prefix="/user_usage")
+user_usage = APIRouter(tags=['user/usage'], prefix="/user/usage")
 
 
 
