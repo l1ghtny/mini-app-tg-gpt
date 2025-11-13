@@ -28,6 +28,7 @@ aioboto3 = "^15.5.0"
 pillow = "^12.0.0"
 pillow-heif = "^1.1.1"
 fastapi-swagger-dark = "^0.0.8"
+python-jose = "^3.5.0"
 
 
 [build-system]
