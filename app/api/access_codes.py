@@ -36,6 +36,8 @@ async def redeem_access_code(code_id: str, session: AsyncSession = Depends(get_s
     access_code = (await session.exec(select(AccessCode).where(AccessCode.id == code_id))).first()
     if not access_code:
         return HTTPException(status_code=404, detail="Access code not found")
+    elif access_code.used_count >= access_code.max_uses:
+        return HTTPException(status_code=403, detail="Access code has been used too many times")
     else:
         access_code.used_count += 1
         subscription_for_user = UserSubscription(user_id=user.id, tier_id=access_code.tier_id, status="active", started_at=datetime.now(), expires_at=(datetime.now() + timedelta(days=30)), discount_percent=access_code.discount_percent, discount_expires_at=(datetime.now() + relativedelta(months=access_code.discount_months)))
