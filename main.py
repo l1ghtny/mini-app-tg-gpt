@@ -5,6 +5,7 @@ import fastapi_swagger_dark as fsd
 
 from app.api.images import images
 from app.api.routes import router as chat_router
+from app.api.user_usage import user_usage
 from app.db.database import engine
 from app.api.auth import auth
 from app.db.models import AppUser
@@ -15,17 +16,19 @@ app = FastAPI(
     docs_url=None
 )
 
+async def create_db_and_tables():
+    # With async engine, use run_sync to execute metadata creation
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
 
-# def create_db_and_tables():
-#     SQLModel.metadata.create_all(engine)
 
-# --- Add this section ---
 origins = [
     "http://localhost:5172",
     "http://127.0.0.1:5172",
     "http://localhost:5173",
     "http://127.0.0.1:5173"
 ]
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,8 +39,7 @@ app.add_middleware(
 )
 # -------------------------
 
-
-# app.add_event_handler("startup", create_db_and_tables)
+app.add_event_handler("startup", create_db_and_tables)
 
 dark = APIRouter()
 fsd.install(dark, path="/docs")
@@ -45,3 +47,4 @@ app.include_router(dark)
 app.include_router(chat_router, prefix="/api/v1", tags=['conversations'])
 app.include_router(auth, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
+app.include_router(user_usage, prefix="/api/v1")

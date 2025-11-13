@@ -89,7 +89,7 @@ async def create_message(
 
     # 4. required tools
 
-    if "image_generation" in request.tool_choice and not image_allowed:
+    if "image_generation" == request.tool_choice and not image_allowed:
         raise HTTPException(status_code=402, detail="image_quota_exceeded")
 
 
@@ -101,6 +101,8 @@ async def create_message(
         raise HTTPException(status_code=404, detail="Conversation not found")
     if conversation.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to send messages to this conversation")
+
+    system_prompt = conversation.system_prompt
 
     # 2) Create a USER message and contents
     user_msg = models.Message(conversation_id=conversation_id, role="user")
@@ -150,10 +152,11 @@ async def create_message(
                 parts.append({"type": "input_text", "text": c.value})
             elif c.type == "text" and msg.role == "assistant":
                 parts.append({"type": "output_text", "text": c.value})
-            elif c.type == "image":
+            elif c.type == "image" or "image_url" and msg.role == "user":
                 compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_side=2048)
                 parts.append({"type": "input_image", "image_url": compatible_url})
                 if compatible_url != c.value:
+                    # rewrite the image URL in the DB
                     await rewrite_message_image_url(session, c.value, compatible_url, message_id=msg.id)
         history_for_openai.append({"role": msg.role, "content": parts})
 
@@ -165,7 +168,7 @@ async def create_message(
         user_id=current_user.id,
         history_for_openai=history_for_openai,
         bus=bus,
-        instructions=conversation.system_prompt,
+        instructions=system_prompt,
         model=request.model,
         tool_choice=request.tool_choice,
         tools=tools,

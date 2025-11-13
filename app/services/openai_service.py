@@ -7,7 +7,7 @@ from openai import AuthenticationError, NotFoundError
 from openai.types.responses import FileSearchToolParam, ResponseImageGenCallGeneratingEvent, \
     ResponseImageGenCallInProgressEvent, ResponseImageGenCallPartialImageEvent, ToolChoiceAllowedParam, \
     ToolChoiceTypesParam, WebSearchToolParam
-from openai.types.responses.tool import CodeInterpreter, WebSearchTool
+from openai.types.responses.tool import CodeInterpreter, WebSearchTool, ImageGeneration
 from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
 

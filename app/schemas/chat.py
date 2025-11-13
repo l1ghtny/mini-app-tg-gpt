@@ -55,7 +55,7 @@ class NewMessageRequest(BaseModel):
     role: Literal["user", "assistant"]
     content: List[MessageContent]
     model: AllowedModels
-    tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
+    tool_choice: Optional[AllowedToolChoices] = "auto"
 
 
 class UpdateConversationSettingsRequest(BaseModel):

@@ -26,8 +26,6 @@ class SubscriptionTier(SQLModel, table=True):
     monthly_images: int = Field(default=0)
     monthly_docs: int = Field(default=0)
     monthly_deepsearch: int = Field(default=0)
-    # optional allowlist for models (pure allowlist; limits live in TierModelLimit)
-    allowed_models: list[str] = Field(default_factory=list, sa_column=Column(JSONB))
     is_active: bool = Field(default=True)
 
 class TierModelLimit(SQLModel, table=True):

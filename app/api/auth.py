@@ -51,11 +51,8 @@ async def login_debug(form: OAuth2PasswordRequestForm = Depends(),
                       telegram_id: Optional[int] = None, session: AsyncSession = Depends(get_session)):
     if not settings.DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not Found")
-    print('lol')
 
     telegram_id = telegram_id or int(form.username)
-    print(form)
-    print(telegram_id)
 
     result = await session.exec(select(models.AppUser).where(models.AppUser.telegram_id == telegram_id))
     user = result.first()

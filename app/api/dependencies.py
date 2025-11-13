@@ -1,4 +1,6 @@
-﻿from fastapi import Depends, HTTPException, status
+﻿from typing import Any
+
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from redis.asyncio import Redis
@@ -6,8 +8,9 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
+from app.db.models import AppUser
 from app.redis.settings import settings as redis_settings
-from app.db.database import get_session
+from app.db.database import engine
 from app.db import models
 from app.redis.event_bus import RedisEventBus
 
@@ -15,8 +18,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/debug-login", scheme
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    session: AsyncSession = Depends(get_session),
-) -> models.AppUser:
+) -> AppUser | None:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -30,10 +32,11 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    result = await session.exec(select(models.AppUser).where(models.AppUser.id == user_id))
-    user = result.first()
-    if user is None:
-        raise credentials_exception
+    async with AsyncSession(engine) as session:
+        result = await session.exec(select(models.AppUser).where(models.AppUser.id == user_id))
+        user = result.first()
+        if user is None:
+            raise credentials_exception
     return user
 
 
