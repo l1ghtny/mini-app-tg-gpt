@@ -673,6 +673,20 @@ uvicorn = {version = ">=0.15.0", extras = ["standard"]}
 standard = ["uvicorn[standard] (>=0.15.0)"]
 
 [[package]]
+name = "fastapi-swagger-dark"
+version = "0.0.8"
+description = "FastAPI plugin to add dark theme swagger docs."
+optional = false
+python-versions = ">=3.9"
+files = [
+    {file = "fastapi_swagger_dark-0.0.8-py3-none-any.whl", hash = "sha256:b615ca55e7bf1108160bb2e8d88523733ed204224c01aa210630cd96649f587f"},
+    {file = "fastapi_swagger_dark-0.0.8.tar.gz", hash = "sha256:1ad2f5afc0219a3fdae26847925e4af1e52e4f066726f72462e717aadb4b9c79"},
+]
+
+[package.extras]
+dev = ["changelog-gen (>=0.12)", "fastapi", "pre-commit (>=3.7.1)", "pytest (>=7.4.3)", "pytest-asyncio (>=0.21)", "pytest-cov (>=4.1.0)", "pytest-httpx (>=0.26.0)", "pytest-random-order (>=1.0)", "rcssmin", "ruff (>=0.6.4)"]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 description = "A list-like structure which implements collections.abc.MutableSequence"
@@ -3268,4 +3282,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.13"
-content-hash = "061aa2d46545a9de752c5d71b1a64d11a65820d2f5049c50c1d9536a02123cb5"
+content-hash = "806d788b1b53af6ef210711ddb89085835b5281ee3068459c459d53f3cb0e94a"
