@@ -76,7 +76,7 @@ async def stream_normalized_openai_response(
             instructions=instructions,
             input=messages,
             stream=True,
-            service_tier="flex"
+            service_tier="standard"
         )
 
         # This maps OpenAI event names to our normalised events
