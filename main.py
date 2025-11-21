@@ -29,7 +29,10 @@ origins = [
     "http://127.0.0.1:5172",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://gpt-mini-app.lightny.pro"
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "https://gpt-mini-app.lightny.pro",
+    "http://192.168.1.137:5173"
 ]
 
 

@@ -65,16 +65,32 @@ class AccessCode(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     code: str = Field(unique=True, index=True)
-    tier_id: uuid.UUID = Field(foreign_key="subscription_tier.id")
-    discount_percent: int = Field(default=0)
-    discount_months: int = Field(default=0)
+    tier_id: uuid.UUID = Field(foreign_key="subscription_tier.id") # tier to grant on redeem
     max_uses: int = Field(default=1)
     used_count: int = Field(default=0)
     expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
     note: Optional[str] = None
     created_by_user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="app_user.id")
 
+    discounts: List["AccessCodeDiscount"] = Relationship(back_populates="access_code")
+
     tier: SubscriptionTier = Relationship(back_populates="access_codes")
+    user_tier_discounts: List["UserTierDiscount"] = Relationship(back_populates="access_code")
+
+
+class AccessCodeDiscount(SQLModel, table=True):
+    __tablename__ = "access_code_discounts"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    access_code_id: uuid.UUID = Field(foreign_key="access_code.id")
+    tier_id: uuid.UUID = Field(foreign_key="subscription_tier.id")
+    discount_percent: int = Field(default=0)
+    duration_months: int = Field(default=1)
+
+
+    access_code: AccessCode = Relationship(back_populates="discounts")
+    tier: SubscriptionTier = Relationship(back_populates="access_codes")
+
 
 class Referral(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -83,3 +99,14 @@ class Referral(SQLModel, table=True):
     access_code_id: Optional[uuid.UUID] = Field(default=None, foreign_key="access_code.id")
     reward_applied: bool = Field(default=False)
     __table_args__ = (UniqueConstraint("invitee_user_id", name="uq_referral_unique_invitee"),)
+
+
+class UserTierDiscount(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    tier_id: uuid.UUID = Field(foreign_key="subscription_tier.id")
+    discount_percent: int = Field(default=0)
+    valid_until: datetime = Field(default_factory=datetime.now, sa_column=Column(DateTime, index=True))
+    access_code_id: Optional[uuid.UUID] = Field(default=None, foreign_key="access_code.id")
+
+    access_code: Optional[AccessCode] = Relationship(back_populates="user_tier_discounts")

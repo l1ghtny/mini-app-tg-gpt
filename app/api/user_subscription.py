@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends
+﻿from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -14,9 +14,8 @@ user_subscription = APIRouter(tags=['user/subscription'], prefix="/user/subscrip
 async def get_active_subscription(session: AsyncSession = Depends(get_session), user=Depends(get_current_user)):
     get_subscription = select(subscription_tiers.UserSubscription).where(user.id==subscription_tiers.UserSubscription.user_id, subscription_tiers.UserSubscription.status=="active").options(selectinload(subscription_tiers.UserSubscription.tier))
     user_subscription = (await session.exec(get_subscription)).first()
-    print(type(user_subscription.discount_expires_at))
     if not user_subscription:
-        return {"status": "none"}
+        raise HTTPException(status_code=403, detail="No active subscription found")
     else:
         result = SubscriptionResponse(
             subscription_id=str(user_subscription.id),
