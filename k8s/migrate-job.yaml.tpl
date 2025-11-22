@@ -23,7 +23,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: %env.IMAGE_REGISTRY%/%env.IMAGE_NAME%:%dev.BUILD_NUMBER%
+          image: %env.IMAGE_REGISTRY%/%env.IMAGE_NAME%:%dep.BUILD_NUMBER%
           imagePullPolicy: IfNotPresent
           command: ["alembic", "upgrade", "head"]
           env:
