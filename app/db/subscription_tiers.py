@@ -30,7 +30,8 @@ class SubscriptionTier(SQLModel, table=True):
 
     user_subscriptions: List["UserSubscription"] = Relationship(back_populates="tier")
     tier_model_limits: List["TierModelLimit"] = Relationship(back_populates="tier")
-    access_codes: List["AccessCode"] = Relationship(back_populates="tier")
+    access_code: List["AccessCode"] = Relationship(back_populates="tier")
+    access_code_discount: List["AccessCodeDiscount"] = Relationship(back_populates="tier")
 
 class TierModelLimit(SQLModel, table=True):
 
@@ -65,7 +66,7 @@ class AccessCode(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     code: str = Field(unique=True, index=True)
-    tier_id: uuid.UUID = Field(foreign_key="subscription_tier.id") # tier to grant on redeem
+    tier_id: Optional[uuid.UUID] = Field(foreign_key="subscription_tier.id") # tier to grant on redeem
     max_uses: int = Field(default=1)
     used_count: int = Field(default=0)
     expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
@@ -74,7 +75,7 @@ class AccessCode(SQLModel, table=True):
 
     discounts: List["AccessCodeDiscount"] = Relationship(back_populates="access_code")
 
-    tier: SubscriptionTier = Relationship(back_populates="access_codes")
+    tier: SubscriptionTier = Relationship(back_populates="access_code")
     user_tier_discounts: List["UserTierDiscount"] = Relationship(back_populates="access_code")
 
 
@@ -89,7 +90,7 @@ class AccessCodeDiscount(SQLModel, table=True):
 
 
     access_code: AccessCode = Relationship(back_populates="discounts")
-    tier: SubscriptionTier = Relationship(back_populates="access_codes")
+    tier: SubscriptionTier = Relationship(back_populates="access_code_discount")
 
 
 class Referral(SQLModel, table=True):

@@ -19,12 +19,8 @@ class TierMonthlyLimits(BaseModel):
     requests_limit: int
 
 
-class AccessCodeResponse(BaseModel):
-    id: str
-    code: str
-    tier_name: str
-    tier_price: int
-    tier_monthly_images: int
-    tier_monthly_limits: List[TierMonthlyLimits]
-    discount_percent: int
-    discount_months: int
+class SubscriptionTierResponse(BaseModel):
+    name: str
+    price_cents: int
+    monthly_images: int
+    tier_model_limits: List[TierMonthlyLimits]
