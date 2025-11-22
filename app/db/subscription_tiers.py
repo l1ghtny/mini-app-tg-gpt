@@ -55,7 +55,7 @@ class UserSubscription(SQLModel, table=True):
     tier_id: uuid.UUID = Field(foreign_key="subscription_tier.id", index=True)
     status: SubscriptionStatus = Field(default=SubscriptionStatus.active)
     started_at: datetime = Field(default_factory=datetime.now, sa_column=Column(DateTime, index=True))
-    expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    expires_in_days: int = Field(default=7)
     discount_percent: int = Field(default=0)
     discount_expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
 
@@ -67,6 +67,7 @@ class AccessCode(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     code: str = Field(unique=True, index=True)
     tier_id: Optional[uuid.UUID] = Field(foreign_key="subscription_tier.id") # tier to grant on redeem
+    tier_expires_at: datetime = Field(sa_column=Column(DateTime))
     max_uses: int = Field(default=1)
     used_count: int = Field(default=0)
     expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))

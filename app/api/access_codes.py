@@ -1,4 +1,5 @@
-﻿from datetime import datetime, timedelta
+﻿import logging
+from datetime import datetime, timedelta
 from typing import List
 
 from dateutil.relativedelta import relativedelta
@@ -22,9 +23,8 @@ async def get_access_code(
     code: str,
     session: AsyncSession = Depends(get_session),
 ):
-
-    print(f'testing code {code}')
     # Load code by its string code value, including tier + discounts + discount tiers
+
     result = await session.exec(
         select(AccessCode)
         .where(AccessCode.code == code)
@@ -67,7 +67,7 @@ async def get_access_code(
         tier=tier_out,
         discounts=discounts_out,
         max_uses=access_code.max_uses,
-        expires_at=access_code.expires_at,
+        expires_at=datetime.now() + relativedelta(days=access_code.tier_expires_in_days),
     )
 
 
@@ -113,6 +113,7 @@ async def redeem_access_code(
                 user_id=user.id,
                 tier_id=access_code.tier_id,
                 status="active",
+                expires_at=now + relativedelta(days=access_code.tier_expires_in_days)
                 # any other fields you have on UserSubscription will just use defaults
             )
             session.add(subscription_for_user)
