@@ -18,10 +18,10 @@ from app.db.subscription_tiers import *
 load_dotenv()
 
 
-url = os.getenv("DATABASE_URL")
-print(url)
+raw_url = os.getenv("DATABASE_URL")
 config = context.config
-config.set_main_option("sqlalchemy.url", str(url))
+safe_url = raw_url.replace("%", "%%")
+config.set_main_option("sqlalchemy.url", safe_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
