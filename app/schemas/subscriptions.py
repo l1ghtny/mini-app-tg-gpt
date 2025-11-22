@@ -21,6 +21,7 @@ class TierMonthlyLimits(BaseModel):
 
 class SubscriptionTierResponse(BaseModel):
     name: str
+    description: str
     price_cents: int
     monthly_images: int
     tier_model_limits: List[TierMonthlyLimits]
