@@ -1,14 +1,12 @@
-﻿# k8s/migrate-job.yaml.tpl
-
-apiVersion: batch/v1
+﻿apiVersion: batch/v1
 kind: Job
 metadata:
   # Unique per TeamCity build so Jobs don't clash
-  name: tg-mini-backend-%build.id%
-  namespace: %env.K8S_NAMESPACE%
+  name: tg-mini-backend-__JOB_SUFFIX__
+  namespace: __K8S_NAMESPACE__
   labels:
     app: tg-mini-backend
-    env: %env.DEPLOY_ENV%
+    env: __DEPLOY_ENV__
 spec:
   # auto-clean after N seconds once finished
   ttlSecondsAfterFinished: 600
@@ -17,19 +15,18 @@ spec:
     metadata:
       labels:
         app: tg-mini-backend
-        env: %env.DEPLOY_ENV%
-        version: %env.IMAGE_TAG%
+        env: __DEPLOY_ENV__
+        version: __IMAGE_TAG__
     spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: %env.IMAGE_REGISTRY%/%env.IMAGE_NAME%:%dep.MiniAppTgGpt_BuildBackend.BUILD_NUMBER%
+          image: __IMAGE_REGISTRY__/__IMAGE_NAME__:__IMAGE_TAG__
           imagePullPolicy: IfNotPresent
           command: ["alembic", "upgrade", "head"]
           env:
-            # you can add more env vars here as needed
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: %env.SECRET_NAME%
+                  name: __SECRET_NAME__
                   key: DATABASE_URL
