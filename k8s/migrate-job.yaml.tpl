@@ -15,8 +15,8 @@ spec:
     metadata:
       labels:
         app: tg-mini-backend
-        env: __DEPLOY_ENV__
-        version: __IMAGE_TAG__
+        env: "__DEPLOY_ENV__"
+        version: "__IMAGE_TAG__"
     spec:
       restartPolicy: Never
       containers:
