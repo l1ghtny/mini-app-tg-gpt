@@ -8,8 +8,6 @@ class SubscriptionResponse(BaseModel):
     status: str
     started_at: str
     expires_at: str
-    discount_percent: int
-    discount_expires_at: str
     tier_name: str
     tier_description: str
 

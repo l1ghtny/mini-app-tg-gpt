@@ -22,8 +22,6 @@ async def get_active_subscription(session: AsyncSession = Depends(get_session), 
             status=user_subscription.status,
             started_at=user_subscription.started_at.strftime('%H:%M:%S %d.%m.%Y'),
             expires_at=user_subscription.expires_at.strftime('%H:%M:%S %d.%m.%Y'),
-            discount_percent=user_subscription.discount_percent,
-            discount_expires_at=user_subscription.discount_expires_at.strftime('%H:%M:%S %d.%m.%Y'),
             tier_name=user_subscription.tier.name,
             tier_description=user_subscription.tier.description,
         )
