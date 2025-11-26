@@ -40,6 +40,15 @@ async def get_access_code(
     if not access_code:
         raise HTTPException(status_code=404, detail="Access code not found")
 
+    now = datetime.now()
+
+    # 2) Expiry and usage checks
+    if access_code.expires_at and access_code.expires_at < now:
+        raise HTTPException(status_code=400, detail="Access code has expired")
+
+    if access_code.max_uses is not None and access_code.used_count >= access_code.max_uses:
+        raise HTTPException(status_code=400, detail="Access code usage limit reached")
+
     # Build tier output (or None)
     tier_out = None
     if access_code.tier:
