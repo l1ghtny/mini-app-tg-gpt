@@ -10,6 +10,7 @@ from app.api.dependencies import get_current_user
 from app.db.database import get_session
 from app.db.subscription_tiers import SubscriptionTier
 from app.schemas.subscriptions import SubscriptionTierResponse, TierMonthlyLimits
+from app.services.subscription_check.realtime_check import check_tier
 
 tiers = APIRouter(tags=['subscription tiers'], prefix='/tiers')
 
@@ -22,12 +23,17 @@ async def get_tiers(
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    tiers_info = (await session.exec(select(SubscriptionTier).options(selectinload(SubscriptionTier.tier_model_limits)))).all()
+    tiers_info = (await session.exec(select(SubscriptionTier).where(SubscriptionTier.is_public==True).order_by(SubscriptionTier.index).options(selectinload(SubscriptionTier.tier_model_limits)))).all()
 
     if not tiers_info:
         raise HTTPException(status_code=404, detail="No tiers found")
 
-    tiers_enriched = [SubscriptionTierResponse(name=tier.name, description=tier.description, price_cents=tier.price_cents, monthly_images=tier.monthly_images, tier_model_limits=[TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests) for l in tier.tier_model_limits]) for tier in tiers_info]
+    current_tier = await check_tier(user, session)
+    if current_tier and current_tier not in tiers_info:
+        tiers_info.insert(0, current_tier)
+
+
+    tiers_enriched = [SubscriptionTierResponse(name=tier.name, name_ru=tier.name_ru, description=tier.description, description_ru=tier.description_ru, price_cents=tier.price_cents, monthly_images=tier.monthly_images, tier_model_limits=[TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests) for l in tier.tier_model_limits]) for tier in tiers_info]
     return tiers_enriched
 
 

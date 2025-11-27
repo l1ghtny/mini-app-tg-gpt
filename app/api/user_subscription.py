@@ -23,6 +23,8 @@ async def get_active_subscription(session: AsyncSession = Depends(get_session), 
             started_at=user_subscription.started_at.strftime('%H:%M:%S %d.%m.%Y'),
             expires_at=user_subscription.expires_at.strftime('%H:%M:%S %d.%m.%Y'),
             tier_name=user_subscription.tier.name,
+            tier_name_ru=user_subscription.tier.name_ru,
             tier_description=user_subscription.tier.description,
+            tier_description_ru=user_subscription.tier.description_ru
         )
         return result

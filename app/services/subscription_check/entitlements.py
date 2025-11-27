@@ -1,4 +1,6 @@
 ﻿from datetime import datetime
+
+from sqlalchemy.orm import selectinload
 from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 import uuid
@@ -17,7 +19,7 @@ async def get_active_tier(session: AsyncSession, user_id: uuid.UUID) -> Subscrip
         .join(UserSubscription, UserSubscription.tier_id == SubscriptionTier.id)
         .where(UserSubscription.user_id==user_id, UserSubscription.status=="active",
                (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > func.now()))
-        .limit(1)
+        .limit(1).options(selectinload(SubscriptionTier.tier_model_limits))
     )
     return (await session.exec(q)).first()
 

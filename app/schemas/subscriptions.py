@@ -9,7 +9,10 @@ class SubscriptionResponse(BaseModel):
     started_at: str
     expires_at: str
     tier_name: str
+    tier_name_ru: str
     tier_description: str
+    tier_description_ru: str
+
 
 
 class TierMonthlyLimits(BaseModel):
@@ -19,7 +22,9 @@ class TierMonthlyLimits(BaseModel):
 
 class SubscriptionTierResponse(BaseModel):
     name: str
+    name_ru: str
     description: str
+    description_ru: str
     price_cents: int
     monthly_images: int
     tier_model_limits: List[TierMonthlyLimits]

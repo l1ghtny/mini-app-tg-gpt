@@ -20,13 +20,17 @@ class SubscriptionTier(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     name: str = Field(index=True, unique=True)
+    name_ru: str = Field(unique=True, nullable=True)
     description: Optional[str] = None
+    description_ru: Optional[str] = Field(nullable=True)
     price_cents: int = Field(default=0)
     # feature caps (requests, not tokens)
     monthly_images: int = Field(default=0)
     monthly_docs: int = Field(default=0)
     monthly_deepsearch: int = Field(default=0)
     is_active: bool = Field(default=True)
+    is_public: bool = Field(default=True, nullable=False)
+    index: int = Field(default=0, nullable=False)
 
     user_subscriptions: List["UserSubscription"] = Relationship(back_populates="tier")
     tier_model_limits: List["TierModelLimit"] = Relationship(back_populates="tier")
