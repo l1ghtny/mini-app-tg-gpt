@@ -53,7 +53,7 @@ async def get_access_code(
     tier_out = None
     if access_code.tier:
         # Assuming SubscriptionTierOut is compatible with model_validate / from_orm
-        tier_out = SubscriptionTierResponse(name=access_code.tier.name, description=access_code.tier.description, price_cents=access_code.tier.price_cents, monthly_images=access_code.tier.monthly_images, tier_model_limits=[TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests) for l in access_code.tier.tier_model_limits])
+        tier_out = SubscriptionTierResponse(name=access_code.tier.name, name_ru=access_code.tier.name_ru, description=access_code.tier.description, description_ru=access_code.tier.description_ru, price_cents=access_code.tier.price_cents, monthly_images=access_code.tier.monthly_images, tier_model_limits=[TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests) for l in access_code.tier.tier_model_limits])
 
     # Build discounts list
     discounts_out: list[AccessCodeDiscountOut] = []
