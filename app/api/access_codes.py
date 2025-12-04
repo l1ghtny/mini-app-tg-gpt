@@ -117,12 +117,19 @@ async def redeem_access_code(
         )
         existing_sub = existing_sub_result.first()
 
+        expiration = access_code.tier_expires_in_days
+        if expiration > 0:
+            expires_at = now + relativedelta(days=expiration)
+        else:
+            expires_at = now + relativedelta(years=10)
+
+
         if not existing_sub:
             subscription_for_user = UserSubscription(
                 user_id=user.id,
                 tier_id=access_code.tier_id,
                 status="active",
-                expires_at=now + relativedelta(days=access_code.tier_expires_in_days)
+                expires_at=expires_at
                 # any other fields you have on UserSubscription will just use defaults
             )
             session.add(subscription_for_user)
