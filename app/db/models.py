@@ -18,6 +18,7 @@ class AppUser(SQLModel, table=True):
 
     conversations: List["Conversation"] = Relationship(back_populates="user")
     requests: List["RequestLedger"] = Relationship(back_populates="user")
+    payments: List["Payment"] = Relationship(back_populates="user")
 
 class Conversation(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -188,5 +189,25 @@ class RequestLedger(SQLModel, table=True):
         ),
     )
 
+
+class Payment(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+
+    # We store tier_name directly to preserve history if tiers change
+    tier_name: str = Field(index=True)
+
+    # Amount in CENTS (kopecks)
+    amount: int = Field(nullable=False)
+    currency: str = Field(default="RUB")
+
+    # TBank specific fields
+    tbank_payment_id: Optional[str] = Field(default=None, index=True)
+    tbank_status: str = Field(default="NEW")  # NEW, CONFIRMED, REJECTED, etc.
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    user: "AppUser" = Relationship()
 
 

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware # Import this
 from sqlmodel import SQLModel
 import fastapi_swagger_dark as fsd
 
+from app.api.payments import payments
 from app.api.access_codes import access_codes
 from app.api.images import images
 from app.api.routes import router as chat_router
@@ -59,3 +60,4 @@ app.include_router(user_usage, prefix="/api/v1")
 app.include_router(user_subscription, prefix="/api/v1")
 app.include_router(access_codes, prefix="/api/v1")
 app.include_router(tiers, prefix="/api/v1")
+app.include_router(payments, prefix="/api/v1")
