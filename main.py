@@ -1,5 +1,5 @@
 import sentry_sdk
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
 import fastapi_swagger_dark as fsd
@@ -17,16 +17,25 @@ from app.api.auth import auth
 from app.db.models import AppUser
 
 
+def before_send(event, hint):
+    # If the error is a known HTTP exception (like 401, 403, 404), ignore it
+    if "exc_info" in hint:
+        exc_type, exc_value, tb = hint["exc_info"]
+        if isinstance(exc_value, HTTPException):
+            if exc_value.status_code < 500:
+                return None  # Don't send to Sentry
+    return event
+
+
+
 if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
-        # Set traces_sample_rate to 1.0 to capture 100%
-        # of transactions for performance monitoring.
-        # We recommend adjusting this value in production.
-        traces_sample_rate=1.0,
-        # If you want to profile 100% of sampled transactions:
-        profiles_sample_rate=1.0,
+        # Capture only 10% of transactions for performance monitoring
+        traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" else 1.0,
+        # Capture 100% of errors (this is the default, but good to know)
+        before_send=before_send # filter non-500 http errors
     )
 
 
