@@ -1,9 +1,13 @@
-﻿import datetime
+﻿import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
+from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Depends, HTTPException, Body, Request
-from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.core.config import settings
 from app.db.database import get_session
 from app.api.dependencies import get_current_user
 from app.db.models import AppUser, Payment
@@ -20,16 +24,14 @@ async def init_payment(
         session: AsyncSession = Depends(get_session)
 ):
     # 1. Fetch Tier Info
-    # Note: Adjust the model import path if SubscriptionTier is located elsewhere
     result = await session.exec(select(SubscriptionTier).where(SubscriptionTier.name == tier_name))
     tier = result.first()
 
     if not tier:
         raise HTTPException(status_code=404, detail="Tier not found")
 
-    # 2. Calculate Amount (assuming price_cents is stored in SubscriptionTier)
-    # TBank expects amount in kopecks (cents)
-    amount_cents = int(tier.price_cents * 100)  # Convert if your DB stores rubels, or use as is if cents
+    # 2. Calculate Amount (TBank expects kopecks/cents)
+    amount_cents = int(tier.price_cents * 100)
 
     # 3. Create Local Payment Record
     payment = Payment(
@@ -56,14 +58,37 @@ async def init_payment(
         session.add(payment)
         await session.commit()
 
-        return {"payment_url": payment_url}
+        # CHANGED: Return payment_id so the frontend can poll /status
+        return {
+            "payment_url": payment_url,
+            "payment_id": str(payment.id)
+        }
 
     except Exception as e:
-        # Cleanup if failed
-        payment.tbank_status = "FAILED"
+        payment.tbank_status = "ERROR"
         session.add(payment)
         await session.commit()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@payments.get("/status/{payment_id}")
+async def check_payment_status(
+        payment_id: uuid.UUID,
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Frontend polls this endpoint to check if the payment was confirmed.
+    """
+    payment = await session.get(Payment, payment_id)
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    return {
+        "id": str(payment.id),
+        "status": payment.tbank_status,
+        "is_confirmed": payment.tbank_status == "CONFIRMED",
+        "tier_name": payment.tier_name
+    }
 
 
 @payments.post("/webhook")
@@ -71,31 +96,38 @@ async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_se
     data = await request.json()
 
     # 1. Security Check
-    if not await tbank_service.verify_notification(data):
-        # TBank expects "OK" text response even on error to stop retrying,
-        # but for security we might want to log this heavily.
+    if not tbank_service.verify_notification(data):
+        print("Webhook signature verification failed")
         return "OK"
 
     order_id = data.get("OrderId")
     status = data.get("Status")
+    success = data.get("Success", False)  # TBank boolean flag
+    settings.custom_logger.info(f'ORDER_ID: {order_id}, STATUS: {status}, SUCCESS: {success}')
 
     # 2. Find Payment
-    # We use order_id which corresponds to our Payment.id
-    payment = await session.get(Payment, order_id)
-    if not payment:
+    try:
+        payment_uuid = uuid.UUID(order_id)
+        payment = await session.get(Payment, payment_uuid)
+    except ValueError:
+        print(f"Invalid UUID in webhook OrderId: {order_id}")
         return "OK"
 
-    # 3. Update Payment Status
+    if not payment:
+        print(f"Payment not found for OrderId: {order_id}")
+        return "OK"
+
+    # 3. Update Status
+    # Don't overwrite if it's already CONFIRMED (idempotency check)
+    if payment.tbank_status == "CONFIRMED":
+        return "OK"
+
     payment.tbank_status = status
+    payment.updated_at = datetime.utcnow()
     session.add(payment)
 
-    # 4. Handle Successful Payment
-    if status == "CONFIRMED":
-        # Check if this payment was already processed to avoid double-crediting
-        # (TBank might send the same webhook multiple times)
-        # We can check if the user subscription was already updated or add a 'processed' flag to Payment.
-        # For this example, we'll just execute the logic (idempotency is safer with a specific flag).
-
+    # 4. Handle Success
+    if status == "CONFIRMED" and success:
         await activate_subscription(session, payment)
 
     await session.commit()
@@ -103,36 +135,39 @@ async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_se
 
 
 async def activate_subscription(session: AsyncSession, payment: Payment):
-    # Fetch the tier details
+    """
+    Cancels old active subscriptions and creates a new one.
+    """
+    # 1. Fetch the new tier details
     tier = (await session.exec(select(SubscriptionTier).where(SubscriptionTier.name == payment.tier_name))).first()
     if not tier:
+        print(f"Tier {payment.tier_name} not found during activation")
         return
 
-    # Check for existing subscription
-    query = select(UserSubscription).where(UserSubscription.user_id == payment.user_id)
-    existing_sub = (await session.exec(query)).first()
+    # 2. Find ANY currently active subscriptions for this user
+    query = select(UserSubscription).where(
+        UserSubscription.user_id == payment.user_id,
+        UserSubscription.status == SubscriptionStatus.active
+    )
+    active_subs = (await session.exec(query)).all()
 
+    # 3. Cancel/Expire them immediately
+    # This ensures the /api/v1/user/subscription/active endpoint only ever finds the NEW one
+    for sub in active_subs:
+        sub.status = SubscriptionStatus.cancelled
+        # Optional: Set expires_at to now to double-ensure logic everywhere handles it
+        # sub.expires_at = datetime.utcnow()
+        session.add(sub)
+
+    # 4. Create the NEW Subscription
     now = datetime.utcnow()
-    duration_days = 30  # Default to 1 month, or fetch from tier if you have a duration field
+    expires_at = now + relativedelta(months=1)
 
-    if existing_sub:
-        # Logic: If active and same tier, extend. If different tier, upgrade immediately.
-        if existing_sub.expires_at and existing_sub.expires_at > now:
-            new_expiry = existing_sub.expires_at + datetime.timedelta(days=duration_days)
-        else:
-            new_expiry = now + datetime.timedelta(days=duration_days)
-
-        existing_sub.tier_id = tier.id
-        existing_sub.status = SubscriptionStatus.active
-        existing_sub.expires_at = new_expiry
-        session.add(existing_sub)
-    else:
-        # Create new
-        new_sub = UserSubscription(
-            user_id=payment.user_id,
-            tier_id=tier.id,
-            status=SubscriptionStatus.active,
-            started_at=now,
-            expires_at=now + datetime.timedelta(days=duration_days)
-        )
-        session.add(new_sub)
+    new_sub = UserSubscription(
+        user_id=payment.user_id,
+        tier_id=tier.id,
+        status=SubscriptionStatus.active,
+        started_at=now,
+        expires_at=expires_at
+    )
+    session.add(new_sub)

@@ -1,5 +1,6 @@
+import sentry_sdk
 from fastapi import FastAPI, APIRouter
-from fastapi.middleware.cors import CORSMiddleware # Import this
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
 import fastapi_swagger_dark as fsd
 
@@ -10,13 +11,29 @@ from app.api.routes import router as chat_router
 from app.api.tiers import tiers
 from app.api.user_subscription import user_subscription
 from app.api.user_usage import user_usage
+from app.core.config import settings
 from app.db.database import engine
 from app.api.auth import auth
 from app.db.models import AppUser
 
+
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.ENVIRONMENT,
+        # Set traces_sample_rate to 1.0 to capture 100%
+        # of transactions for performance monitoring.
+        # We recommend adjusting this value in production.
+        traces_sample_rate=1.0,
+        # If you want to profile 100% of sampled transactions:
+        profiles_sample_rate=1.0,
+    )
+
+
+
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="0.5.0",
+    version="0.7.0",
     docs_url=None
 )
 
@@ -37,6 +54,11 @@ origins = [
     "http://192.168.1.137:5173",
     "https://gpt-mini-app-ru.lightny.pro"
 ]
+
+
+@app.get("/sentry-debug")
+async def trigger_error():
+    division_by_zero = 1 / 0
 
 
 app.add_middleware(

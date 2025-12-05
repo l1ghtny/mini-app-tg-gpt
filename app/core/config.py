@@ -1,3 +1,4 @@
+import logging
 import os
 from dotenv import load_dotenv, find_dotenv
 from pathlib import Path
@@ -21,5 +22,9 @@ class Settings:
     TBANK_TERMINAL_KEY: str = os.getenv("TBANK_TERMINAL_KEY", "DEMO")
     TBANK_PASSWORD: str = os.getenv("TBANK_PASSWORD", "password")
     TBANK_API_URL: str = "https://securepay.tinkoff.ru/v2"
+    custom_logger = logging.getLogger("uvicorn")
+    # Add Sentry Config
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "local")  # e.g. 'production', 'staging'
 
 settings = Settings()

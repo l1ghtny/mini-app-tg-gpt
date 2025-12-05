@@ -7,12 +7,15 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.dependencies import get_current_user
+from app.core.config import settings
 from app.db.database import get_session
 from app.db.subscription_tiers import SubscriptionTier
 from app.schemas.subscriptions import SubscriptionTierResponse, TierMonthlyLimits
 from app.services.subscription_check.realtime_check import check_tier
 
 tiers = APIRouter(tags=['subscription tiers'], prefix='/tiers')
+
+
 
 @tiers.get("/", response_model=List[SubscriptionTierResponse])
 async def get_tiers(
