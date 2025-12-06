@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from dateutil.relativedelta import relativedelta
-from fastapi import APIRouter, Depends, HTTPException, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, Body, Request, Response
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -12,6 +12,7 @@ from app.db.database import get_session
 from app.api.dependencies import get_current_user
 from app.db.models import AppUser, Payment
 from app.db.subscription_tiers import SubscriptionTier, UserSubscription, SubscriptionStatus
+from app.schemas.subscriptions import InitPaymentRequest
 from app.services.banking.tbank import tbank_service
 
 payments = APIRouter(tags=["payments"], prefix="/payments/tbank")
@@ -19,21 +20,22 @@ payments = APIRouter(tags=["payments"], prefix="/payments/tbank")
 
 @payments.post("/init")
 async def init_payment(
-        tier_name: str = Body(..., embed=True),
+        payload: InitPaymentRequest,
         user: AppUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    # 1. Fetch Tier Info
+    tier_name = payload.tier_name
+    email = payload.email
+
+    # 1. Fetch Tier
     result = await session.exec(select(SubscriptionTier).where(SubscriptionTier.name == tier_name))
     tier = result.first()
-
     if not tier:
         raise HTTPException(status_code=404, detail="Tier not found")
 
-    # 2. Calculate Amount (TBank expects kopecks/cents)
     amount_cents = int(tier.price_cents * 100)
 
-    # 3. Create Local Payment Record
+    # 2. Create Payment Record (Same as before)
     payment = Payment(
         user_id=user.id,
         tier_name=tier.name,
@@ -44,13 +46,33 @@ async def init_payment(
     await session.commit()
     await session.refresh(payment)
 
+    # 3. Construct Receipt (54-FZ)
+    receipt_data = None
+    if email:  # Only create a receipt if we have an email/phone to send it to
+        receipt_data = {
+            "Taxation": settings.TBANK_TAXATION,
+            "Email": email,
+            "Items": [
+                {
+                    "Name": f"Subscription: {tier.name}",
+                    "Price": amount_cents,
+                    "Quantity": 1,
+                    "Amount": amount_cents,
+                    "Tax": "none",  # "none" implies no VAT (common for USN). Use "vat20" if you pay VAT.
+                    "PaymentMethod": "full_prepayment",
+                    "PaymentObject": "service"
+                }
+            ]
+        }
+
     try:
-        # 4. Call TBank
+        # 4. Call TBank with Receipt
         payment_url, tbank_id = await tbank_service.init_payment(
             order_id=str(payment.id),
             amount_cents=amount_cents,
             description=f"Subscription: {tier.name}",
-            user_id=str(user.id)
+            user_id=str(user.id),
+            receipt=receipt_data
         )
 
         # 5. Update External ID
@@ -98,7 +120,7 @@ async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_se
     # 1. Security Check
     if not tbank_service.verify_notification(data):
         print("Webhook signature verification failed")
-        return "OK"
+        return Response(content="OK", media_type="text/plain")
 
     order_id = data.get("OrderId")
     status = data.get("Status")
@@ -111,16 +133,16 @@ async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_se
         payment = await session.get(Payment, payment_uuid)
     except ValueError:
         print(f"Invalid UUID in webhook OrderId: {order_id}")
-        return "OK"
+        return Response(content="OK", media_type="text/plain")
 
     if not payment:
         print(f"Payment not found for OrderId: {order_id}")
-        return "OK"
+        return Response(content="OK", media_type="text/plain")
 
     # 3. Update Status
     # Don't overwrite if it's already CONFIRMED (idempotency check)
     if payment.tbank_status == "CONFIRMED":
-        return "OK"
+        return Response(content="OK", media_type="text/plain")
 
     payment.tbank_status = status
     payment.updated_at = datetime.utcnow()
@@ -131,7 +153,7 @@ async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_se
         await activate_subscription(session, payment)
 
     await session.commit()
-    return "OK"
+    return Response(content="OK", media_type="text/plain")
 
 
 async def activate_subscription(session: AsyncSession, payment: Payment):

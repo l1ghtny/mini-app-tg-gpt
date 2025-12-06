@@ -57,7 +57,7 @@ class TBankService:
         calculated_token = self._generate_token(data)
         return received_token == calculated_token
 
-    async def init_payment(self, order_id: str, amount_cents: int, description: str, user_id: str) -> tuple[str, str]:
+    async def init_payment(self, order_id: str, amount_cents: int, description: str, user_id: str, receipt: dict = None) -> tuple[str, str]:
         """
         Initializes payment and returns (PaymentURL, PaymentId)
         """
@@ -68,6 +68,9 @@ class TBankService:
             "Description": description,
             "DATA": {"user_id": user_id}
         }
+
+        if receipt:
+            payload["Receipt"] = receipt
 
         payload["Token"] = self._generate_token(payload)
 

@@ -33,7 +33,7 @@ if settings.SENTRY_DSN:
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
         # Capture only 10% of transactions for performance monitoring
-        traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" else 1.0,
+        traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
         before_send=before_send # filter non-500 http errors
     )

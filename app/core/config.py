@@ -26,5 +26,6 @@ class Settings:
     # Add Sentry Config
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "local")  # e.g. 'production', 'staging'
+    TBANK_TAXATION: str = "usn_income"
 
 settings = Settings()

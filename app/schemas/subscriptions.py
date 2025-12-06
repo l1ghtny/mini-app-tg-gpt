@@ -1,4 +1,4 @@
-﻿from typing import Dict, List
+﻿from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -28,3 +28,8 @@ class SubscriptionTierResponse(BaseModel):
     price_cents: int
     monthly_images: int
     tier_model_limits: List[TierMonthlyLimits]
+
+
+class InitPaymentRequest(BaseModel):
+    tier_name: str
+    email: str
