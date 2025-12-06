@@ -119,38 +119,50 @@ async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_se
 
     # 1. Security Check
     if not tbank_service.verify_notification(data):
-        print("Webhook signature verification failed")
+        settings.logger.error(f"Webhook signature verification failed. Data: {data}")
         return Response(content="OK", media_type="text/plain")
 
     order_id = data.get("OrderId")
-    status = data.get("Status")
-    success = data.get("Success", False)  # TBank boolean flag
-    settings.custom_logger.info(f'ORDER_ID: {order_id}, STATUS: {status}, SUCCESS: {success}')
+    new_status = data.get("Status")
+    success = data.get("Success", False)
 
-    # 2. Find Payment
     try:
         payment_uuid = uuid.UUID(order_id)
-        payment = await session.get(Payment, payment_uuid)
+
+        # 2. Find Payment with ROW LOCK
+        # 'with_for_update()' ensures no other request can modify this row
+        # until this transaction commits. This prevents !!race conditions!!.
+        query = select(Payment).where(Payment.id == payment_uuid).with_for_update()
+        result = await session.exec(query)
+        payment = result.first()
+
     except ValueError:
-        print(f"Invalid UUID in webhook OrderId: {order_id}")
         return Response(content="OK", media_type="text/plain")
 
     if not payment:
-        print(f"Payment not found for OrderId: {order_id}")
         return Response(content="OK", media_type="text/plain")
 
-    # 3. Update Status
-    # Don't overwrite if it's already CONFIRMED (idempotency check)
-    if payment.tbank_status == "CONFIRMED":
+    # 3. State Guard Logic
+    # If we are already in a final state, ignore updates.
+    current_status = payment.tbank_status
+
+    FINAL_STATES = {"CONFIRMED", "CANCELED", "REJECTED", "REFUNDED"}
+
+    if current_status in FINAL_STATES:
+        # Ignore "late" webhooks like AUTHORIZED if we are already confirmed
         return Response(content="OK", media_type="text/plain")
 
-    payment.tbank_status = status
-    payment.updated_at = datetime.utcnow()
+    # If the new status is AUTHORIZED, but we are actively processing CONFIRMED elsewhere,
+    # the lock prevents it. If we haven't processed CONFIRMED yet, AUTHORIZED is fine.
+
+    payment.tbank_status = new_status
     session.add(payment)
 
     # 4. Handle Success
-    if status == "CONFIRMED" and success:
+    if new_status == "CONFIRMED" and success:
+        settings.custom_logger.info(f"Payment {payment_uuid} confirmed! Adding subscription...")
         await activate_subscription(session, payment)
+        settings.custom_logger.info('Subscription added!')
 
     await session.commit()
     return Response(content="OK", media_type="text/plain")
