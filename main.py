@@ -1,6 +1,7 @@
 import sentry_sdk
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sentry_sdk.integrations.openai import OpenAIIntegration
 from sqlmodel import SQLModel
 import fastapi_swagger_dark as fsd
 
@@ -32,10 +33,17 @@ if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
+        release="gpt-mini-app@0.7.5",
         # Capture only 10% of transactions for performance monitoring
         traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
-        before_send=before_send # filter non-500 http errors
+        before_send=before_send, # filter non-500 http errors
+        send_default_pii=True, # send info about http calls (includes AI, currently using for openAI costs)
+        integrations=[
+            OpenAIIntegration(
+                include_prompts=False,
+                # LLM/tokenizer inputs/outputs will be not sent to Sentry, despite send_default_pii=True
+            )]
     )
 
 

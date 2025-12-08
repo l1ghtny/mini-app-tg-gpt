@@ -7,7 +7,6 @@ from app.services.openai_service import generate_conversation_title
 from app.db import models
 
 async def generate_and_save_title(conversation_id: uuid.UUID, first_message_content: str):
-    print('CALLED THE TITLE FUNCTION')
     async with AsyncSession(engine, expire_on_commit=False) as session:
         new_title = await generate_conversation_title(first_message_content)
         conv_to_update = await session.get(models.Conversation, conversation_id)

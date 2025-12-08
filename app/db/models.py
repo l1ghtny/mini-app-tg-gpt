@@ -1,4 +1,4 @@
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
@@ -8,6 +8,10 @@ from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey,
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 import uuid
+
+## Helper function for default_factory
+def utcnow_naive():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class AppUser(SQLModel, table=True):
@@ -27,6 +31,11 @@ class Conversation(SQLModel, table=True):
     model: str = Field(default="gpt-5-nano")
     system_prompt: Optional[str] = Field(default="You are a helpful assistant.")
 
+    updated_at: datetime = Field(
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, index=True, onupdate=utcnow_naive)
+    )
+
 
     user: AppUser = Relationship(back_populates="conversations")
     messages: List["Message"] = Relationship(
@@ -39,6 +48,10 @@ class Message(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     conversation_id: uuid.UUID = Field(foreign_key="conversation.id")
     role: str
+    created_at: datetime = Field(
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, index=True)
+    )
 
     conversation: "Conversation" = Relationship(back_populates="messages")
 
@@ -91,7 +104,7 @@ class TokenUsage(SQLModel, table=True):
     Ledger of usage per response/operation (no raw JSON payloads).
     """
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime, index=True))
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
 
     user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="app_user.id")
     conversation_id: Optional[uuid.UUID] = Field(
@@ -205,8 +218,28 @@ class Payment(SQLModel, table=True):
     tbank_payment_id: Optional[str] = Field(default=None, index=True)
     tbank_status: str = Field(default="NEW")  # NEW, CONFIRMED, REJECTED, etc.
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow_naive)
+    updated_at: datetime = Field(default_factory=utcnow_naive)
+
+    user: "AppUser" = Relationship()
+
+
+class PaymentMethod(SQLModel, table=True):
+    __tablename__ = "payment_methods"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+
+    # TBank "RebillId" - the token we use to charge money later
+    rebill_id: str = Field(index=True)
+
+    # Card info for UI (e.g., "Visa •••• 4242")
+    card_type: str = Field(default="Unknown")
+    pan: str = Field(default="****")
+    exp_date: str = Field(default="")  # MMYY
+
+    is_default: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=utcnow_naive)
 
     user: "AppUser" = Relationship()
 

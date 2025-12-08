@@ -1,13 +1,15 @@
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Request, Response
 from pydantic import RootModel
 from redis.asyncio import Redis
+from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
-from sqlmodel import select
+from sqlmodel import select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.responses import RedirectResponse
 
@@ -108,6 +110,10 @@ async def create_message(
     user_msg = models.Message(conversation_id=conversation_id, role="user")
     session.add(user_msg)
     await session.flush()
+
+    # Bump conversation updated_at
+    conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    session.add(conversation)
 
     for part in request.content:
         mc = models.MessageContent(message_id=user_msg.id, type=part.type, value=part.value)
@@ -257,10 +263,16 @@ async def get_conversations(session: AsyncSession = Depends(get_session), curren
     """
     Gets all conversations for the user.
     """
-    conversations = await session.exec(
-        select(models.Conversation).where(models.Conversation.user_id == current_user.id))
-    conversations = conversations.all()
-    return conversations
+    query = (
+        select(models.Conversation)
+        .where(models.Conversation.user_id == current_user.id)
+        .order_by(
+            desc(func.coalesce(models.Conversation.updated_at)).nulls_last()
+        )
+    )
+
+    conversations = await session.exec(query)
+    return conversations.all()
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=ConversationWithMessages)
@@ -272,8 +284,12 @@ async def get_conversation_messages(conversation_id: uuid.UUID, session: AsyncSe
     query = select(Conversation).where(Conversation.id == conversation_id).options(selectinload(Conversation.messages).selectinload(models.Message.content))
     conversation = await session.exec(query)
     conversation = conversation.first()
+
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    conversation.messages.sort(key=lambda m: m.created_at or datetime.min)
+
     return conversation
 
 

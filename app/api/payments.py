@@ -10,12 +10,14 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.config import settings
 from app.db.database import get_session
 from app.api.dependencies import get_current_user
-from app.db.models import AppUser, Payment
+from app.db.models import AppUser, Payment, PaymentMethod
 from app.db.subscription_tiers import SubscriptionTier, UserSubscription, SubscriptionStatus
 from app.schemas.subscriptions import InitPaymentRequest
 from app.services.banking.tbank import tbank_service
 
 payments = APIRouter(tags=["payments"], prefix="/payments/tbank")
+
+logger = settings.custom_logger
 
 
 @payments.post("/init")
@@ -72,6 +74,7 @@ async def init_payment(
             amount_cents=amount_cents,
             description=f"Subscription: {tier.name}",
             user_id=str(user.id),
+            recurrent=True,
             receipt=receipt_data
         )
 
@@ -160,6 +163,11 @@ async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_se
 
     # 4. Handle Success
     if new_status == "CONFIRMED" and success:
+        try:
+            await save_payment_method(session, payment.user_id)
+        except Exception as e:
+            logger.error(f"Failed to save payment method: {e}")
+
         settings.custom_logger.info(f"Payment {payment_uuid} confirmed! Adding subscription...")
         await activate_subscription(session, payment)
         settings.custom_logger.info('Subscription added!')
@@ -190,11 +198,11 @@ async def activate_subscription(session: AsyncSession, payment: Payment):
     for sub in active_subs:
         sub.status = SubscriptionStatus.cancelled
         # Optional: Set expires_at to now to double-ensure logic everywhere handles it
-        # sub.expires_at = datetime.utcnow()
+        # sub.expires_at = datetime.now(timezone.utc).replace(tzinfo=None)()
         session.add(sub)
 
     # 4. Create the NEW Subscription
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     expires_at = now + relativedelta(months=1)
 
     new_sub = UserSubscription(
@@ -205,3 +213,42 @@ async def activate_subscription(session: AsyncSession, payment: Payment):
         expires_at=expires_at
     )
     session.add(new_sub)
+
+
+async def save_payment_method(session: AsyncSession, user_id: uuid.UUID):
+    """
+    Fetches user's cards from TBank and saves the newest RebillId.
+    """
+    # 1. Fetch cards from TBank
+    cards = await tbank_service.get_card_list(str(user_id))
+    if not cards:
+        return
+
+    # 2. Get the most recent card (usually the last one added)
+    # TBank returns them in order, or we can check CardId logic depending on their API version.
+    # For now, taking the last one is safe for a "just added" card.
+    latest_card = cards[-1]
+
+    rebill_id = str(latest_card.get("RebillId"))
+    pan = latest_card.get("Pan", "****")
+    card_type = latest_card.get("CardType", "Unknown")  # e.g. 0=Debit, 1=Credit, etc. or text
+    exp = latest_card.get("ExpDate", "")
+
+    # 3. Check if we already have this RebillId
+    existing = await session.exec(select(PaymentMethod).where(PaymentMethod.rebill_id == rebill_id))
+    if existing.first():
+        return
+
+    # 4. Save new method
+    # Optional: Mark others as not default if you want only one active
+    # await session.exec(update(PaymentMethod).where(PaymentMethod.user_id == user_id).values(is_default=False))
+
+    method = PaymentMethod(
+        user_id=user_id,
+        rebill_id=rebill_id,
+        pan=pan,
+        card_type=str(card_type),
+        exp_date=exp,
+        is_default=True
+    )
+    session.add(method)
