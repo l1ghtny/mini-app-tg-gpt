@@ -17,6 +17,8 @@ from app.db.database import engine
 from app.api.auth import auth
 from app.db.models import AppUser
 
+logger = settings.custom_logger
+
 
 def before_send(event, hint):
     # If the error is a known HTTP exception (like 401, 403, 404), ignore it
@@ -30,10 +32,11 @@ def before_send(event, hint):
 
 
 if settings.SENTRY_DSN:
+    logger.info(f'Initializing Sentry in {settings.ENVIRONMENT}')
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
-        release="gpt-mini-app@0.7.5",
+        release="gpt-mini-app@0.9.0",
         # Capture only 10% of transactions for performance monitoring
         traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
