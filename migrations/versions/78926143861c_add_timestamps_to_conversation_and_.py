@@ -1,7 +1,7 @@
 """add timestamps to conversation and message
 
 Revision ID: 78926143861c
-Revises: 74eb42b3a343
+Revises: 037fa8172779
 Create Date: 2025-12-08 10:37:27.389712
 
 """
@@ -14,7 +14,7 @@ import sqlmodel
 
 # revision identifiers, used by Alembic.
 revision: str = '78926143861c'
-down_revision: Union[str, Sequence[str], None] = '74eb42b3a343'
+down_revision: Union[str, Sequence[str], None] = '037fa8172779'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
