@@ -1,5 +1,7 @@
-﻿from typing import Optional
+﻿from datetime import timezone, datetime
+from typing import Optional
 
+from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import select
@@ -10,6 +12,9 @@ from app.db import models
 from app.core.security import create_access_token, validate_telegram_data
 from app.core.config import settings
 from pydantic import BaseModel
+
+from app.db.subscription_tiers import UserSubscription, SubscriptionStatus, SubscriptionTier
+
 
 class Token(BaseModel):
     access_token: str
@@ -42,6 +47,35 @@ async def login_telegram(data: InitData, session: AsyncSession = Depends(get_ses
         session.add(user)
         await session.commit()
         await session.refresh(user)
+
+    # Check if a user has an active subscription
+    sub_query = select(UserSubscription).where(
+        UserSubscription.user_id == user.id,
+        UserSubscription.status == SubscriptionStatus.active
+    )
+    active_sub = (await session.exec(sub_query)).first()
+
+
+
+    if not active_sub:
+        # Fetch Free Tier
+        free_tier = (await session.exec(
+            select(SubscriptionTier).where(SubscriptionTier.name == "Free")
+        )).first()
+
+        if free_tier:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            new_expires_at = now + relativedelta(months=1)
+            # Create Free Subscription (1 month duration, same as your job logic)
+            new_sub = UserSubscription(
+                user_id=user.id,
+                tier_id=free_tier.id,
+                status=SubscriptionStatus.active,
+                started_at=now,
+                expires_at=new_expires_at
+            )
+            session.add(new_sub)
+            await session.commit()
 
     access_token = create_access_token(data={"sub": str(user.id)})
     return {"access_token": access_token, "token_type": "bearer"}
