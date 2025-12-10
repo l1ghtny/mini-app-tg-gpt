@@ -2,8 +2,9 @@
 import asyncio
 from datetime import datetime, timedelta, UTC
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import DerivedImage, MessageContent
 from app.r2.methods import delete_object, head_object
