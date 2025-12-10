@@ -48,31 +48,24 @@ async def login_telegram(data: InitData, session: AsyncSession = Depends(get_ses
         await session.commit()
         await session.refresh(user)
 
-    # Check if a user has an active subscription
-    sub_query = select(UserSubscription).where(
-        UserSubscription.user_id == user.id,
-        UserSubscription.status == SubscriptionStatus.active
-    )
-    active_sub = (await session.exec(sub_query)).first()
+    # Check if a user has or had an active subscription
+    sub_history = (await session.exec(
+        select(UserSubscription).where(UserSubscription.user_id == user.id)
+    )).first()
 
-
-
-    if not active_sub:
-        # Fetch Free Tier
-        free_tier = (await session.exec(
-            select(SubscriptionTier).where(SubscriptionTier.name == "Free")
+    if not sub_history:
+        # NEW USER -> Grant "Starter" Pack
+        starter_tier = (await session.exec(
+            select(SubscriptionTier).where(SubscriptionTier.name == "Starter")
         )).first()
 
-        if free_tier:
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
-            new_expires_at = now + relativedelta(months=1)
-            # Create Free Subscription (1 month duration, same as your job logic)
+        if starter_tier:
             new_sub = UserSubscription(
                 user_id=user.id,
-                tier_id=free_tier.id,
+                tier_id=starter_tier.id,
                 status=SubscriptionStatus.active,
-                started_at=now,
-                expires_at=new_expires_at
+                started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                expires_at=None  # No expiration date! It ends when credits run out.
             )
             session.add(new_sub)
             await session.commit()

@@ -1,12 +1,12 @@
-﻿from datetime import datetime
+﻿import uuid
+from datetime import datetime
 
 from sqlalchemy.orm import selectinload
 from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
-import uuid
 
-from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription
 from app.db.models import RequestLedger
+from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription, SubscriptionStatus
 
 
 async def month_start_expr():
@@ -24,41 +24,95 @@ async def get_active_tier(session: AsyncSession, user_id: uuid.UUID) -> Subscrip
     return (await session.exec(q)).first()
 
 
-async def remaining_requests_for_model(session, user_id, tier_id, model_name) -> int:
-    # monthly cap for this model
+
+
+
+async def get_usage_start_date(session: AsyncSession, user_id: uuid.UUID, tier: SubscriptionTier) -> datetime:
+    """
+    Returns the start timestamp for counting usage.
+    - Recurring Tiers: Start of the current month.
+    - One-Time/Starter Tiers: Start of the subscription itself.
+    """
+    # Assuming 'is_recurring' field exists on SubscriptionTier.
+    # If not present yet, default to True (monthly behavior).
+    is_recurring = getattr(tier, "is_recurring", True)
+
+    if is_recurring:
+        # PostgreSQL specific: Date truncation for start of month
+        # Note: If you use SQLite for testing, this func needs a fallback
+        return func.date_trunc("month", func.now())
+    else:
+        # Fetch the active subscription to get its start date
+        sub = (await session.exec(
+            select(UserSubscription)
+            .where(
+                UserSubscription.user_id == user_id,
+                UserSubscription.tier_id == tier.id,
+                UserSubscription.status == SubscriptionStatus.active
+            )
+        )).first()
+        if sub:
+            return sub.started_at
+
+        # Fallback (shouldn't happen if user has tier): Start of month
+        return func.date_trunc("month", func.now())
+
+
+async def remaining_requests_for_model(session: AsyncSession, user_id: uuid.UUID, tier_id: uuid.UUID,
+                                       model_name: str) -> int:
+    tier = await session.get(SubscriptionTier, tier_id)
+    if not tier:
+        return 0
+
+    # 1. Get Cap from Database
     cap_row = (await session.exec(
         select(TierModelLimit.monthly_requests).where(
-            TierModelLimit.tier_id==tier_id, TierModelLimit.model_name==model_name
+            TierModelLimit.tier_id == tier_id,
+            TierModelLimit.model_name == model_name
         ).limit(1)
     )).first()
-    cap = cap_row or 0
-    if cap == 0:  # 0 means unlimited in this design
-        return 10_000_000
 
-    start = await month_start_expr()
+    # LOGIC FIX: If no limit defined, return 0 (Access Denied), not 10M.
+    # If you want specific models to be "Unlimited", set a high number in DB (e.g. 1000000)
+    cap = cap_row or 0
+    if cap == 0:
+        return 0
+
+    # 2. Determine Time Window
+    start_expr = await get_usage_start_date(session, user_id, tier)
+
+    # 3. Count Usage
     used = (await session.exec(
         select(func.count())
-        .where(RequestLedger.user_id==user_id,
-               RequestLedger.model_name==model_name,
-               RequestLedger.feature=="text",
-               RequestLedger.state.in_(("reserved","consumed")),
-               RequestLedger.created_at >= start)
+        .where(
+            RequestLedger.user_id == user_id,
+            RequestLedger.model_name == model_name,
+            RequestLedger.feature == "text",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.created_at >= start_expr
+        )
     )).one()
+
     return max(0, cap - (used or 0))
 
 
-async def remaining_images(session, user_id, tier: SubscriptionTier) -> int:
+async def remaining_images(session: AsyncSession, user_id: uuid.UUID, tier: SubscriptionTier) -> int:
     cap = tier.monthly_images or 0
-    if cap == 0:  # unlimited
-        return 10_000_000
-    start = await month_start_expr()
+    if cap == 0:
+        return 0
+
+    start_expr = await get_usage_start_date(session, user_id, tier)
+
     used = (await session.exec(
         select(func.count())
-        .where(RequestLedger.user_id==user_id,
-               RequestLedger.feature=="image",
-               RequestLedger.state.in_(("reserved","consumed")),
-               RequestLedger.created_at >= start)
+        .where(
+            RequestLedger.user_id == user_id,
+            RequestLedger.feature == "image",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.created_at >= start_expr
+        )
     )).one()
+
     return max(0, cap - (used or 0))
 
 

@@ -12,6 +12,7 @@ class SubscriptionResponse(BaseModel):
     tier_name_ru: str
     tier_description: str
     tier_description_ru: str
+    tier_price: int
 
 
 

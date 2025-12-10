@@ -26,35 +26,40 @@ async def get_active_subscription(session: AsyncSession = Depends(get_session), 
             tier_name=user_subscription.tier.name,
             tier_name_ru=user_subscription.tier.name_ru,
             tier_description=user_subscription.tier.description,
-            tier_description_ru=user_subscription.tier.description_ru
+            tier_description_ru=user_subscription.tier.description_ru,
+            tier_price=user_subscription.tier.price_cents
         )
         return result
 
 
-@user_subscription.post("/downgrade")
-async def downgrade_subscription(
+@user_subscription.post("/cancel")
+async def cancel_subscription(
         session: AsyncSession = Depends(get_session),
         user=Depends(get_current_user)
 ):
     """
-    Cancels auto-renewal by removing the default payment method.
-    The user remains on the current tier until expires_at, then the background job moves them to Free.
+    Cancels auto-renewal for PAiD, RECURRING subscriptions.
     """
-    # Check if the user actually has a paid subscription
-    get_subscription = select(subscription_tiers.UserSubscription).where(
-        user.id == subscription_tiers.UserSubscription.user_id,
+    # Fetch active sub
+    query = select(subscription_tiers.UserSubscription).where(
+        subscription_tiers.UserSubscription.user_id == user.id,
         subscription_tiers.UserSubscription.status == "active"
     ).options(selectinload(subscription_tiers.UserSubscription.tier))
 
-    user_subscription = (await session.exec(get_subscription)).first()
+    sub = (await session.exec(query)).first()
 
-    if not user_subscription:
+    if not sub:
         raise HTTPException(status_code=400, detail="No active subscription")
 
-    if user_subscription.tier.price_cents == 0:
-        raise HTTPException(status_code=400, detail="Already on Free tier")
+    # Check if recurring
+    is_recurring = getattr(sub.tier, "is_recurring", True)
+    if not is_recurring:
+        raise HTTPException(status_code=400, detail="This plan cannot be cancelled (it is non-renewing).")
 
-    # Remove Default Payment Method to prevent future charges
+    if sub.tier.price_cents == 0:
+        raise HTTPException(status_code=400, detail="Cannot cancel a free plan.")
+
+    # Remove Payment Method
     payment_methods = await session.exec(
         select(PaymentMethod).where(
             PaymentMethod.user_id == user.id,
@@ -62,9 +67,13 @@ async def downgrade_subscription(
         )
     )
 
-    for pm in payment_methods.all():
+    pms = payment_methods.all()
+    if not pms:
+        raise HTTPException(status_code=400, detail="No active payment method found to cancel.")
+
+    for pm in pms:
         await session.delete(pm)
 
     await session.commit()
 
-    return {"status": "success", "message": "Subscription will be downgraded at the end of the billing period"}
+    return {"status": "success", "message": "Auto-renewal cancelled."}

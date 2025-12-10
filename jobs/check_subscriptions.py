@@ -165,21 +165,11 @@ async def main():
 
                 # --- DOWNGRADE FLOW ---
                 if downgrade_needed:
-                    logger.info(f"User {old_sub.user_id}: Downgrading to {FREE_TIER_NAME}.")
+                    logger.info(f"User {old_sub.user_id}: Subscription expired. No fallback.")
 
+                    # Mark as expired
                     old_sub.status = SubscriptionStatus.expired
                     session.add(old_sub)
-
-                    new_expires_at = now + relativedelta(months=1)
-
-                    new_sub = UserSubscription(
-                        user_id=old_sub.user_id,
-                        tier_id=free_tier.id,
-                        status=SubscriptionStatus.active,
-                        started_at=now,
-                        expires_at=new_expires_at
-                    )
-                    session.add(new_sub)
 
             except Exception as e:
                 logger.error(f"Failed to process user {old_sub.user_id}: {e}")

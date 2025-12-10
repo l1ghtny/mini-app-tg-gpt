@@ -31,6 +31,7 @@ class SubscriptionTier(SQLModel, table=True):
     is_active: bool = Field(default=True)
     is_public: bool = Field(default=True, nullable=False)
     index: int = Field(default=0, nullable=False)
+    is_recurring: bool = Field(default=True)
 
     user_subscriptions: List["UserSubscription"] = Relationship(back_populates="tier")
     tier_model_limits: List["TierModelLimit"] = Relationship(back_populates="tier")

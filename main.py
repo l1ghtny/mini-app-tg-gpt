@@ -36,7 +36,7 @@ if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
-        release="gpt-mini-app@0.9.0",
+        release="gpt-mini-app@0.9.2",
         # Capture only 10% of transactions for performance monitoring
         traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
@@ -46,7 +46,8 @@ if settings.SENTRY_DSN:
             OpenAIIntegration(
                 include_prompts=False,
                 # LLM/tokenizer inputs/outputs will be not sent to Sentry, despite send_default_pii=True
-            )]
+            )],
+        enable_logs=True,
     )
 
 
