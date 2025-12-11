@@ -22,13 +22,16 @@ async def get_active_subscription(session: AsyncSession = Depends(get_session), 
             subscription_id=str(user_subscription.id),
             status=user_subscription.status,
             started_at=user_subscription.started_at.strftime('%H:%M:%S %d.%m.%Y'),
-            expires_at=user_subscription.expires_at.strftime('%H:%M:%S %d.%m.%Y'),
+            expires_at=None,
             tier_name=user_subscription.tier.name,
             tier_name_ru=user_subscription.tier.name_ru,
             tier_description=user_subscription.tier.description,
             tier_description_ru=user_subscription.tier.description_ru,
             tier_price=user_subscription.tier.price_cents
         )
+
+        if user_subscription.tier.is_recurring == True:
+            result.expires_at = user_subscription.expires_at.strftime('%H:%M:%S %d.%m.%Y')
         return result
 
 

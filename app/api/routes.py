@@ -75,11 +75,15 @@ async def create_message(
     remaining = await remaining_requests_for_model(session, current_user.id, tier.id, request.model)
     if remaining <= 0:
         # Suggest alternatives (models in allowlist with >0)
-        # Optional: compute available models by iterating tier.allowed_models and checking remaining for each
+        # Optional: compute available models by iterating tier.tier_model_limits and checking remaining for each
+        allowed_models = []
+        # TODO: add the loop for getting info on allowed models
+        # for tier.tier_model_limits:
+
         raise HTTPException(status_code=409, detail={
             "error": "model_quota_exceeded",
             "requested_model": request.model,
-            "available_models": tier.allowed_models  # refine to only those with remaining > 0
+            "available_models": allowed_models  # refine to only those with remaining > 0
         })
 
     # 2. images

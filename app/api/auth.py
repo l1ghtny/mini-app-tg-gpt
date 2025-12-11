@@ -89,5 +89,27 @@ async def login_debug(form: OAuth2PasswordRequestForm = Depends(),
         await session.commit()
         await session.refresh(user)
 
+        # Check if a user has or had an active subscription
+        sub_history = (await session.exec(
+            select(UserSubscription).where(UserSubscription.user_id == user.id)
+        )).first()
+
+        if not sub_history:
+            # NEW USER -> Grant "Starter" Pack
+            starter_tier = (await session.exec(
+                select(SubscriptionTier).where(SubscriptionTier.name == "Starter")
+            )).first()
+
+            if starter_tier:
+                new_sub = UserSubscription(
+                    user_id=user.id,
+                    tier_id=starter_tier.id,
+                    status=SubscriptionStatus.active,
+                    started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    expires_at=None  # No expiration date! It ends when credits run out.
+                )
+                session.add(new_sub)
+                await session.commit()
+
     access_token = create_access_token(data={"sub": str(user.id)})
     return {"access_token": access_token, "token_type": "bearer"}

@@ -7,7 +7,7 @@ class SubscriptionResponse(BaseModel):
     subscription_id: str
     status: str
     started_at: str
-    expires_at: str
+    expires_at: Optional[str]
     tier_name: str
     tier_name_ru: str
     tier_description: str
