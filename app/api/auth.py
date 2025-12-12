@@ -49,26 +49,41 @@ async def login_telegram(data: InitData, session: AsyncSession = Depends(get_ses
         await session.refresh(user)
 
     # Check if a user has or had an active subscription
-    sub_history = (await session.exec(
-        select(UserSubscription).where(UserSubscription.user_id == user.id)
+    active_sub = (await session.exec(
+        select(UserSubscription).where(
+            UserSubscription.user_id == user.id,
+            UserSubscription.status == SubscriptionStatus.active
+        )
     )).first()
 
-    if not sub_history:
-        # NEW USER -> Grant "Starter" Pack
-        starter_tier = (await session.exec(
-            select(SubscriptionTier).where(SubscriptionTier.name == "Starter")
+    # 2. If NO active sub, check if they are eligible for the settings.STARTER_BUNDLE_NAME bonus
+    if not active_sub:
+        # Check if they have EVER had a settings.STARTER_BUNDLE_NAME subscription
+        starter_history = (await session.exec(
+            select(UserSubscription)
+            .join(SubscriptionTier)
+            .where(
+                UserSubscription.user_id == user.id,
+                SubscriptionTier.name == settings.STARTER_BUNDLE_NAME  # Hardcoded Name
+            )
         )).first()
 
-        if starter_tier:
-            new_sub = UserSubscription(
-                user_id=user.id,
-                tier_id=starter_tier.id,
-                status=SubscriptionStatus.active,
-                started_at=datetime.now(timezone.utc).replace(tzinfo=None),
-                expires_at=None  # No expiration date! It ends when credits run out.
-            )
-            session.add(new_sub)
-            await session.commit()
+        if not starter_history:
+            # ELIGIBLE! Grant Starter Pack
+            starter_tier = (await session.exec(
+                select(SubscriptionTier).where(SubscriptionTier.name == settings.STARTER_BUNDLE_NAME)
+            )).first()
+
+            if starter_tier:
+                new_sub = UserSubscription(
+                    user_id=user.id,
+                    tier_id=starter_tier.id,
+                    status=SubscriptionStatus.active,
+                    started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    expires_at=None  # Lifetime
+                )
+                session.add(new_sub)
+                await session.commit()
 
     access_token = create_access_token(data={"sub": str(user.id)})
     return {"access_token": access_token, "token_type": "bearer"}
@@ -89,15 +104,29 @@ async def login_debug(form: OAuth2PasswordRequestForm = Depends(),
         await session.commit()
         await session.refresh(user)
 
-        # Check if a user has or had an active subscription
-        sub_history = (await session.exec(
-            select(UserSubscription).where(UserSubscription.user_id == user.id)
+    active_sub = (await session.exec(
+        select(UserSubscription).where(
+            UserSubscription.user_id == user.id,
+            UserSubscription.status == SubscriptionStatus.active
+        )
+    )).first()
+
+    # 2. If NO active sub, check if they are eligible for the settings.STARTER_BUNDLE_NAME bonus
+    if not active_sub:
+        # Check if they have EVER had a settings.STARTER_BUNDLE_NAME subscription
+        starter_history = (await session.exec(
+            select(UserSubscription)
+            .join(SubscriptionTier)
+            .where(
+                UserSubscription.user_id == user.id,
+                SubscriptionTier.name == settings.STARTER_BUNDLE_NAME  # Hardcoded Name
+            )
         )).first()
 
-        if not sub_history:
-            # NEW USER -> Grant "Starter" Pack
+        if not starter_history:
+            # ELIGIBLE! Grant Starter Pack
             starter_tier = (await session.exec(
-                select(SubscriptionTier).where(SubscriptionTier.name == "Starter")
+                select(SubscriptionTier).where(SubscriptionTier.name == settings.STARTER_BUNDLE_NAME)
             )).first()
 
             if starter_tier:
@@ -106,7 +135,7 @@ async def login_debug(form: OAuth2PasswordRequestForm = Depends(),
                     tier_id=starter_tier.id,
                     status=SubscriptionStatus.active,
                     started_at=datetime.now(timezone.utc).replace(tzinfo=None),
-                    expires_at=None  # No expiration date! It ends when credits run out.
+                    expires_at=None  # Lifetime
                 )
                 session.add(new_sub)
                 await session.commit()

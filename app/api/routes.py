@@ -18,6 +18,7 @@ from app.api.helpers import generate_and_publish, load_conversation, fetch_assis
 from app.db import models
 from app.db.database import get_session
 from app.db.models import AppUser, Conversation, Message, RequestLedger
+from app.db.subscription_tiers import TierModelLimit
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import ConversationAPI, ConversationWithMessages, NewMessageRequest, RenameRequest, \
     UpdateConversationSettingsRequest, MessageCreated, RequestExists
@@ -74,16 +75,24 @@ async def create_message(
     # 1. requests for a model
     remaining = await remaining_requests_for_model(session, current_user.id, tier.id, request.model)
     if remaining <= 0:
-        # Suggest alternatives (models in allowlist with >0)
-        # Optional: compute available models by iterating tier.tier_model_limits and checking remaining for each
-        allowed_models = []
-        # TODO: add the loop for getting info on allowed models
-        # for tier.tier_model_limits:
+        available_models = []
 
+        # 1. Get all limits for this tier
+        limits = await session.exec(
+            select(TierModelLimit).where(TierModelLimit.tier_id == tier.id)
+        )
+
+        # 2. Check remaining for each
+        for limit in limits.all():
+            rem = await remaining_requests_for_model(session, current_user.id, tier.id, limit.model_name)
+            if rem > 0:
+                available_models.append(limit.model_name)
+
+        # 3. Raise Error with structured data
         raise HTTPException(status_code=409, detail={
             "error": "model_quota_exceeded",
             "requested_model": request.model,
-            "available_models": allowed_models  # refine to only those with remaining > 0
+            "available_models": available_models
         })
 
     # 2. images
