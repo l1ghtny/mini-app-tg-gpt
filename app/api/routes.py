@@ -301,7 +301,7 @@ async def get_conversation_messages(conversation_id: uuid.UUID, session: AsyncSe
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    conversation.messages.sort(key=lambda m: m.created_at or datetime.min)
+    conversation.messages.sort(key=lambda m: (m.created_at is None, m.created_at))
 
     return conversation
 
