@@ -5,6 +5,7 @@ from sentry_sdk.integrations.openai import OpenAIIntegration
 from sqlmodel import SQLModel
 import fastapi_swagger_dark as fsd
 
+from app.api.metrics import metrics
 from app.api.payments import payments
 from app.api.access_codes import access_codes
 from app.api.images import images
@@ -54,14 +55,13 @@ if settings.SENTRY_DSN:
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="0.7.0",
+    version="0.8.0",
     docs_url=None
 )
 
-async def create_db_and_tables():
-    # With async engine, use run_sync to execute metadata creation
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+# async def create_db_and_tables():
+#     async with engine.begin() as conn:
+#         await conn.run_sync(SQLModel.metadata.create_all)
 
 
 origins = [
@@ -77,11 +77,6 @@ origins = [
 ]
 
 
-@app.get("/sentry-debug")
-async def trigger_error():
-    division_by_zero = 1 / 0
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -90,8 +85,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # -------------------------
-
-app.add_event_handler("startup", create_db_and_tables)
 
 dark = APIRouter()
 fsd.install(dark, path="/docs")
@@ -104,3 +97,4 @@ app.include_router(user_subscription, prefix="/api/v1")
 app.include_router(access_codes, prefix="/api/v1")
 app.include_router(tiers, prefix="/api/v1")
 app.include_router(payments, prefix="/api/v1")
+app.include_router(metrics, prefix="/api/v1")
