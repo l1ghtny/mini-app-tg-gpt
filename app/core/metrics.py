@@ -4,14 +4,19 @@ import sys
 import sentry_sdk
 from sentry_sdk import metrics  # Import the metrics module directly
 
+from app.core.config import settings
 
-logging.basicConfig(level=logging.INFO)
-if len(sys.argv) > 0 and "bot_main.py" in sys.argv[0]:
-    logger = logging.getLogger('aiogram')
-else:
-    logger = logging.getLogger('uvicorn')
 
-logger.info(f'Logger in use: {logger.name}')
+def get_logger():
+    if len(sys.argv) > 0 and "bot_main.py" in sys.argv[0]:
+        logger = logging.getLogger('aiogram')
+    else:
+        logger = settings.custom_logger
+
+    return logger
+
+logger = get_logger()
+logger.info(f'logger in use: {logger.name}')
 
 def _send_metric(key: str, value: float, tags: dict, metric_type: str = "increment", unit: str = "none"):
     """
