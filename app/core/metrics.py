@@ -24,13 +24,13 @@ def _send_metric(key: str, value: float, tags: dict, metric_type: str = "increme
 
         if metric_type == "count":
             # "incr" in other stats systems, "increment" in Sentry Python SDK
-            metrics.count(key, value=value, tags=clean_tags, unit=unit)
+            metrics.count(key, value=value, attributes=clean_tags, unit=unit)
 
         elif metric_type == "distribution":
-            metrics.distribution(key, value=value, tags=clean_tags, unit=unit)
+            metrics.distribution(key, value=value, attributes=clean_tags, unit=unit)
 
         elif metric_type == "gauge":
-            metrics.gauge(key, value=value, tags=clean_tags, unit=unit)
+            metrics.gauge(key, value=value, attributes=clean_tags, unit=unit)
 
         logger.info(f'Sent metric: {key}: {value}')
 
