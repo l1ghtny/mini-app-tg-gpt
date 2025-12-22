@@ -28,5 +28,6 @@ class Settings:
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "local")  # e.g. 'production', 'staging'
     TBANK_TAXATION: str = "usn_income"
     STARTER_BUNDLE_NAME: str = os.getenv("STARTER_BUNDLE")
+    WEBAPP_URL: str = os.getenv("WEBAPP_URL")
 
 settings = Settings()
