@@ -3,10 +3,9 @@ import logging
 import sys
 import os
 
-from app.core.metrics import track_event
-
 # 1. Setup path to import 'app' modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
@@ -17,6 +16,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.config import settings
 from app.db.database import engine
 from app.db.models import AppUser
+from app.core.metrics import track_event
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
