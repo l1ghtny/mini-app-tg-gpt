@@ -19,6 +19,7 @@ class AppUser(SQLModel, table=True):
 
     id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True)
     telegram_id: int = Field(sa_column=Column(BigInteger, unique=True, index=True))
+    has_sent_first_message: bool = Field(default=False)
 
     conversations: List["Conversation"] = Relationship(back_populates="user")
     requests: List["RequestLedger"] = Relationship(back_populates="user")

@@ -1,9 +1,10 @@
-﻿from fastapi import APIRouter, Depends, HTTPException
+﻿from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.dependencies import get_current_user
+from app.core.metrics import track_event
 from app.db import models, subscription_tiers
 from app.db.database import get_session
 from app.db.models import PaymentMethod
@@ -37,6 +38,7 @@ async def get_active_subscription(session: AsyncSession = Depends(get_session), 
 
 @user_subscription.post("/cancel")
 async def cancel_subscription(
+        background_tasks: BackgroundTasks,
         session: AsyncSession = Depends(get_session),
         user=Depends(get_current_user)
 ):
@@ -76,6 +78,13 @@ async def cancel_subscription(
 
     for pm in pms:
         await session.delete(pm)
+
+    background_tasks.add_task(
+        track_event,
+        "subscription_cancelled",
+        str(user.id),
+        {"tier": sub.tier.name}
+    )
 
     await session.commit()
 

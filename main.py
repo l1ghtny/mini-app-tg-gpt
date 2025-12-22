@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.openai import OpenAIIntegration
 from sqlmodel import SQLModel
 import fastapi_swagger_dark as fsd
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.metrics import metrics
 from app.api.payments import payments
@@ -32,12 +33,23 @@ def before_send(event, hint):
 
 
 
+
+
+
+
+app = FastAPI(
+    title="Telegram ChatGPT API",
+    version="0.8.0",
+    docs_url=None
+)
+
+
 if settings.SENTRY_DSN:
     logger.info(f'Initializing Sentry in {settings.ENVIRONMENT}')
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
-        release="gpt-mini-app@0.9.2",
+        release=app.version,
         # Capture only 10% of transactions for performance monitoring
         traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
@@ -51,13 +63,6 @@ if settings.SENTRY_DSN:
         enable_logs=True,
     )
 
-
-
-app = FastAPI(
-    title="Telegram ChatGPT API",
-    version="0.8.0",
-    docs_url=None
-)
 
 # async def create_db_and_tables():
 #     async with engine.begin() as conn:
@@ -84,6 +89,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost"],
+)
+
+
 # -------------------------
 
 dark = APIRouter()

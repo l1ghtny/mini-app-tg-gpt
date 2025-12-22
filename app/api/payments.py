@@ -3,11 +3,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from dateutil.relativedelta import relativedelta
-from fastapi import APIRouter, Depends, HTTPException, Body, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Body, Request, Response, BackgroundTasks
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
+from app.core.metrics import track_event, track_value
 from app.db.database import get_session
 from app.api.dependencies import get_current_user
 from app.db.models import AppUser, Payment, PaymentMethod
@@ -117,7 +118,11 @@ async def check_payment_status(
 
 
 @payments.post("/webhook")
-async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_session)):
+async def tbank_webhook(
+        background_tasks: BackgroundTasks,
+        request: Request,
+        session: AsyncSession = Depends(get_session)
+):
     data = await request.json()
 
     # 1. Security Check
@@ -171,6 +176,23 @@ async def tbank_webhook(request: Request, session: AsyncSession = Depends(get_se
         settings.custom_logger.info(f"Payment {payment_uuid} confirmed! Adding subscription...")
         await activate_subscription(session, payment)
         settings.custom_logger.info('Subscription added!')
+
+        # 1. Count the sale
+        background_tasks.add_task(
+            track_event,
+            "subscription_purchased",
+            str(payment.user_id),
+            {"tier": payment.tier_name}
+        )
+        # 2. Track the Revenue Value (for ARPU/LTV charts)
+        background_tasks.add_task(
+            track_value,
+            "revenue",
+            float(payment.amount),
+            str(payment.user_id),
+            {"tier": payment.tier_name},
+            unit="rub"
+        )
 
     await session.commit()
     return Response(content="OK", media_type="text/plain")

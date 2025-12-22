@@ -3,6 +3,8 @@ import logging
 import sys
 import os
 
+from app.core.metrics import track_event
+
 # 1. Setup path to import 'app' modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
@@ -20,7 +22,7 @@ from app.db.models import AppUser
 logging.basicConfig(level=logging.INFO)
 
 # Initialize Bot
-bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
 
@@ -28,6 +30,8 @@ dp = Dispatcher()
 async def cmd_start(message: types.Message):
     telegram_id = message.from_user.id
     language_code = message.from_user.language_code  # e.g., 'en', 'ru', 'de'
+
+    track_event_send = False
 
     # 2. Extract Campaign (e.g., /start campaign_123)
     args = message.text.split()
@@ -47,7 +51,10 @@ async def cmd_start(message: types.Message):
             )
             session.add(user)
             await session.commit()
+            await session.refresh(user)
             logging.info(f"New user registered via Bot: {telegram_id} (Campaign: {campaign_param})")
+
+            track_event_send = True
 
         elif campaign_param and not user.campaign:
             # EXISTING USER (First Touch Attribution): Update if they don't have a campaign yet
@@ -86,6 +93,9 @@ async def cmd_start(message: types.Message):
     ])
 
     await message.answer(welcome_text, reply_markup=keyboard, parse_mode="Markdown")
+
+    if track_event_send:
+        track_event("user_registered", str(user.id), {"campaign": campaign_param or "organic"})
 
 
 async def main():

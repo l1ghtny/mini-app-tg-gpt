@@ -15,6 +15,7 @@ from starlette.responses import RedirectResponse
 
 from app.api.dependencies import get_current_user, get_bus, get_redis
 from app.api.helpers import generate_and_publish, load_conversation, fetch_assistant_text
+from app.core.metrics import track_event
 from app.db import models
 from app.db.database import get_session
 from app.db.models import AppUser, Conversation, Message, RequestLedger
@@ -192,6 +193,32 @@ async def create_message(
         tool_choice=request.tool_choice,
         tools=tools,
         request_id=idempotency_key
+    )
+
+    # Metrics
+    if not current_user.has_sent_first_message:
+        # 1. Update the flag
+        current_user.has_sent_first_message = True
+        session.add(current_user)
+        # We don't need an extra commit here if you commit later in the flow,
+        # but committing now ensures the flag saves even if generation fails later.
+        await session.commit()
+        await session.refresh(current_user)
+
+        # 2. Track Activation (Once per user lifetime)
+        background_tasks.add_task(
+            track_event,
+            "user_activated",  # First message sent
+            str(current_user.id),
+            {"campaign": current_user.campaign or "organic", "model": request.model}
+        )
+
+        # STANDARD ENGAGEMENT TRACKING (Every message)
+    background_tasks.add_task(
+        track_event,
+        "message_sent",
+        str(current_user.id),
+        {"model": request.model}
     )
 
     return {
