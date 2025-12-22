@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('aiogram')
 
 # Initialize Bot
-bot = Bot(token=settings.BOT_TOKEN_TEST_BOT)
+bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
 logger.info('bot_started...')

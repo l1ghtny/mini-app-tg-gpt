@@ -4,11 +4,6 @@ import sys
 import sentry_sdk
 from sentry_sdk import metrics  # Import the metrics module directly
 
-
-logging.basicConfig(level=logging.INFO)
-print(sys.argv[0])
-is_in_bot_main_py = "bot_main.py" in sys.argv[0]
-print(is_in_bot_main_py)
 if len(sys.argv) > 0 and "bot_main.py" in sys.argv[0]:
     logger = logging.getLogger('aiogram')
 else:
