@@ -29,5 +29,6 @@ class Settings:
     TBANK_TAXATION: str = "usn_income"
     STARTER_BUNDLE_NAME: str = os.getenv("STARTER_BUNDLE")
     WEBAPP_URL: str = os.getenv("WEBAPP_URL")
+    BOT_TOKEN_TEST_BOT: str = os.getenv("BOT_TOKEN_TEST_BOT")
 
 settings = Settings()

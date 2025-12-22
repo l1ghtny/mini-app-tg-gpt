@@ -25,12 +25,13 @@ from main import app, before_send
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('aiogram')
 
 # Initialize Bot
-bot = Bot(token=settings.BOT_TOKEN)
+bot = Bot(token=settings.BOT_TOKEN_TEST_BOT)
 dp = Dispatcher()
 
+logger.info('bot_started...')
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):

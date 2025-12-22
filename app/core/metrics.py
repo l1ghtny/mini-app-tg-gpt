@@ -1,9 +1,20 @@
 ﻿import logging
+import sys
+
 import sentry_sdk
 from sentry_sdk import metrics  # Import the metrics module directly
 
-logger = logging.getLogger(__name__)
 
+logging.basicConfig(level=logging.INFO)
+print(sys.argv[0])
+is_in_bot_main_py = "bot_main.py" in sys.argv[0]
+print(is_in_bot_main_py)
+if len(sys.argv) > 0 and "bot_main.py" in sys.argv[0]:
+    logger = logging.getLogger('aiogram')
+else:
+    logger = logging.getLogger('uvicorn')
+
+logger.info(f'Logger in use: {logger.name}')
 
 def _send_metric(key: str, value: float, tags: dict, metric_type: str = "increment", unit: str = "none"):
     """
