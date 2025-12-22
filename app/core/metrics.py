@@ -4,6 +4,8 @@ import sys
 import sentry_sdk
 from sentry_sdk import metrics  # Import the metrics module directly
 
+
+logging.basicConfig(level=logging.INFO)
 if len(sys.argv) > 0 and "bot_main.py" in sys.argv[0]:
     logger = logging.getLogger('aiogram')
 else:
@@ -29,6 +31,8 @@ def _send_metric(key: str, value: float, tags: dict, metric_type: str = "increme
 
         elif metric_type == "gauge":
             metrics.gauge(key, value=value, tags=clean_tags, unit=unit)
+
+        logger.info(f'Sent metric: {key}: {value}')
 
     except Exception as e:
         logger.warning(f"Failed to send metric {key}: {e}")

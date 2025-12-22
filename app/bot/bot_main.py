@@ -3,10 +3,6 @@ import logging
 import sys
 import os
 
-import sentry_sdk
-
-
-
 # 1. Setup path to import 'app' modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
@@ -16,6 +12,8 @@ from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+import sentry_sdk
+from sentry_sdk import metrics
 
 from app.core.config import settings
 from app.db.database import engine
@@ -31,7 +29,20 @@ logger = logging.getLogger('aiogram')
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
-logger.info('bot_started...')
+logger.info('starting...')
+if settings.SENTRY_DSN:
+    logger.info(f'Initializing Sentry in {settings.ENVIRONMENT}')
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.ENVIRONMENT,
+        release=app.version,
+        # Capture only 10% of transactions for performance monitoring
+        traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
+        # Capture 100% of errors (this is the default, but good to know)
+        before_send=before_send,  # filter non-500 http errors
+        send_default_pii=True,  # send info about http calls (includes AI, currently using for openAI costs)
+        enable_logs=True,
+    )
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
@@ -109,19 +120,7 @@ async def main():
     # Drop pending updates so the bot doesn't spam old messages on restart
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-    if settings.SENTRY_DSN:
-        logger.info(f'Initializing Sentry in {settings.ENVIRONMENT}')
-        sentry_sdk.init(
-            dsn=settings.SENTRY_DSN,
-            environment=settings.ENVIRONMENT,
-            release=app.version,
-            # Capture only 10% of transactions for performance monitoring
-            traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
-            # Capture 100% of errors (this is the default, but good to know)
-            before_send=before_send,  # filter non-500 http errors
-            send_default_pii=True,  # send info about http calls (includes AI, currently using for openAI costs)
-            enable_logs=True,
-        )
+
 
 
 if __name__ == "__main__":
