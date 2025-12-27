@@ -17,11 +17,12 @@ from app.schemas.chat import Message
 from app.services.background.save_openai_usage import log_usage
 
 STYLE_GUIDE = (
-    "Always format replies in Markdown:\n"
+    "Format replies in Markdown:\n"
     "- Use proper headings for sections (##, ###).\n"
     "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
     "- Use fenced code blocks for code.\n"
     "- Use standard [text](url) links.\n"
+    "Only use headings bullet lists and others when it is applicable"
 )
 
 client = AsyncOpenAI()
