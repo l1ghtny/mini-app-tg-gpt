@@ -73,7 +73,7 @@ async def stream_normalized_openai_response(
             model=model,
             tools=tools,
             tool_choice=tool_choice,
-            instructions=instructions,
+            instructions=instructions + STYLE_GUIDE,
             input=messages,
             stream=True,
             service_tier="default"

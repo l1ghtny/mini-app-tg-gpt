@@ -39,7 +39,7 @@ def before_send(event, hint):
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="0.8.5",
+    version="0.9.1",
     docs_url=None
 )
 
@@ -93,7 +93,7 @@ app.add_middleware(
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost"],
+    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137"],
 )
 
 
