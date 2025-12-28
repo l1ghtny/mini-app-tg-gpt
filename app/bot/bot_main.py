@@ -53,7 +53,16 @@ async def cmd_start(message: types.Message):
 
     # 2. Extract Campaign (e.g., /start campaign_123)
     args = message.text.split()
-    campaign_param = args[1] if len(args) > 1 else None
+    payload = args[1] if len(args) > 1 else None
+
+    campaign_param = None
+
+    if payload:
+        # Simple parsing logic
+        parts = payload.split('_')
+        for part in parts:
+            if part.startswith('cid-'):
+                campaign_param = part.replace('cid-', '')
 
     # 3. DB Operation: Register/Update User Immediately
     async with AsyncSession(engine) as session:
