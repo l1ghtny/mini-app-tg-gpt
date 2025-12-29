@@ -52,7 +52,7 @@ async def cmd_start(message: types.Message):
     track_event_send = False
 
     # 2. Extract Campaign (e.g., /start campaign_123)
-    args = message.text.split()
+    args = message.text.split('?start=')
     payload = args[1] if len(args) > 1 else None
 
     campaign_param = None
