@@ -42,6 +42,9 @@ if settings.SENTRY_DSN:
         before_send=before_send,  # filter non-500 http errors
         send_default_pii=True,  # send info about http calls (includes AI, currently using for openAI costs)
         enable_logs=True,
+        _experiments={
+            "metrics_aggregator": True,
+        },
     )
 
 @dp.message(CommandStart())

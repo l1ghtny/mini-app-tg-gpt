@@ -61,6 +61,9 @@ if settings.SENTRY_DSN:
                 # LLM/tokenizer inputs/outputs will be not sent to Sentry, despite send_default_pii=True
             )],
         enable_logs=True,
+        _experiments={
+            "metrics_aggregator": True,
+        },
     )
 
 
