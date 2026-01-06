@@ -81,6 +81,7 @@ origins = [
     "http://127.0.0.1:4173",
     "https://gpt-mini-app.lightny.pro",
     "http://192.168.1.137:5173",
+    "http://192.168.1.137:4173",
     "https://gpt-mini-app-ru.lightny.pro"
 ]
 

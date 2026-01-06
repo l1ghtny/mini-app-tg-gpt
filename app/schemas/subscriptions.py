@@ -29,6 +29,7 @@ class SubscriptionTierResponse(BaseModel):
     price_cents: int
     monthly_images: int
     tier_model_limits: List[TierMonthlyLimits]
+    is_recurring: bool
 
 
 class InitPaymentRequest(BaseModel):
