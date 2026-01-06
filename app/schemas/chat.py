@@ -61,6 +61,7 @@ class NewMessageRequest(BaseModel):
 class UpdateConversationSettingsRequest(BaseModel):
     system_prompt: Optional[str] = None
     model: Optional[AllowedModels] = None
+    image_model: Optional[str] = None
     tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
 
 

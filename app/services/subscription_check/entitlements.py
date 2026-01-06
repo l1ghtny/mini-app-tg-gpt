@@ -103,17 +103,28 @@ async def remaining_images(session: AsyncSession, user_id: uuid.UUID, tier: Subs
 
     start_expr = await get_usage_start_date(session, user_id, tier)
 
-    used = (await session.exec(
-        select(func.count())
-        .where(
-            RequestLedger.user_id == user_id,
-            RequestLedger.feature == "image",
-            RequestLedger.state.in_(("reserved", "consumed")),
-            RequestLedger.created_at >= start_expr
-        )
-    )).one()
+    # NEW: Weighted Calculation
+    # 1.5 costs 2, others cost 1
+    statement = select(
+        RequestLedger.model_name,
+        func.count(RequestLedger.id)
+    ).where(
+        RequestLedger.user_id == user_id,
+        RequestLedger.feature == "image",
+        RequestLedger.state.in_(("reserved", "consumed")),
+        RequestLedger.created_at >= start_expr
+    ).group_by(RequestLedger.model_name)
 
-    return max(0, cap - (used or 0))
+    results = (await session.exec(statement)).all()
+
+    used_total = 0
+    for model_name, count in results:
+        if model_name == "gpt-image-1.5":
+            used_total += (count * 2)
+        else:
+            used_total += count
+
+    return max(0, cap - used_total)
 
 
 # requests in real time

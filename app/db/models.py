@@ -31,6 +31,7 @@ class Conversation(SQLModel, table=True):
     title: str = Field(index=True, default="New Chat")
     user_id: uuid.UUID = Field(foreign_key="app_user.id")
     model: str = Field(default="gpt-5-nano")
+    image_model: str = Field(default="gpt-image-1-mini", nullable=True)
     system_prompt: Optional[str] = Field(default="You are a helpful assistant.")
 
     updated_at: datetime = Field(

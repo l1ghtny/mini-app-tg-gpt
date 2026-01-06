@@ -96,27 +96,25 @@ async def create_message(
             "available_models": available_models
         })
 
-    # 2. images
-    images_remaining = await remaining_images(session, current_user.id, tier)
-    image_allowed = True if images_remaining > 0 else False
-
-    # 3. tools
-    tools = await create_tools_list(image_allowed)
-
-    # 4. required tools
-
-    if "image_generation" == request.tool_choice and not image_allowed:
-        raise HTTPException(status_code=402, detail="image_quota_exceeded")
-
-
-
-
     # 1) Ensure the conversation exists & belongs to the user (add your auth checks)
     conversation = await load_conversation(session, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     if conversation.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to send messages to this conversation")
+
+    # 2. images
+    img_cost = 2 if conversation.image_model == "gpt-image-1.5" else 1
+
+    images_remaining = await remaining_images(session, current_user.id, tier)
+    image_allowed = True if images_remaining >= img_cost else False  # Check against cost
+
+    tools = await create_tools_list(image_allowed, conversation.image_model)
+
+    # 4. required tools
+
+    if "image_generation" == request.tool_choice and not image_allowed:
+        raise HTTPException(status_code=402, detail="image_quota_exceeded")
 
     system_prompt = conversation.system_prompt
 
@@ -126,7 +124,8 @@ async def create_message(
             "\n\nSYSTEM NOTICE: The user has used up their image generation quota. "
             "The image generation tool has been disabled. "
             "If the user asks to generate an image, explicitly tell them they have reached their image limit "
-            "and need to upgrade their subscription tier to continue."
+            "and need to upgrade their subscription tier to continue. Tell the user to click on their profile in the"
+            "sidebar menu and click subscriptions tier button to purchase a better subscription tier"
         )
 
     # 2) Create a USER message and contents
@@ -415,6 +414,9 @@ async def update_conversation_settings(
 
     if request.model is not None:
         conversation.model = request.model
+
+    if request.image_model is not None:
+        conversation.image_model = request.image_model
 
     session.add(conversation)
     await session.commit()
