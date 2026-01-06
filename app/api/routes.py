@@ -120,6 +120,15 @@ async def create_message(
 
     system_prompt = conversation.system_prompt
 
+    if not image_allowed:
+        # Instruction ensures the AI explains the limit instead of hallucinating or using ASCII
+        system_prompt += (
+            "\n\nSYSTEM NOTICE: The user has used up their image generation quota. "
+            "The image generation tool has been disabled. "
+            "If the user asks to generate an image, explicitly tell them they have reached their image limit "
+            "and need to upgrade their plan to continue."
+        )
+
     # 2) Create a USER message and contents
     user_msg = models.Message(conversation_id=conversation_id, role="user")
     session.add(user_msg)
