@@ -126,7 +126,7 @@ async def create_message(
             "\n\nSYSTEM NOTICE: The user has used up their image generation quota. "
             "The image generation tool has been disabled. "
             "If the user asks to generate an image, explicitly tell them they have reached their image limit "
-            "and need to upgrade their plan to continue."
+            "and need to upgrade their subscription tier to continue."
         )
 
     # 2) Create a USER message and contents
