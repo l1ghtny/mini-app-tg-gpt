@@ -105,11 +105,21 @@ async def cmd_start(message: types.Message):
             "Я твой ИИ-ассистент. Я помогу тебе писать тексты, анализировать изображения и решать сложные задачи с помощью GPT-5.\n\n"
             "👇 **Нажми на кнопку ниже, чтобы запустить приложение:**"
         )
+        welcome_text_no_name = (
+            "👋 **Привет!**\n\n"
+            "Я твой ИИ-ассистент. Я помогу тебе писать тексты, анализировать изображения и решать сложные задачи с помощью GPT-5.\n\n"
+            "👇 **Нажми на кнопку ниже, чтобы запустить приложение:**"
+        )
         button_text = "🚀 Запустить AI"
     else:
         # Default to English for 'en' or any other unknown language
         welcome_text = (
             f"👋 **Hi {message.from_user.first_name}!**\n\n"
+            "I am your AI Assistant. I can help you write text, analyze images, and solve problems using GPT-5.\n\n"
+            "👇 **Tap the button below to launch the app:**"
+        )
+        welcome_text_no_name = (
+            "👋 **Hi!**\n\n"
             "I am your AI Assistant. I can help you write text, analyze images, and solve problems using GPT-5.\n\n"
             "👇 **Tap the button below to launch the app:**"
         )
@@ -121,8 +131,11 @@ async def cmd_start(message: types.Message):
             web_app=WebAppInfo(url=webapp_url)
         )]
     ])
-
-    await message.answer(welcome_text, reply_markup=keyboard, parse_mode="Markdown")
+    try:
+        await message.answer(welcome_text, reply_markup=keyboard, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(e)
+        await message.answer(welcome_text_no_name, reply_markup=keyboard, parse_mode="Markdown")
 
     if track_event_send:
         track_event("user_registered", str(user.id), {"campaign": campaign_param or "organic"})
