@@ -7,7 +7,7 @@ from app.api.dependencies import get_current_user
 from app.db.database import get_session
 from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription
 from app.db.models import RequestLedger
-from app.services.subscription_check.entitlements import remaining_images
+from app.services.subscription_check.entitlements import remaining_images, remaining_requests_for_model
 
 user_usage = APIRouter(tags=['user/usage'], prefix="/user/usage")
 
@@ -30,37 +30,26 @@ async def my_model_usage(session: AsyncSession = Depends(get_session), user=Depe
     if not tier:
         return {"status": "none", "models": []}
 
-    start = func.date_trunc("month", func.now())
-
     # caps per model
     caps = (await session.exec(
         select(TierModelLimit.model_name, TierModelLimit.monthly_requests)
         .where(TierModelLimit.tier_id == tier.id)
     )).all()
 
-    # used per model
-    used_rows = (await session.exec(
-        select(RequestLedger.model_name, func.count())
-        .where(RequestLedger.user_id==user.id,
-               RequestLedger.feature=="text",
-               RequestLedger.state.in_(("reserved","consumed")),
-               RequestLedger.created_at >= start)
-        .group_by(RequestLedger.model_name)
-    )).all()
-    used = {m: c for m, c in used_rows}
-
     models = []
     for model_name, cap in caps:
         cap = cap or 0
-        rem = (10_000_000 if cap == 0 else max(0, cap - used.get(model_name, 0)))
+        rem = await remaining_requests_for_model(session, user.id, tier.id, model_name)
+        used = max(0, cap - rem) if cap > 0 else 0
+
         models.append({
             "model": model_name,
-            "cap": cap,            # 0 => unlimited
-            "used": used.get(model_name, 0),
+            "cap": cap,            # 0 => currently treated as "not allowed" by enforcement
+            "used": used,
             "remaining": rem
         })
 
-    return {"status":"active", "models": models}
+    return {"status": "active", "models": models}
 
 @user_usage.get("/me/features")
 async def my_feature_usage(session: AsyncSession = Depends(get_session), user=Depends(get_current_user)):

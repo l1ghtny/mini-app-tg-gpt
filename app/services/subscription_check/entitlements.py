@@ -27,35 +27,77 @@ async def get_active_tier(session: AsyncSession, user_id: uuid.UUID) -> Subscrip
 
 
 
-async def get_usage_start_date(session: AsyncSession, user_id: uuid.UUID, tier: SubscriptionTier) -> datetime:
+async def usage_window_start_expr(session: AsyncSession, user_id: uuid.UUID, tier: SubscriptionTier):
     """
-    Returns the start timestamp for counting usage.
-    - Recurring Tiers: Start of the current month.
-    - One-Time/Starter Tiers: Start of the subscription itself.
+    Returns the start timestamp for counting usage for a given tier/subscription.
+
+    - Non-recurring tiers: count everything since subscription started_at.
+    - Recurring tiers: count since the latest "billing cycle boundary" based on the
+      subscription start day-of-month (e.g., started on the 4th => boundaries are every month on the 4th).
+      If today is before that day-of-month, we go to the previous month boundary.
+
+    Notes:
+    - This uses PostgreSQL date functions (make_date, extract, date_trunc). If you run tests on SQLite,
+      you may need a fallback implementation.
     """
-    # Assuming 'is_recurring' field exists on SubscriptionTier.
-    # If not present yet, default to True (monthly behavior).
     is_recurring = getattr(tier, "is_recurring", True)
 
-    if is_recurring:
-        # PostgreSQL specific: Date truncation for start of month
-        # Note: If you use SQLite for testing, this func needs a fallback
-        return func.date_trunc("month", func.now())
-    else:
-        # Fetch the active subscription to get its start date
-        sub = (await session.exec(
-            select(UserSubscription)
-            .where(
-                UserSubscription.user_id == user_id,
-                UserSubscription.tier_id == tier.id,
-                UserSubscription.status == SubscriptionStatus.active
-            )
-        )).first()
-        if sub:
-            return sub.started_at
+    sub = (await session.exec(
+        select(UserSubscription)
+        .where(
+            UserSubscription.user_id == user_id,
+            UserSubscription.tier_id == tier.id,
+            UserSubscription.status == SubscriptionStatus.active
+        )
+        .order_by(UserSubscription.started_at.desc())
+        .limit(1)
+    )).first()
 
-        # Fallback (shouldn't happen if user has tier): Start of month
+    # Fallback: if subscription row can't be found, use calendar month start (best-effort)
+    if not sub or not sub.started_at:
         return func.date_trunc("month", func.now())
+
+    if not is_recurring:
+        return sub.started_at
+
+    # Recurring:
+    # Compute boundary for "this month at day=sub.started_at.day", clamped to month length.
+    # If now < boundary => use previous month's boundary.
+    now_ts = func.now()
+    start_day = func.extract("day", sub.started_at)
+
+    month_start = func.date_trunc("month", now_ts)
+    this_month_last_day = func.extract("day", (month_start + func.interval("1 month") - func.interval("1 day")))
+
+    this_boundary_date = func.make_date(
+        func.extract("year", now_ts),
+        func.extract("month", now_ts),
+        func.least(start_day, this_month_last_day)
+    )
+
+    prev_month_ts = now_ts - func.interval("1 month")
+    prev_month_start = func.date_trunc("month", prev_month_ts)
+    prev_month_last_day = func.extract("day", (prev_month_start + func.interval("1 month") - func.interval("1 day")))
+
+    prev_boundary_date = func.make_date(
+        func.extract("year", prev_month_ts),
+        func.extract("month", prev_month_ts),
+        func.least(start_day, prev_month_last_day)
+    )
+
+    # If current time is before this month's boundary, cycle started at previous boundary.
+    return func.case(
+        (now_ts < this_boundary_date, prev_boundary_date),
+        else_=this_boundary_date,
+    )
+
+
+async def get_usage_start_date(session: AsyncSession, user_id: uuid.UUID, tier: SubscriptionTier) -> datetime:
+    """
+    Deprecated wrapper: kept for compatibility.
+    Prefer usage_window_start_expr().
+    """
+    return await usage_window_start_expr(session, user_id, tier)
 
 
 async def remaining_requests_for_model(session: AsyncSession, user_id: uuid.UUID, tier_id: uuid.UUID,
