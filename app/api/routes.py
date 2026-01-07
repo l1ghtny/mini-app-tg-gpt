@@ -123,7 +123,7 @@ async def create_message(
         system_prompt += (
             "\n\nSYSTEM NOTICE: The user has used up their image generation quota. "
             "The image generation tool has been disabled. "
-            "If the user wants to generate an image, explicitly tell them they have reached their image limit "
+            "If the user wants you to generate an image, you have to explicitly tell them they have reached their image limit "
             "and need to upgrade their subscription tier to continue. Tell the user to click on their profile in the"
             "sidebar menu and click subscriptions tier button to purchase a better subscription tier\n\n"
         )
