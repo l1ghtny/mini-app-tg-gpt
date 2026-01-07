@@ -125,7 +125,8 @@ async def create_message(
             "The image generation tool has been disabled. "
             "If the user wants you to generate an image, you have to explicitly tell them they have reached their image limit "
             "and need to upgrade their subscription tier to continue. Tell the user to click on their profile in the"
-            "sidebar menu and click subscriptions tier button to purchase a better subscription tier\n\n"
+            "sidebar menu and click subscriptions tier button to purchase a better subscription tier."
+            "Don't suggest prompts for usage in other apps.\n\n"
         )
 
     # 2) Create a USER message and contents
