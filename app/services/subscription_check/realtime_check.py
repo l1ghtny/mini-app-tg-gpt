@@ -18,7 +18,7 @@ async def create_tools_list(image_allowed: bool, image_model: str = "gpt-image-1
             type="image_generation",
             model=image_model,
             quality="auto" if image_model == "gpt-image-1.5" else "medium",
-            moderation='low'
+            moderation='low',
         ))
 
     return base_tools

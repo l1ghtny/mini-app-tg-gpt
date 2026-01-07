@@ -7,6 +7,7 @@ from app.api.dependencies import get_current_user
 from app.db.database import get_session
 from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription
 from app.db.models import RequestLedger
+from app.services.subscription_check.entitlements import remaining_images
 
 user_usage = APIRouter(tags=['user/usage'], prefix="/user/usage")
 
@@ -80,12 +81,14 @@ async def my_feature_usage(session: AsyncSession = Depends(get_session), user=De
         )
     )).one() or 0
 
-    def rem(cap, used): return (10_000_000 if cap == 0 else max(0, cap - used))
+    # Use the unified entitlement logic for remaining images so that
+    # models like "gpt-image-1.5" are weighted as 2, matching backend checks.
+    img_remaining = await remaining_images(session, user.id, tier)
 
     return {
         "status": "active",
         "features": {
-            "images": {"cap": img_cap, "used": img_used, "remaining": rem(img_cap, img_used)},
+            "images": {"cap": img_cap, "used": img_used, "remaining": img_remaining},
             # add docs, deepsearch similarly when you turn them on
         }
     }

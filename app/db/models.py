@@ -32,7 +32,7 @@ class Conversation(SQLModel, table=True):
     user_id: uuid.UUID = Field(foreign_key="app_user.id")
     model: str = Field(default="gpt-5-nano")
     image_model: str = Field(default="gpt-image-1-mini", nullable=True)
-    system_prompt: Optional[str] = Field(default="You are a helpful assistant.")
+    system_prompt: Optional[str] = Field(default="Ты помощник, готовый ответить на вопросы.")
 
     updated_at: datetime = Field(
         default_factory=utcnow_naive,
