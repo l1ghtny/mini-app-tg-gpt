@@ -1,8 +1,9 @@
 ﻿import uuid
 from datetime import datetime
 
+from sqlalchemy import DateTime, text
 from sqlalchemy.orm import selectinload
-from sqlmodel import select, func
+from sqlmodel import select, func, case, cast
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import RequestLedger
@@ -27,21 +28,51 @@ async def get_active_tier(session: AsyncSession, user_id: uuid.UUID) -> Subscrip
 
 
 
-async def usage_window_start_expr(session: AsyncSession, user_id: uuid.UUID, tier: SubscriptionTier):
+def _days_in_month(year: int, month: int) -> int:
+    # month: 1..12
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1)
+    else:
+        next_month = datetime(year, month + 1, 1)
+    this_month = datetime(year, month, 1)
+    return (next_month - this_month).days
+
+
+def _add_months(year: int, month: int, delta_months: int) -> tuple[int, int]:
+    # returns (year, month) with month 1..12
+    total = (year * 12 + (month - 1)) + delta_months
+    new_year = total // 12
+    new_month = (total % 12) + 1
+    return new_year, new_month
+
+
+def _latest_billing_boundary(now: datetime, anchor_day: int) -> datetime:
     """
-    Returns the start timestamp for counting usage for a given tier/subscription.
+    Given current time `now` and anchor day-of-month (1..31),
+    returns the latest boundary datetime (00:00) not in the future.
 
-    - Non-recurring tiers: count everything since subscription started_at.
-    - Recurring tiers: count since the latest "billing cycle boundary" based on the
-      subscription start day-of-month (e.g., started on the 4th => boundaries are every month on the 4th).
-      If today is before that day-of-month, we go to the previous month boundary.
-
-    Notes:
-    - This uses PostgreSQL date functions (make_date, extract, date_trunc). If you run tests on SQLite,
-      you may need a fallback implementation.
+    If anchor_day doesn't exist in a month, clamps to last day of that month.
     """
-    is_recurring = getattr(tier, "is_recurring", True)
+    y, m = now.year, now.month
+    dim = _days_in_month(y, m)
+    this_day = min(anchor_day, dim)
+    this_boundary = datetime(y, m, this_day, 0, 0, 0)
 
+    if now >= this_boundary:
+        return this_boundary
+
+    py, pm = _add_months(y, m, -1)
+    pdim = _days_in_month(py, pm)
+    prev_day = min(anchor_day, pdim)
+    return datetime(py, pm, prev_day, 0, 0, 0)
+
+
+async def usage_window_start_dt(session: AsyncSession, user_id: uuid.UUID, tier: SubscriptionTier) -> datetime:
+    """
+    Python-based usage window start:
+    - Non-recurring tiers: since subscription started_at
+    - Recurring tiers: since last billing boundary based on started_at day-of-month
+    """
     sub = (await session.exec(
         select(UserSubscription)
         .where(
@@ -53,51 +84,24 @@ async def usage_window_start_expr(session: AsyncSession, user_id: uuid.UUID, tie
         .limit(1)
     )).first()
 
-    # Fallback: if subscription row can't be found, use calendar month start (best-effort)
+    # Safe fallback (shouldn't happen): calendar month start in Python
+    now = datetime.utcnow()
     if not sub or not sub.started_at:
-        return func.date_trunc("month", func.now())
+        return datetime(now.year, now.month, 1, 0, 0, 0)
 
-    if not is_recurring:
+    if not getattr(tier, "is_recurring", True):
         return sub.started_at
 
-    # Recurring:
-    # Compute boundary for "this month at day=sub.started_at.day", clamped to month length.
-    # If now < boundary => use previous month's boundary.
-    now_ts = func.now()
-    start_day = func.extract("day", sub.started_at)
-
-    month_start = func.date_trunc("month", now_ts)
-    this_month_last_day = func.extract("day", (month_start + func.interval("1 month") - func.interval("1 day")))
-
-    this_boundary_date = func.make_date(
-        func.extract("year", now_ts),
-        func.extract("month", now_ts),
-        func.least(start_day, this_month_last_day)
-    )
-
-    prev_month_ts = now_ts - func.interval("1 month")
-    prev_month_start = func.date_trunc("month", prev_month_ts)
-    prev_month_last_day = func.extract("day", (prev_month_start + func.interval("1 month") - func.interval("1 day")))
-
-    prev_boundary_date = func.make_date(
-        func.extract("year", prev_month_ts),
-        func.extract("month", prev_month_ts),
-        func.least(start_day, prev_month_last_day)
-    )
-
-    # If current time is before this month's boundary, cycle started at previous boundary.
-    return func.case(
-        (now_ts < this_boundary_date, prev_boundary_date),
-        else_=this_boundary_date,
-    )
+    anchor_day = sub.started_at.day
+    return _latest_billing_boundary(now=now, anchor_day=anchor_day)
 
 
 async def get_usage_start_date(session: AsyncSession, user_id: uuid.UUID, tier: SubscriptionTier) -> datetime:
     """
     Deprecated wrapper: kept for compatibility.
-    Prefer usage_window_start_expr().
+    Prefer usage_window_start_dt().
     """
-    return await usage_window_start_expr(session, user_id, tier)
+    return await usage_window_start_dt(session, user_id, tier)
 
 
 async def remaining_requests_for_model(session: AsyncSession, user_id: uuid.UUID, tier_id: uuid.UUID,
@@ -106,7 +110,6 @@ async def remaining_requests_for_model(session: AsyncSession, user_id: uuid.UUID
     if not tier:
         return 0
 
-    # 1. Get Cap from Database
     cap_row = (await session.exec(
         select(TierModelLimit.monthly_requests).where(
             TierModelLimit.tier_id == tier_id,
@@ -114,16 +117,13 @@ async def remaining_requests_for_model(session: AsyncSession, user_id: uuid.UUID
         ).limit(1)
     )).first()
 
-    # LOGIC FIX: If no limit defined, return 0 (Access Denied), not 10M.
-    # If you want specific models to be "Unlimited", set a high number in DB (e.g. 1000000)
     cap = cap_row or 0
     if cap == 0:
         return 0
 
-    # 2. Determine Time Window
-    start_expr = await get_usage_start_date(session, user_id, tier)
+    # Python window start (no SQL CASE/make_date/interval)
+    start_dt = await usage_window_start_dt(session, user_id, tier)
 
-    # 3. Count Usage
     used = (await session.exec(
         select(func.count())
         .where(
@@ -131,7 +131,7 @@ async def remaining_requests_for_model(session: AsyncSession, user_id: uuid.UUID
             RequestLedger.model_name == model_name,
             RequestLedger.feature == "text",
             RequestLedger.state.in_(("reserved", "consumed")),
-            RequestLedger.created_at >= start_expr
+            RequestLedger.created_at >= start_dt
         )
     )).one()
 
@@ -143,10 +143,8 @@ async def remaining_images(session: AsyncSession, user_id: uuid.UUID, tier: Subs
     if cap == 0:
         return 0
 
-    start_expr = await get_usage_start_date(session, user_id, tier)
+    start_dt = await usage_window_start_dt(session, user_id, tier)
 
-    # NEW: Weighted Calculation
-    # 1.5 costs 2, others cost 1
     statement = select(
         RequestLedger.model_name,
         func.count(RequestLedger.id)
@@ -154,7 +152,7 @@ async def remaining_images(session: AsyncSession, user_id: uuid.UUID, tier: Subs
         RequestLedger.user_id == user_id,
         RequestLedger.feature == "image",
         RequestLedger.state.in_(("reserved", "consumed")),
-        RequestLedger.created_at >= start_expr
+        RequestLedger.created_at >= start_dt
     ).group_by(RequestLedger.model_name)
 
     results = (await session.exec(statement)).all()
