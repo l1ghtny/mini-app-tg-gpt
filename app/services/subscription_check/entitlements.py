@@ -25,9 +25,6 @@ async def get_active_tier(session: AsyncSession, user_id: uuid.UUID) -> Subscrip
     return (await session.exec(q)).first()
 
 
-
-
-
 def _days_in_month(year: int, month: int) -> int:
     # month: 1..12
     if month == 12:
@@ -53,6 +50,9 @@ def _latest_billing_boundary(now: datetime, anchor_day: int) -> datetime:
 
     If anchor_day doesn't exist in a month, clamps to last day of that month.
     """
+    if not (1 <= anchor_day <= 31):
+        raise ValueError(f"anchor_day must be in 1..31, got {anchor_day}")
+
     y, m = now.year, now.month
     dim = _days_in_month(y, m)
     this_day = min(anchor_day, dim)
