@@ -1,23 +1,20 @@
+import fastapi_swagger_dark as fsd
 import sentry_sdk
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.openai import OpenAIIntegration
-from sqlmodel import SQLModel
-import fastapi_swagger_dark as fsd
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.api.access_codes import access_codes
+from app.api.auth import auth
+from app.api.images import images
 from app.api.metrics import metrics
 from app.api.payments import payments
-from app.api.access_codes import access_codes
-from app.api.images import images
 from app.api.routes import router as chat_router
 from app.api.tiers import tiers
 from app.api.user_subscription import user_subscription
 from app.api.user_usage import user_usage
 from app.core.config import settings
-from app.db.database import engine
-from app.api.auth import auth
-from app.db.models import AppUser
 
 logger = settings.custom_logger
 
@@ -66,10 +63,6 @@ if settings.SENTRY_DSN:
         },
     )
 
-
-# async def create_db_and_tables():
-#     async with engine.begin() as conn:
-#         await conn.run_sync(SQLModel.metadata.create_all)
 
 
 origins = [

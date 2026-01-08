@@ -1,7 +1,7 @@
 ﻿import asyncio
 import logging
-import sys
 import os
+import sys
 
 # 1. Setup path to import 'app' modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -13,7 +13,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 import sentry_sdk
-from sentry_sdk import metrics
 
 from app.core.config import settings
 from app.db.database import engine
