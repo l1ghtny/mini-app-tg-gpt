@@ -1,7 +1,11 @@
 ﻿from __future__ import annotations
+
+import asyncio
 import io
 import hashlib
 from typing import Optional, Tuple
+
+import httpx
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -11,6 +15,11 @@ from app.r2.settings import Settings
 from app.r2.client import R2_BUCKET
 from app.r2.methods import head_object, get_bytes, put_bytes
 from app.db.models import DerivedImage, MessageContent
+from app.core.config import settings
+
+
+logger = settings.custom_logger
+
 
 # Enable HEIC/HEIF if pillow-heif is installed
 try:
@@ -94,6 +103,7 @@ async def ensure_openai_compatible_image_url(
     mime = (meta.get("ContentType") or "application/octet-stream").lower()
 
     if mime in SUPPORTED_DIRECT:
+        await _wait_for_public_reachability(_public_url(key))
         return _public_url(key)
 
     # See if we already have a derived variant
@@ -107,6 +117,7 @@ async def ensure_openai_compatible_image_url(
     )
     row = res.first()
     if row:
+        await _wait_for_public_reachability(_public_url(row.derived_key))
         return _public_url(row.derived_key)
 
     # Pull original bytes, transcode, and store
@@ -132,6 +143,8 @@ async def ensure_openai_compatible_image_url(
         derived_key=derived_key,
     ))
     await session.commit()
+
+    await _wait_for_public_reachability(derived_key)
 
     return _public_url(derived_key)
 
@@ -160,3 +173,21 @@ async def rewrite_message_image_url(
     if rows:
         await session.commit()
     return len(rows)
+
+
+async def _wait_for_public_reachability(url: str, max_retries: int = 5, delay: float = 1.0) -> None:
+    """
+    Polls the public URL to ensure it is reachable (HTTP 200) before handing it off to OpenAI.
+    This prevents race conditions where R2/CDN hasn't indexed the file yet.
+    """
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for _ in range(max_retries):
+            try:
+                response = await client.head(url)
+                if response.status_code == 200:
+                    return
+            except Exception:
+                # Ignore connection errors and retry
+                pass
+            await asyncio.sleep(delay)
+    logger.warning(f"Warning: URL {url} did not become reachable within timeout.")
