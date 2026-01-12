@@ -1,5 +1,5 @@
 ﻿import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import DateTime, text
 from sqlalchemy.orm import selectinload
@@ -118,6 +118,10 @@ async def remaining_requests_for_model(session: AsyncSession, user_id: uuid.UUID
     )).first()
 
     cap = cap_row or 0
+
+    if cap == -1:
+        return 100000
+
     if cap == 0:
         return 0
 
@@ -201,3 +205,39 @@ async def finalize_request(session, *, request_id, user_id, success: bool):
     if rl:
         rl.state = "consumed" if success else "refunded"
         await session.commit()
+
+
+async def get_daily_text_count(session: AsyncSession, user_id: uuid.UUID, model: str) -> int:
+    """
+    Counts how many text messages were sent using a specific model in the last 24h.
+    """
+    start_window = datetime.now(timezone.utc) - timedelta(days=1)
+
+    statement = select(func.count()).where(
+        RequestLedger.user_id == user_id,
+        RequestLedger.model_name == model,
+        RequestLedger.feature == "text",
+        RequestLedger.created_at >= start_window
+    )
+
+    result = await session.exec(statement)
+    return result.first()
+
+
+async def get_daily_usage_cost(session: AsyncSession, user_id: uuid.UUID, feature: str) -> int:
+    # 1. Define Window: Now minus 24 hours
+    window_start = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    # 2. Sum the 'cost' column
+    statement = select(func.sum(RequestLedger.cost)).where(
+        RequestLedger.user_id == user_id,
+        RequestLedger.feature == feature,
+        RequestLedger.state.in_(("reserved", "consumed")),
+        RequestLedger.created_at >= window_start
+    )
+
+    result = await session.exec(statement)
+    total_cost = result.first()
+
+    # Handle None (if no rows found)
+    return total_cost if total_cost is not None else 0

@@ -1,7 +1,7 @@
-﻿import asyncio, json
-from typing import AsyncIterator, Optional
+﻿from typing import AsyncIterator, Optional
 from redis.asyncio import Redis
 from .settings import settings
+
 
 class RedisEventBus:
     def __init__(self, redis: Redis):

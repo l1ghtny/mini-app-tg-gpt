@@ -13,7 +13,7 @@ from sqlmodel import select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.responses import RedirectResponse
 
-from app.api.dependencies import get_current_user, get_bus, get_redis
+from app.api.dependencies import get_current_user, get_bus, get_redis, rate_limit_check, get_available_models
 from app.api.helpers import generate_and_publish, load_conversation, fetch_assistant_text
 from app.core.metrics import track_event
 from app.db import models
@@ -25,7 +25,8 @@ from app.schemas.chat import ConversationAPI, ConversationWithMessages, NewMessa
     UpdateConversationSettingsRequest, MessageCreated, RequestExists
 from app.services.background.image_deriver import ensure_openai_compatible_image_url, rewrite_message_image_url
 from app.services.streaming.test_idempotency import _choose_link_for_message
-from app.services.subscription_check.entitlements import remaining_requests_for_model, remaining_images, reserve_request
+from app.services.subscription_check.entitlements import remaining_requests_for_model, remaining_images, \
+    reserve_request, get_daily_text_count
 from app.services.subscription_check.realtime_check import check_tier, create_tools_list
 from app.services.tasks import generate_and_save_title
 
@@ -39,7 +40,8 @@ async def create_message(
         background_tasks: BackgroundTasks,
         session: AsyncSession = Depends(get_session),
         current_user: AppUser = Depends(get_current_user),
-        bus: RedisEventBus = Depends(get_bus),
+        bus: Redis = Depends(get_redis),
+        rate_limiter: bool = Depends(rate_limit_check)
 ):
 
     ## -- idempotency check --
@@ -75,19 +77,9 @@ async def create_message(
     # --- model and tools checks ---
     # 1. requests for a model
     remaining = await remaining_requests_for_model(session, current_user.id, tier.id, request.model)
+
     if remaining <= 0:
-        available_models = []
-
-        # 1. Get all limits for this tier
-        limits = await session.exec(
-            select(TierModelLimit).where(TierModelLimit.tier_id == tier.id)
-        )
-
-        # 2. Check remaining for each
-        for limit in limits.all():
-            rem = await remaining_requests_for_model(session, current_user.id, tier.id, limit.model_name)
-            if rem > 0:
-                available_models.append(limit.model_name)
+        available_models = await get_available_models(current_user, tier)
 
         # 3. Raise Error with structured data
         raise HTTPException(status_code=409, detail={
@@ -95,6 +87,26 @@ async def create_message(
             "requested_model": request.model,
             "available_models": available_models
         })
+
+    # --- requests per hour check
+    if request.model == "gpt-5.2":
+        # Define your "Fair Use" cap here.
+        # 100/day = ~$30/month risk.
+        SAFEGUARD_LIMIT = 100
+
+        daily_usage = await get_daily_text_count(session, current_user.id, "gpt-5.2")
+
+        if daily_usage >= SAFEGUARD_LIMIT:
+            available_models = await get_available_models(current_user, tier)
+
+
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "model_quota_exceeded",
+                    "requested_model": request.model,
+                    "available_models": available_models
+                })
 
     # 1) Ensure the conversation exists & belongs to the user (add your auth checks)
     conversation = await load_conversation(session, conversation_id)

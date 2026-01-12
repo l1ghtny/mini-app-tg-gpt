@@ -190,6 +190,7 @@ class RequestLedger(SQLModel, table=True):
     request_id: str = Field(index=True)  # client- or server-generated; used for idempotency
     model_name: str = Field(index=True)
     feature: str = Field(index=True)
+    cost: int = Field(default=1)
 
     state: State = Field(default=State.reserved, index=True)
     tool_choice: Optional[str] = None     # e.g., "auto" or "image_generation"
