@@ -53,7 +53,7 @@ async def get_bus(redis: Redis = Depends(get_redis)) -> RedisEventBus:
 async def rate_limit_check(
         request: Request,
         user: AppUser = Depends(get_current_user),
-        redis=Depends(RedisEventBus)
+        redis: Redis =Depends(get_redis)
 ):
     """
     Spam Protection: Limits users to 60 requests per rolling hour.
