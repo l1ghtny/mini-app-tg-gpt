@@ -30,6 +30,7 @@ class SubscriptionTierResponse(BaseModel):
     monthly_images: int
     tier_model_limits: List[TierMonthlyLimits]
     is_recurring: bool
+    daily_image_limit: int
 
 
 class InitPaymentRequest(BaseModel):

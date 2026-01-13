@@ -201,6 +201,8 @@ async def create_message(
                     await rewrite_message_image_url(session, c.value, compatible_url, message_id=msg.id)
         history_for_openai.append({"role": msg.role, "content": parts})
 
+    redis_bus = await get_bus(bus)
+
     # 5) Kick off a background producer that streams to Redis and batches DB writes
     background_tasks.add_task(
         generate_and_publish,
@@ -208,7 +210,7 @@ async def create_message(
         assistant_message_id=assistant_msg.id,
         user_id=current_user.id,
         history_for_openai=history_for_openai,
-        bus=bus,
+        bus=redis_bus,
         instructions=system_prompt,
         model=request.model,
         tool_choice=request.tool_choice,
@@ -276,8 +278,6 @@ async def stream_message(
             if await request.is_disconnected():
                 return
             # Send the exact type + JSON you stored
-            print(ev)
-            print('\n')
             event_name = ev.get("type", "message")
 
 

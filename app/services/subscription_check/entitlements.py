@@ -1,5 +1,5 @@
 ﻿import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 
 from sqlalchemy import DateTime, text
 from sqlalchemy.orm import selectinload
@@ -211,7 +211,7 @@ async def get_daily_text_count(session: AsyncSession, user_id: uuid.UUID, model:
     """
     Counts how many text messages were sent using a specific model in the last 24h.
     """
-    start_window = datetime.now(timezone.utc) - timedelta(days=1)
+    start_window = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
 
     statement = select(func.count()).where(
         RequestLedger.user_id == user_id,
@@ -226,7 +226,7 @@ async def get_daily_text_count(session: AsyncSession, user_id: uuid.UUID, model:
 
 async def get_daily_usage_cost(session: AsyncSession, user_id: uuid.UUID, feature: str) -> int:
     # 1. Define Window: Now minus 24 hours
-    window_start = datetime.now(timezone.utc) - timedelta(hours=24)
+    window_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=24)
 
     # 2. Sum the 'cost' column
     statement = select(func.sum(RequestLedger.cost)).where(

@@ -25,6 +25,7 @@ class SubscriptionTier(SQLModel, table=True):
     description_ru: Optional[str] = Field(nullable=True)
     price_cents: int = Field(default=0)
     # feature caps (requests, not tokens)
+    monthly_images: int = Field(default=0)
     daily_image_limit: int = Field(default=0)
     monthly_docs: int = Field(default=0)
     monthly_deepsearch: int = Field(default=0)

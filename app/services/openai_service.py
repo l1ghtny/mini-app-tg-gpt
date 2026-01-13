@@ -13,6 +13,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.database import get_session, engine
 from app.redis.settings import settings
+from app.core.config import settings as main_settings
 from app.schemas.chat import Message
 from app.services.background.save_openai_usage import log_usage
 
@@ -26,6 +27,8 @@ STYLE_GUIDE = (
 )
 
 client = AsyncOpenAI()
+
+logger = main_settings.custom_logger
 
 
 default_tools = [
@@ -84,7 +87,6 @@ async def stream_normalized_openai_response(
         seen_text_part_started: Dict[int, bool] = {}
         try:
             async for event in response:
-                # pprint(event)
                 et = event.type
 
                 # Reasoning “thinking” status
@@ -255,7 +257,7 @@ async def generate_conversation_title(first_message: str) -> str:
             temperature=0,
             max_tokens=20,
         )
-        print(response)
+        logger.info('Generated conversation title')
         title = response.choices[0].message.content.strip().strip('"').strip('.')
         return title if title else "New Chat"
     except Exception as e:
