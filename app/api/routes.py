@@ -170,7 +170,7 @@ async def create_message(
     # 4) Build history for OpenAI
     history_for_openai = []
     # Pull last N messages (optional optimisation); so far we fetch all:
-    result = await session.exec(select(Message).where(Message.conversation_id == conversation_id))
+    result = await session.exec(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at.asc()))
     msgs = result.all()
     for msg in msgs:
         # lazy-load content
@@ -181,13 +181,13 @@ async def create_message(
                 parts.append({"type": "input_text", "text": c.value})
             elif c.type == "text" and msg.role == "assistant":
                 parts.append({"type": "output_text", "text": c.value})
-            elif c.type == "image" or "image_url" and msg.role == "user":
+            elif (c.type in ("image_url", "image")) and msg.role == "user":
                 compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_side=2048)
                 parts.append({"type": "input_image", "image_url": compatible_url})
                 if compatible_url != c.value:
-                    # rewrite the image URL in the DB
                     await rewrite_message_image_url(session, c.value, compatible_url, message_id=msg.id)
         history_for_openai.append({"role": msg.role, "content": parts})
+
 
     # 5) Kick off a background producer that streams to Redis and batches DB writes
     background_tasks.add_task(
