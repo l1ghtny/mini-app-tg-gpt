@@ -36,7 +36,7 @@ async def get_tiers(
         tiers_info.insert(0, current_tier)
 
 
-    tiers_enriched = [SubscriptionTierResponse(name=tier.name, name_ru=tier.name_ru, description=tier.description, description_ru=tier.description_ru, price_cents=tier.price_cents, monthly_images=tier.monthly_images, tier_model_limits=[TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests) for l in tier.tier_model_limits], is_recurring=tier.is_recurring, daily_image_limit=tier.daily_image_limit) for tier in tiers_info]
+    tiers_enriched = [SubscriptionTierResponse(name=tier.name, name_ru=tier.name_ru, description=tier.description, description_ru=tier.description_ru, price_cents=tier.price_cents, monthly_images=tier.monthly_images, tier_model_limits=[TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests) for l in tier.tier_model_limits], is_recurring=tier.is_recurring, daily_image_limit=tier.daily_image_limit, tier_id=str(tier.id)) for tier in tiers_info]
     return tiers_enriched
 
 
@@ -52,7 +52,7 @@ async def get_tier(tier_id: uuid.UUID, user = Depends(get_current_user), session
     if not tier_info:
         raise HTTPException(status_code=404, detail="Tier not found")
 
-    tier_enriched = SubscriptionTierResponse(name=tier_info.name, description=tier_info.description, name_ru=tier_info.name_ru, description_ru=tier_info.description_ru, price_cents=tier_info.price_cents, monthly_images=tier_info.monthly_images, tier_model_limits=[TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests) for l in tier_info.tier_model_limits], is_recurring=tier_info.is_recurring, daily_image_limit=tier_info.daily_image_limit)
+    tier_enriched = SubscriptionTierResponse(name=tier_info.name, description=tier_info.description, name_ru=tier_info.name_ru, description_ru=tier_info.description_ru, price_cents=tier_info.price_cents, monthly_images=tier_info.monthly_images, tier_model_limits=[TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests) for l in tier_info.tier_model_limits], is_recurring=tier_info.is_recurring, daily_image_limit=tier_info.daily_image_limit, tier_id=str(tier_info.id))
 
     return tier_enriched
 

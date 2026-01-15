@@ -13,6 +13,7 @@ class SubscriptionResponse(BaseModel):
     tier_description: str
     tier_description_ru: str
     tier_price: int
+    tier_id: str
 
 
 
@@ -31,6 +32,7 @@ class SubscriptionTierResponse(BaseModel):
     tier_model_limits: List[TierMonthlyLimits]
     is_recurring: bool
     daily_image_limit: int
+    tier_id: str
 
 
 class InitPaymentRequest(BaseModel):

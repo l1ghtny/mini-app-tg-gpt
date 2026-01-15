@@ -28,7 +28,8 @@ async def get_active_subscription(session: AsyncSession = Depends(get_session), 
             tier_name_ru=user_subscription.tier.name_ru,
             tier_description=user_subscription.tier.description,
             tier_description_ru=user_subscription.tier.description_ru,
-            tier_price=user_subscription.tier.price_cents
+            tier_price=user_subscription.tier.price_cents,
+            tier_id=str(user_subscription.tier.id)
         )
 
         if user_subscription.tier.is_recurring == True:
