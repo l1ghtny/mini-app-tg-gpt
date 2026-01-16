@@ -102,7 +102,7 @@ async def stream_normalized_openai_response(
                     service_tier="default",
                 )
                 break
-            except openai.BadRequestError as e:
+            except Exception as e:
                 if _is_openai_image_download_timeout(e) and attempt < max_openai_retries - 1:
                     await asyncio.sleep(await _retry_delay_s(attempt))
                     continue
