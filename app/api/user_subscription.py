@@ -1,4 +1,7 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+﻿from datetime import timedelta
+
+from dateutil.relativedelta import relativedelta
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -15,24 +18,27 @@ user_subscription = APIRouter(tags=['user/subscription'], prefix="/user/subscrip
 @user_subscription.get("/active", response_model=SubscriptionResponse)
 async def get_active_subscription(session: AsyncSession = Depends(get_session), user=Depends(get_current_user)):
     get_subscription = select(subscription_tiers.UserSubscription).where(user.id==subscription_tiers.UserSubscription.user_id, subscription_tiers.UserSubscription.status=="active").options(selectinload(subscription_tiers.UserSubscription.tier))
-    user_subscription = (await session.exec(get_subscription)).first()
-    if not user_subscription:
+    current_user_subscription = (await session.exec(get_subscription)).first()
+    if not current_user_subscription:
         raise HTTPException(status_code=403, detail="No active subscription found")
     else:
         result = SubscriptionResponse(
-            subscription_id=str(user_subscription.id),
-            status=user_subscription.status,
-            started_at=user_subscription.started_at.strftime('%H:%M:%S %d.%m.%Y'),
+            subscription_id=str(current_user_subscription.id),
+            status=current_user_subscription.status,
+            started_at=current_user_subscription.started_at.strftime('%H:%M:%S %d.%m.%Y'),
             expires_at=None,
-            tier_name=user_subscription.tier.name,
-            tier_name_ru=user_subscription.tier.name_ru,
-            tier_description=user_subscription.tier.description,
-            tier_description_ru=user_subscription.tier.description_ru,
-            tier_price=user_subscription.tier.price_cents
+            tier_name=current_user_subscription.tier.name,
+            tier_name_ru=current_user_subscription.tier.name_ru,
+            tier_description=current_user_subscription.tier.description,
+            tier_description_ru=current_user_subscription.tier.description_ru,
+            tier_price=current_user_subscription.tier.price_cents
         )
 
-        if user_subscription.tier.is_recurring == True:
-            result.expires_at = user_subscription.expires_at.strftime('%H:%M:%S %d.%m.%Y')
+        if current_user_subscription.tier.is_recurring:
+            if current_user_subscription.expires_at is not None:
+                result.expires_at = current_user_subscription.expires_at.strftime('%H:%M:%S %d.%m.%Y')
+            else:
+                result.expires_at = (current_user_subscription.started_at + relativedelta(months=1)).strftime('%H:%M:%S %d.%m.%Y')
         return result
 
 
