@@ -60,7 +60,6 @@ async def generate_and_publish(
                     request_id=request_id,
             ):
                 await bus.publish(assistant_message_id_str, ev)
-                pprint(ev)
 
                 await _handle_stream_event(
                     ev=ev,

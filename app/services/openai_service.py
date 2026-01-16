@@ -1,8 +1,10 @@
 import asyncio
+import random
 import uuid
 from typing import AsyncGenerator, List, Optional, Dict, Any, Literal, Iterable
 
-from openai import AsyncOpenAI
+import openai
+from openai import AsyncOpenAI, BadRequestError
 from openai import AuthenticationError, NotFoundError
 from openai.types.responses import FileSearchToolParam, ResponseImageGenCallGeneratingEvent, \
     ResponseImageGenCallInProgressEvent, ResponseImageGenCallPartialImageEvent, ToolChoiceAllowedParam, \
@@ -32,6 +34,21 @@ default_tools = [
     ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium"),
     WebSearchTool(type="web_search")
 ]
+
+def _is_openai_image_download_timeout(exc: Exception) -> bool:
+    """
+    OpenAI returns 400 invalid_request_error when it can't download the image URL in time.
+    Example message:
+      "Timeout while downloading https://....png."
+    """
+    s = str(exc)
+    return ("Timeout while downloading" in s) and ("param" in s and "'url'" in s or "param': 'url'" in s)
+
+
+async def _retry_delay_s(attempt: int, base: float = 0.8, cap: float = 8.0) -> float:
+    # exponential backoff with jitter
+    exp = min(cap, base * (2 ** attempt))
+    return exp + random.random() * 0.25
 
 
 async def stream_normalized_openai_response(
@@ -70,15 +87,26 @@ async def stream_normalized_openai_response(
             last_flush[index] = now
 
     try:
-        response = await client.responses.create(
-            model=model,
-            tools=tools,
-            tool_choice=tool_choice,
-            instructions=instructions + STYLE_GUIDE,
-            input=messages,
-            stream=True,
-            service_tier="default"
-        )
+        response = None
+        max_openai_retries = 3
+
+        for attempt in range(max_openai_retries):
+            try:
+                response = await client.responses.create(
+                    model=model,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    instructions=instructions + STYLE_GUIDE,
+                    input=messages,
+                    stream=True,
+                    service_tier="default",
+                )
+                break
+            except openai.BadRequestError as e:
+                if _is_openai_image_download_timeout(e) and attempt < max_openai_retries - 1:
+                    await asyncio.sleep(await _retry_delay_s(attempt))
+                    continue
+                raise
 
         # This maps OpenAI event names to our normalised events
         seen_text_part_started: Dict[int, bool] = {}
@@ -255,7 +283,6 @@ async def generate_conversation_title(first_message: str) -> str:
             temperature=0,
             max_tokens=20,
         )
-        print(response)
         title = response.choices[0].message.content.strip().strip('"').strip('.')
         return title if title else "New Chat"
     except Exception as e:

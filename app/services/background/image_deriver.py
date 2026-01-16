@@ -3,6 +3,7 @@
 import asyncio
 import io
 import hashlib
+import random
 from typing import Optional, Tuple
 
 import httpx
@@ -85,7 +86,7 @@ async def ensure_openai_compatible_image_url(
     session: AsyncSession,
     url_or_key: str,
     *,
-    max_side: int = 2048,
+    max_size: int = 2048,
 ) -> str:
     """
     If this is our R2 public URL, ensure it's directly consumable by OpenAI.
@@ -112,7 +113,7 @@ async def ensure_openai_compatible_image_url(
         select(DerivedImage).where(
             DerivedImage.original_key == key,
             DerivedImage.target_format == target_guess,
-            DerivedImage.max_side == max_side,
+            DerivedImage.max_side == max_size,
         )
     )
     row = res.first()
@@ -129,7 +130,7 @@ async def ensure_openai_compatible_image_url(
     except Exception:
         has_alpha = False
     target = _decide_target(mime, has_alpha)
-    converted, converted_mime, _ = _transcode(original, target=target, max_side=max_side)
+    converted, converted_mime, _ = _transcode(original, target=target, max_side=max_size)
 
     sha = hashlib.sha256(converted).hexdigest()
     ext = ".jpg" if converted_mime == "image/jpeg" else ".png" if converted_mime == "image/png" else ".webp"
@@ -139,7 +140,7 @@ async def ensure_openai_compatible_image_url(
     session.add(DerivedImage(
         original_key=key,
         target_format=target,
-        max_side=max_side,
+        max_side=max_size,
         derived_key=derived_key,
     ))
     await session.commit()
@@ -175,19 +176,28 @@ async def rewrite_message_image_url(
     return len(rows)
 
 
-async def _wait_for_public_reachability(url: str, max_retries: int = 5, delay: float = 1.0) -> None:
+async def _wait_for_public_reachability(url: str, max_retries: int = 8, delay: float = 0.75) -> None:
     """
-    Polls the public URL to ensure it is reachable (HTTP 200) before handing it off to OpenAI.
-    This prevents race conditions where R2/CDN hasn't indexed the file yet.
+    Polls the public URL to ensure it is reachable AND downloadable before handing it off to OpenAI.
+
+    Important: checking HEAD is not sufficient; some CDNs return 200 for HEAD but GET can still be slow/blocked.
+    We do a small streamed GET to confirm the body can be fetched.
     """
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        for _ in range(max_retries):
+    timeout = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        for attempt in range(max_retries):
             try:
-                response = await client.head(url)
-                if response.status_code == 200:
-                    return
-            except Exception:
-                # Ignore connection errors and retry
-                pass
-            await asyncio.sleep(delay)
-    logger.warning(f"Warning: URL {url} did not become reachable within timeout.")
+                async with client.stream("GET", url, headers={"Range": "bytes=0-65535"}) as resp:
+                    if resp.status_code in (200, 206):
+                        # Read a small chunk to ensure the transfer actually starts.
+                        async for _chunk in resp.aiter_bytes():
+                            return
+                    logger.info("Image URL not ready: %s status=%s", url, resp.status_code)
+            except Exception as e:
+                logger.info("Image URL not reachable yet: %s error=%r", url, e)
+
+            # exponential-ish backoff with jitter
+            sleep_s = delay * (2 ** min(attempt, 4)) + random.random() * 0.25
+            await asyncio.sleep(sleep_s)
+
+        logger.warning("Warning: URL %s did not become downloadable within retries.", url)

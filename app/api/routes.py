@@ -182,7 +182,7 @@ async def create_message(
             elif c.type == "text" and msg.role == "assistant":
                 parts.append({"type": "output_text", "text": c.value})
             elif (c.type in ("image_url", "image")) and msg.role == "user":
-                compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_side=2048)
+                compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_size=2048)
                 parts.append({"type": "input_image", "image_url": compatible_url})
                 if compatible_url != c.value:
                     await rewrite_message_image_url(session, c.value, compatible_url, message_id=msg.id)
@@ -264,8 +264,6 @@ async def stream_message(
             if await request.is_disconnected():
                 return
             # Send the exact type + JSON you stored
-            print(ev)
-            print('\n')
             event_name = ev.get("type", "message")
 
 
