@@ -24,7 +24,7 @@ STYLE_GUIDE = (
     "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
     "- Use fenced code blocks for code.\n"
     "- Use standard [text](url) links.\n"
-    "Only use headings bullet lists and others when it is applicable"
+    "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
 )
 
 client = AsyncOpenAI()
