@@ -175,14 +175,14 @@ async def remaining_images(session: AsyncSession, user_id: uuid.UUID, tier: Subs
 
 
 async def reserve_request(session, *, user_id, conversation_id, assistant_message_id,
-                          request_id, model_name, feature, tool_choice=None):
+                          request_id, model_name, feature, cost, tool_choice=None):
 
     # try insert; on duplicate (same request_id), just return the existing row
 
     rl = RequestLedger(user_id=user_id, conversation_id=conversation_id,
                        assistant_message_id=assistant_message_id,
                        request_id=request_id, model_name=model_name,
-                       feature=feature, tool_choice=tool_choice, state="reserved")
+                       feature=feature, tool_choice=tool_choice, state="reserved", cost=cost)
     session.add(rl)
     try:
         await session.commit()

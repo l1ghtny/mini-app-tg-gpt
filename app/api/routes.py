@@ -27,6 +27,7 @@ from app.services.background.image_deriver import ensure_openai_compatible_image
 from app.services.streaming.test_idempotency import _choose_link_for_message
 from app.services.subscription_check.entitlements import remaining_requests_for_model, remaining_images, \
     reserve_request, get_daily_text_count
+from app.services.subscription_check.pacing import get_image_quality_cost, check_image_pacing
 from app.services.subscription_check.realtime_check import check_tier, create_tools_list
 from app.services.tasks import generate_and_save_title
 
@@ -92,7 +93,7 @@ async def create_message(
     if request.model == "gpt-5.2":
         # Define your "Fair Use" cap here.
         # 100/day = ~$30/month risk.
-        SAFEGUARD_LIMIT = 100
+        SAFEGUARD_LIMIT = 150
 
         daily_usage = await get_daily_text_count(session, current_user.id, "gpt-5.2")
 
@@ -116,12 +117,23 @@ async def create_message(
         raise HTTPException(status_code=403, detail="Not authorized to send messages to this conversation")
 
     # 2. images
-    img_cost = 2 if conversation.image_model == "gpt-image-1.5" else 1
+    target_quality = request.image_quality or conversation.image_quality or "standard"
 
-    images_remaining = await remaining_images(session, current_user.id, tier)
-    image_allowed = True if images_remaining >= img_cost else False  # Check against cost
+    # 2. Get Dynamic Cost from DB
+    img_cost = await get_image_quality_cost(session, target_quality)
 
-    tools = await create_tools_list(image_allowed, conversation.image_model)
+    # 3. Check Subscription Limits (The "Smart Pacing")
+    # Tier.daily_image_limit is now "Credits per day", not "Images per day"
+    daily_credits = tier.daily_image_limit if tier.daily_image_limit > 0 else 4.0
+
+    is_throttled, wait_time = await check_image_pacing(
+        session,
+        current_user.id,
+        daily_target=daily_credits,
+        cost=img_cost  # <--- Passing the variable cost
+    )
+
+    image_allowed = not is_throttled
 
     # 4. required tools
 
@@ -177,6 +189,7 @@ async def create_message(
                           user_id=current_user.id, conversation_id=conversation_id,
                           assistant_message_id=assistant_msg.id,
                           request_id=idempotency_key, model_name=request.model, feature="text",
+                          cost=img_cost,
                           tool_choice=request.tool_choice)
 
     # 4) Build history for OpenAI

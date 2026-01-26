@@ -7,6 +7,9 @@ AllowedModels = Literal["gpt-5.2", "gpt-5-mini", "gpt-5-nano"]
 AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter", "auto"]
 
 
+ImageQualitySetting = Literal['low', 'medium', 'high']
+
+
 class TextContent(BaseModel):
     type: Literal["text"]
     text: str
@@ -63,6 +66,7 @@ class UpdateConversationSettingsRequest(BaseModel):
     model: Optional[AllowedModels] = None
     image_model: Optional[str] = None
     tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
+    image_quality: Optional[ImageQualitySetting]
 
 
 class MessageCreated(BaseModel):
