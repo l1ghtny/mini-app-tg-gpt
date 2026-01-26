@@ -31,7 +31,7 @@ class Conversation(SQLModel, table=True):
     title: str = Field(index=True, default="New Chat")
     user_id: uuid.UUID = Field(foreign_key="app_user.id")
     model: str = Field(default="gpt-5-nano")
-    image_model: str = Field(default="gpt-image-1-mini", nullable=True)
+    image_model: str = Field(default="gpt-image-1.5", nullable=True)
     system_prompt: Optional[str] = Field(default="Ты помощник, готовый ответить на вопросы.")
     image_quality: str = Field(default="low") # low, medium, high
 
@@ -260,6 +260,7 @@ class ImageQualityPricing(SQLModel, table=True):
     __tablename__ = "image_quality_pricing"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    image_model: str = Field(index=True)
     quality: str = Field()  # e.g., low, medium, high
     credit_cost: float = Field(default=1.0)  # How many 'daily bucket units' this consumes
     description: Optional[str] = None  # e.g., "1024x1024, fast"
