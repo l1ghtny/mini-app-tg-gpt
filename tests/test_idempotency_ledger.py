@@ -20,9 +20,9 @@ async def test_reserve_is_idempotent(monkeypatch):
 
         req_id = "client-key-xyz"
         rl1 = await reserve_request(s, user_id=user.id, conversation_id=convo.id, assistant_message_id=msg.id,
-                                    request_id=req_id, model_name="gpt-5-nano", feature="text", tool_choice="auto")
+                                    request_id=req_id, model_name="gpt-5-nano", feature="text", cost=1, tool_choice="auto")
         rl2 = await reserve_request(s, user_id=user.id, conversation_id=convo.id, assistant_message_id=msg.id,
-                                    request_id=req_id, model_name="gpt-5-nano", feature="text", tool_choice="auto")
+                                    request_id=req_id, model_name="gpt-5-nano", feature="text", cost=1, tool_choice="auto")
         assert rl1.id == rl2.id
 
         rows = (await s.exec(select(RequestLedger).where(

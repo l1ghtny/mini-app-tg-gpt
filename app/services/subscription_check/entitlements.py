@@ -1,9 +1,8 @@
 ﻿import uuid
-from datetime import datetime, timezone, timedelta, UTC
+from datetime import datetime, timedelta, UTC
 
-from sqlalchemy import DateTime, text
 from sqlalchemy.orm import selectinload
-from sqlmodel import select, func, case, cast
+from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import RequestLedger
@@ -14,15 +13,36 @@ async def month_start_expr():
     return func.date_trunc("month", func.now())
 
 
-async def get_active_tier(session: AsyncSession, user_id: uuid.UUID) -> SubscriptionTier | None:
+async def get_current_subscription(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+) -> UserSubscription | None:
     q = (
-        select(SubscriptionTier)
-        .join(UserSubscription, UserSubscription.tier_id == SubscriptionTier.id)
-        .where(UserSubscription.user_id==user_id, UserSubscription.status=="active",
-               (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > func.now()))
-        .limit(1).options(selectinload(SubscriptionTier.tier_model_limits))
+        select(UserSubscription)
+        .join(SubscriptionTier, UserSubscription.tier_id == SubscriptionTier.id)
+        .where(
+            UserSubscription.user_id == user_id,
+            UserSubscription.status == SubscriptionStatus.active,
+            (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > func.now()),
+        )
+        .order_by(
+            SubscriptionTier.price_cents.desc(),
+            SubscriptionTier.index.desc(),
+            UserSubscription.started_at.desc(),
+        )
+        .limit(1)
+        .options(
+            selectinload(UserSubscription.tier).selectinload(SubscriptionTier.tier_model_limits)
+        )
     )
     return (await session.exec(q)).first()
+
+
+async def get_active_tier(session: AsyncSession, user_id: uuid.UUID) -> SubscriptionTier | None:
+    sub = await get_current_subscription(session, user_id)
+    if not sub:
+        return None
+    return sub.tier
 
 
 def _days_in_month(year: int, month: int) -> int:

@@ -1,32 +1,18 @@
 ﻿from fastapi import Depends, APIRouter
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select, func
-import uuid
 
 from app.api.dependencies import get_current_user
 from app.db.database import get_session
-from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription
+from app.db.subscription_tiers import TierModelLimit
 from app.db.models import RequestLedger
-from app.services.subscription_check.entitlements import remaining_images, remaining_requests_for_model
+from app.services.subscription_check.entitlements import get_active_tier, remaining_images, remaining_requests_for_model
 
 user_usage = APIRouter(tags=['user/usage'], prefix="/user/usage")
 
-
-
-
-async def _active_tier(session: AsyncSession, user_id: uuid.UUID):
-    q = (
-        select(SubscriptionTier)
-        .join(UserSubscription, UserSubscription.tier_id == SubscriptionTier.id)
-        .where(UserSubscription.user_id==user_id, UserSubscription.status=="active",
-               (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > func.now()))
-        .limit(1)
-    )
-    return (await session.exec(q)).first()
-
 @user_usage.get("/me/models")
 async def my_model_usage(session: AsyncSession = Depends(get_session), user=Depends(get_current_user)):
-    tier = await _active_tier(session, user.id)
+    tier = await get_active_tier(session, user.id)
     if not tier:
         return {"status": "none", "models": []}
 
@@ -53,7 +39,7 @@ async def my_model_usage(session: AsyncSession = Depends(get_session), user=Depe
 
 @user_usage.get("/me/features")
 async def my_feature_usage(session: AsyncSession = Depends(get_session), user=Depends(get_current_user)):
-    tier = await _active_tier(session, user.id)
+    tier = await get_active_tier(session, user.id)
     if not tier:
         return {"status": "none", "features": {}}
 

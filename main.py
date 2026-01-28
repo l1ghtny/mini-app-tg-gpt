@@ -75,7 +75,8 @@ origins = [
     "https://gpt-mini-app.lightny.pro",
     "http://192.168.1.137:5173",
     "http://192.168.1.137:4173",
-    "https://gpt-mini-app-ru.lightny.pro"
+    "https://gpt-mini-app-ru.lightny.pro",
+    "https://gpt-mini-app-dev.lightny.pro",
 ]
 
 
@@ -90,7 +91,7 @@ app.add_middleware(
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137"],
+    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137", "gpt-api-dev.kosh.games"],
 )
 
 

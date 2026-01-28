@@ -5,14 +5,17 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]  # repo root
 
-env_path = find_dotenv()
+TEST_ENV = os.getenv("TEST_ENV", "False").lower() in ("true", "1")
 
-load_dotenv(find_dotenv(), override=True)
+if TEST_ENV:
+    load_dotenv(BASE_DIR / ".env.test", override=True)
+else:
+    load_dotenv(find_dotenv(), override=True)
 
 
 class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
-    DATABASE_URL: str = os.getenv("DATABASE_URL")
+    DATABASE_URL: str = os.getenv("TEST_DATABASE_URL") if TEST_ENV else os.getenv("DATABASE_URL")
     SECRET_KEY: str = os.getenv("SECRET_KEY")
     BOT_TOKEN: str = os.getenv("BOT_TOKEN")
     DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "False").lower() in ("true", "1")

@@ -19,6 +19,7 @@ from app.redis.settings import settings
 from app.services.openai_service import stream_normalized_openai_response
 from app.db.database import engine
 from app.services.subscription_check.entitlements import reserve_request, finalize_request
+from app.services.subscription_check.pacing import get_image_quality_cost
 
 
 async def load_conversation(session: AsyncSession, conversation_id: uuid.UUID) -> Conversation | None:
@@ -105,14 +106,14 @@ async def _handle_stream_event(
 
         checkpoint_bytes = settings.CHECKPOINT_BYTES
         if len(buffers[i]) - last_ckpt.get(i, 0) >= checkpoint_bytes:
-            await _upsert_text(assistant_message_id, i, buffers[i])
+            await _upsert_text(assistant_message_id, i, buffers[i], session=session)
             last_ckpt[i] = len(buffers[i])
         return
 
     if event_type == "text.done":
         i = ev["index"]
         if i in buffers:
-            await _upsert_text(assistant_message_id, i, buffers[i])
+            await _upsert_text(assistant_message_id, i, buffers[i], session=session)
 
         await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
         print("UPDATED REQUEST LEDGER")
@@ -121,9 +122,11 @@ async def _handle_stream_event(
     if event_type == "image.ready":
         ordinal = ev.get("index", 0)
         url = await upload_openai_image_to_r2(ev["data"], prefix="gen")
-        await save_image_url_to_db(url, ordinal, assistant_message_id)
+        await save_image_url_to_db(url, ordinal, assistant_message_id, session=session)
 
         image_model = _extract_image_model_name(tools) or "unknown"
+        image_quality = _extract_image_quality(tools) or "standard"
+        image_cost = await get_image_quality_cost(session, image_quality)
         await update_request_ledger_image(
             session,
             request_id,
@@ -132,6 +135,7 @@ async def _handle_stream_event(
             conversation_id,
             assistant_message_id,
             image_model,
+            image_cost,
         )
         print("SAVED THE IMAGE")
         return
@@ -164,22 +168,39 @@ def _extract_image_model_name(
     return None
 
 
-async def _upsert_text(message_id, ordinal, text):
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        res = await session.exec(
-            select(MessageContent).where(
-                MessageContent.message_id == message_id,
-                MessageContent.ordinal == ordinal,
-                MessageContent.type == "text",
-            )
+def _extract_image_quality(
+        tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
+) -> Optional[str]:
+    if not tools:
+        return None
+
+    for tool in tools:
+        if isinstance(tool, ImageGeneration):
+            return getattr(tool, "quality", None)
+
+    return None
+
+
+async def _upsert_text(message_id, ordinal, text, *, session: AsyncSession | None = None):
+    if session is None:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await _upsert_text(message_id, ordinal, text, session=session)
+        return
+
+    res = await session.exec(
+        select(MessageContent).where(
+            MessageContent.message_id == message_id,
+            MessageContent.ordinal == ordinal,
+            MessageContent.type == "text",
         )
-        row = res.first()
-        if row:
-            row.value = text
-        else:
-            row = MessageContent(message_id=message_id, ordinal=ordinal, type="text", value=text)
-            session.add(row)
-        await session.commit()
+    )
+    row = res.first()
+    if row:
+        row.value = text
+    else:
+        row = MessageContent(message_id=message_id, ordinal=ordinal, type="text", value=text)
+        session.add(row)
+    await session.commit()
 
 
 async def _upsert_rich(session, message_id, ordinal, type_, data: dict, value: str):
@@ -219,16 +240,27 @@ async def upload_openai_image_to_r2(b64_png: str, prefix: str = "gen"):
 
 
 # To use this function, we need to have a message created already
-async def save_image_url_to_db(image_url: str, ordinal: int, message_id: uuid.UUID):
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        addition = MessageContent(message_id=message_id, ordinal=ordinal, type="image_url", value=image_url)
-        session.add(addition)
-        await session.commit()
-        await session.refresh(addition)
+async def save_image_url_to_db(
+        image_url: str,
+        ordinal: int,
+        message_id: uuid.UUID,
+        *,
+        session: AsyncSession | None = None,
+):
+    if session is None:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await save_image_url_to_db(image_url, ordinal, message_id, session=session)
+        return
+
+    addition = MessageContent(message_id=message_id, ordinal=ordinal, type="image_url", value=image_url)
+    session.add(addition)
+    await session.commit()
+    await session.refresh(addition)
 
 
 async def update_request_ledger_image(session: AsyncSession, request_id: str, user_id: uuid.UUID, ordinal: int,
-                                     conversation_id: uuid.UUID, assistant_message_id: uuid.UUID, image_model: str):
+                                     conversation_id: uuid.UUID, assistant_message_id: uuid.UUID, image_model: str,
+                                     cost: float):
     img_req_id = f"{request_id}:img:{ordinal}"
     await reserve_request(
         session,
@@ -238,6 +270,7 @@ async def update_request_ledger_image(session: AsyncSession, request_id: str, us
         request_id=img_req_id,
         model_name=image_model,
         feature="image",
+        cost=cost,
         tool_choice="image_generation",
     )
     await finalize_request(session, request_id=img_req_id, user_id=user_id, success=True)

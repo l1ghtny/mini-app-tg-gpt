@@ -1,21 +1,19 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.dependencies import get_current_user
 from app.core.metrics import track_event
-from app.db import models, subscription_tiers
 from app.db.database import get_session
 from app.db.models import PaymentMethod
 from app.schemas.subscriptions import SubscriptionResponse
+from app.services.subscription_check.entitlements import get_current_subscription
 
 user_subscription = APIRouter(tags=['user/subscription'], prefix="/user/subscription")
 
 @user_subscription.get("/active", response_model=SubscriptionResponse)
 async def get_active_subscription(session: AsyncSession = Depends(get_session), user=Depends(get_current_user)):
-    get_subscription = select(subscription_tiers.UserSubscription).where(user.id==subscription_tiers.UserSubscription.user_id, subscription_tiers.UserSubscription.status=="active").options(selectinload(subscription_tiers.UserSubscription.tier))
-    user_subscription = (await session.exec(get_subscription)).first()
+    user_subscription = await get_current_subscription(session, user.id)
     if not user_subscription:
         raise HTTPException(status_code=403, detail="No active subscription found")
     else:
@@ -47,12 +45,7 @@ async def cancel_subscription(
     Cancels auto-renewal for PAiD, RECURRING subscriptions.
     """
     # Fetch active sub
-    query = select(subscription_tiers.UserSubscription).where(
-        subscription_tiers.UserSubscription.user_id == user.id,
-        subscription_tiers.UserSubscription.status == "active"
-    ).options(selectinload(subscription_tiers.UserSubscription.tier))
-
-    sub = (await session.exec(query)).first()
+    sub = await get_current_subscription(session, user.id)
 
     if not sub:
         raise HTTPException(status_code=400, detail="No active subscription")

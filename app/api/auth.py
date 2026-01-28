@@ -14,6 +14,7 @@ from app.core.config import settings
 from pydantic import BaseModel
 
 from app.db.subscription_tiers import UserSubscription, SubscriptionStatus, SubscriptionTier
+from app.services.subscription_check.entitlements import get_current_subscription
 
 
 class Token(BaseModel):
@@ -78,12 +79,7 @@ async def process_login(session: AsyncSession, telegram_id: int):
         await session.commit()
         await session.refresh(user)
 
-    active_sub = (await session.exec(
-        select(UserSubscription).where(
-            UserSubscription.user_id == user.id,
-            UserSubscription.status == SubscriptionStatus.active
-        )
-    )).first()
+    active_sub = await get_current_subscription(session, user.id)
 
     bonus_granted = False
 
