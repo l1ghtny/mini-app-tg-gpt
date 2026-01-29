@@ -174,6 +174,10 @@ class State(str, Enum):
     refunded = "refunded"
     failed = "failed"
 
+class PaymentProductType(str, Enum):
+    subscription = "subscription"
+    usage_pack = "usage_pack"
+
 
 class RequestLedger(SQLModel, table=True):
 
@@ -184,6 +188,8 @@ class RequestLedger(SQLModel, table=True):
     """
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    tier_id: Optional[uuid.UUID] = Field(default=None, foreign_key="subscription_tier.id", index=True)
+    usage_pack_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user_usage_pack.id", index=True)
     # nullable references for diagnostics; DO NOT FK so deletes don’t cascade
     conversation_id: Optional[uuid.UUID] = Field(default=None, index=True)
     assistant_message_id: Optional[uuid.UUID] = Field(default=None, index=True)
@@ -214,6 +220,8 @@ class Payment(SQLModel, table=True):
 
     # We store tier_name directly to preserve history if tiers change
     tier_name: str = Field(index=True)
+    product_type: PaymentProductType = Field(default=PaymentProductType.subscription, index=True)
+    pack_id: Optional[uuid.UUID] = Field(default=None, foreign_key="usage_pack.id", index=True)
 
     # Amount in CENTS (kopecks)
     amount: int = Field(nullable=False)

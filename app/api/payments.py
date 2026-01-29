@@ -11,9 +11,21 @@ from app.core.config import settings
 from app.core.metrics import track_event, track_value
 from app.db.database import get_session
 from app.api.dependencies import get_current_user
-from app.db.models import AppUser, Payment, PaymentMethod
-from app.db.subscription_tiers import SubscriptionTier, UserSubscription, SubscriptionStatus
-from app.schemas.subscriptions import InitPaymentRequest
+from app.db.models import AppUser, Payment, PaymentMethod, PaymentProductType
+from app.db.subscription_tiers import (
+    SubscriptionTier,
+    UserSubscription,
+    SubscriptionStatus,
+    UsagePack,
+    UserUsagePack,
+    UsagePackSource,
+)
+from app.schemas.subscriptions import (
+    InitPaymentRequest,
+    InitUsagePackPaymentRequest,
+    PaymentInitResponse,
+    PaymentStatusResponse,
+)
 from app.services.banking.tbank import tbank_service
 
 payments = APIRouter(tags=["payments"], prefix="/payments/tbank")
@@ -21,7 +33,7 @@ payments = APIRouter(tags=["payments"], prefix="/payments/tbank")
 logger = settings.custom_logger
 
 
-@payments.post("/init")
+@payments.post("/init", response_model=PaymentInitResponse)
 async def init_payment(
         payload: InitPaymentRequest,
         user: AppUser = Depends(get_current_user),
@@ -43,7 +55,8 @@ async def init_payment(
         user_id=user.id,
         tier_name=tier.name,
         amount=amount_cents,
-        tbank_status="NEW"
+        tbank_status="NEW",
+        product_type=PaymentProductType.subscription,
     )
     session.add(payment)
     await session.commit()
@@ -85,10 +98,10 @@ async def init_payment(
         await session.commit()
 
         # CHANGED: Return payment_id so the frontend can poll /status
-        return {
-            "payment_url": payment_url,
-            "payment_id": str(payment.id)
-        }
+        return PaymentInitResponse(
+            payment_url=payment_url,
+            payment_id=str(payment.id),
+        )
 
     except Exception as e:
         payment.tbank_status = "ERROR"
@@ -97,7 +110,7 @@ async def init_payment(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@payments.get("/status/{payment_id}")
+@payments.get("/status/{payment_id}", response_model=PaymentStatusResponse)
 async def check_payment_status(
         payment_id: uuid.UUID,
         session: AsyncSession = Depends(get_session)
@@ -109,15 +122,96 @@ async def check_payment_status(
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
 
-    return {
-        "id": str(payment.id),
-        "status": payment.tbank_status,
-        "is_confirmed": payment.tbank_status == "CONFIRMED",
-        "tier_name": payment.tier_name
-    }
+    return PaymentStatusResponse(
+        id=str(payment.id),
+        status=payment.tbank_status,
+        is_confirmed=payment.tbank_status == "CONFIRMED",
+        tier_name=payment.tier_name,
+        product_type=payment.product_type.value,
+        product_name=payment.tier_name,
+        pack_id=str(payment.pack_id) if payment.pack_id else None,
+    )
 
 
-@payments.post("/webhook")
+@payments.post("/init-usage-pack", response_model=PaymentInitResponse)
+async def init_usage_pack_payment(
+        payload: InitUsagePackPaymentRequest,
+        user: AppUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session),
+):
+    try:
+        pack_id = uuid.UUID(payload.pack_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid pack_id")
+
+    pack = (await session.exec(
+        select(UsagePack).where(
+            UsagePack.id == pack_id,
+            UsagePack.is_active == True,
+            UsagePack.is_public == True,
+        )
+    )).first()
+    if not pack:
+        raise HTTPException(status_code=404, detail="Usage pack not found")
+
+    amount_cents = int(pack.price_cents * 100)
+
+    payment = Payment(
+        user_id=user.id,
+        tier_name=pack.name,
+        amount=amount_cents,
+        tbank_status="NEW",
+        product_type=PaymentProductType.usage_pack,
+        pack_id=pack.id,
+    )
+    session.add(payment)
+    await session.commit()
+    await session.refresh(payment)
+
+    receipt_data = None
+    if payload.email:
+        receipt_data = {
+            "Taxation": settings.TBANK_TAXATION,
+            "Email": payload.email,
+            "Items": [
+                {
+                    "Name": f"Usage pack: {pack.name}",
+                    "Price": amount_cents,
+                    "Quantity": 1,
+                    "Amount": amount_cents,
+                    "Tax": "none",
+                    "PaymentMethod": "full_prepayment",
+                    "PaymentObject": "service"
+                }
+            ]
+        }
+
+    try:
+        payment_url, tbank_id = await tbank_service.init_payment(
+            order_id=str(payment.id),
+            amount_cents=amount_cents,
+            description=f"Usage pack: {pack.name}",
+            user_id=str(user.id),
+            recurrent=False,
+            receipt=receipt_data
+        )
+
+        payment.tbank_payment_id = tbank_id
+        session.add(payment)
+        await session.commit()
+
+        return PaymentInitResponse(
+            payment_url=payment_url,
+            payment_id=str(payment.id),
+        )
+    except Exception as e:
+        payment.tbank_status = "ERROR"
+        session.add(payment)
+        await session.commit()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@payments.post("/webhook", response_class=Response)
 async def tbank_webhook(
         background_tasks: BackgroundTasks,
         request: Request,
@@ -173,17 +267,29 @@ async def tbank_webhook(
         except Exception as e:
             logger.error(f"Failed to save payment method: {e}")
 
-        settings.custom_logger.info(f"Payment {payment_uuid} confirmed! Adding subscription...")
-        await activate_subscription(session, payment)
-        settings.custom_logger.info('Subscription added!')
+        if payment.product_type == PaymentProductType.usage_pack:
+            settings.custom_logger.info(f"Payment {payment_uuid} confirmed! Adding usage pack...")
+            await activate_usage_pack(session, payment)
+            settings.custom_logger.info("Usage pack added!")
 
-        # 1. Count the sale
-        background_tasks.add_task(
-            track_event,
-            "subscription_purchased",
-            str(payment.user_id),
-            {"tier": payment.tier_name}
-        )
+            background_tasks.add_task(
+                track_event,
+                "usage_pack_purchased",
+                str(payment.user_id),
+                {"pack": payment.tier_name}
+            )
+        else:
+            settings.custom_logger.info(f"Payment {payment_uuid} confirmed! Adding subscription...")
+            await activate_subscription(session, payment)
+            settings.custom_logger.info('Subscription added!')
+
+            # 1. Count the sale
+            background_tasks.add_task(
+                track_event,
+                "subscription_purchased",
+                str(payment.user_id),
+                {"tier": payment.tier_name}
+            )
         # 2. Track the Revenue Value (for ARPU/LTV charts)
         background_tasks.add_task(
             track_value,
@@ -235,6 +341,27 @@ async def activate_subscription(session: AsyncSession, payment: Payment):
         expires_at=expires_at
     )
     session.add(new_sub)
+
+
+async def activate_usage_pack(session: AsyncSession, payment: Payment):
+    if not payment.pack_id:
+        return
+
+    pack = await session.get(UsagePack, payment.pack_id)
+    if not pack or not pack.is_active:
+        return
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    pack_purchase = UserUsagePack(
+        user_id=payment.user_id,
+        pack_id=pack.id,
+        source=UsagePackSource.paid,
+        purchased_at=now,
+        expires_at=None,
+        payment_id=payment.id,
+    )
+    session.add(pack_purchase)
 
 
 async def save_payment_method(session: AsyncSession, user_id: uuid.UUID):

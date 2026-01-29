@@ -14,7 +14,7 @@ from app.schemas.images import ImageUploaded
 
 images = APIRouter(tags=['images'], prefix='/images')
 
-@images.post("/upload")
+@images.post("/upload", response_model=ImageUploaded)
 async def upload_image(
     image: UploadFile,
     app_user: AppUser = Depends(get_current_user),

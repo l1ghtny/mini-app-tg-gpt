@@ -41,6 +41,8 @@ async def generate_and_publish(
         model: Optional[str] = "gpt-5-nano",
         tool_choice: Optional[str] = "auto",
         request_id: Optional[str] = None,
+        image_entitlement_tier_id: Optional[uuid.UUID] = None,
+        image_entitlement_pack_id: Optional[uuid.UUID] = None,
 ):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         buffers: dict[int, str] = {}
@@ -61,7 +63,6 @@ async def generate_and_publish(
                     request_id=request_id,
             ):
                 await bus.publish(assistant_message_id_str, ev)
-                pprint(ev)
 
                 await _handle_stream_event(
                     ev=ev,
@@ -71,6 +72,8 @@ async def generate_and_publish(
                     user_id=user_id,
                     conversation_id=conversation_id,
                     tools=tools,
+                    image_entitlement_tier_id=image_entitlement_tier_id,
+                    image_entitlement_pack_id=image_entitlement_pack_id,
                     buffers=buffers,
                     last_ckpt=last_ckpt,
                 )
@@ -92,6 +95,8 @@ async def _handle_stream_event(
         user_id: uuid.UUID,
         conversation_id: uuid.UUID,
         tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
+        image_entitlement_tier_id: Optional[uuid.UUID],
+        image_entitlement_pack_id: Optional[uuid.UUID],
         buffers: dict[int, str],
         last_ckpt: dict[int, int],
 ) -> None:
@@ -125,8 +130,8 @@ async def _handle_stream_event(
         await save_image_url_to_db(url, ordinal, assistant_message_id, session=session)
 
         image_model = _extract_image_model_name(tools) or "unknown"
-        image_quality = _extract_image_quality(tools) or "standard"
-        image_cost = await get_image_quality_cost(session, image_quality)
+        image_quality = _extract_image_quality(tools) or "low"
+        image_cost = await get_image_quality_cost(session, image_model, image_quality)
         await update_request_ledger_image(
             session,
             request_id,
@@ -136,6 +141,8 @@ async def _handle_stream_event(
             assistant_message_id,
             image_model,
             image_cost,
+            image_entitlement_tier_id,
+            image_entitlement_pack_id,
         )
         print("SAVED THE IMAGE")
         return
@@ -260,7 +267,8 @@ async def save_image_url_to_db(
 
 async def update_request_ledger_image(session: AsyncSession, request_id: str, user_id: uuid.UUID, ordinal: int,
                                      conversation_id: uuid.UUID, assistant_message_id: uuid.UUID, image_model: str,
-                                     cost: float):
+                                     cost: float, tier_id: Optional[uuid.UUID] = None,
+                                     usage_pack_id: Optional[uuid.UUID] = None):
     img_req_id = f"{request_id}:img:{ordinal}"
     await reserve_request(
         session,
@@ -272,5 +280,7 @@ async def update_request_ledger_image(session: AsyncSession, request_id: str, us
         feature="image",
         cost=cost,
         tool_choice="image_generation",
+        tier_id=tier_id,
+        usage_pack_id=usage_pack_id,
     )
     await finalize_request(session, request_id=img_req_id, user_id=user_id, success=True)

@@ -11,6 +11,7 @@ async def check_image_pacing(
         daily_target: float = 4.0,
         max_burst_days: int = 5,
         cost: float = 1.0,
+        tier_id: uuid.UUID | None = None,
 ) -> tuple[bool, timedelta]:
     """
     Calculates if the user is throttled based on a Leaky Bucket algorithm.
@@ -44,6 +45,11 @@ async def check_image_pacing(
         )
         .order_by(RequestLedger.created_at.asc())
     )
+    if tier_id is not None:
+        query = query.where(
+            (RequestLedger.tier_id == tier_id)
+            | ((RequestLedger.tier_id.is_(None)) & (RequestLedger.usage_pack_id.is_(None)))
+        )
     history = (await session.exec(query)).all()
 
     # 4. Replay Bucket State
@@ -84,8 +90,20 @@ async def check_image_pacing(
         return True, timedelta(seconds=wait_seconds)
 
 
-async def get_image_quality_cost(session: AsyncSession, quality_name: str) -> float:
-    statement = select(ImageQualityPricing).where(ImageQualityPricing.quality == quality_name)
+async def get_image_quality_pricing(
+    session: AsyncSession,
+    image_model: str,
+    quality_name: str,
+) -> ImageQualityPricing | None:
+    statement = select(ImageQualityPricing).where(
+        ImageQualityPricing.image_model == image_model,
+        ImageQualityPricing.quality == quality_name,
+        ImageQualityPricing.is_active == True,
+    )
     result = await session.exec(statement)
-    pricing = result.first()
-    return pricing.credit_cost if pricing else 1.0 # Default fallback
+    return result.first()
+
+
+async def get_image_quality_cost(session: AsyncSession, image_model: str, quality_name: str) -> float:
+    pricing = await get_image_quality_pricing(session, image_model, quality_name)
+    return pricing.credit_cost if pricing else 1.0  # Default fallback

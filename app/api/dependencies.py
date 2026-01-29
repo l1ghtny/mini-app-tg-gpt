@@ -9,12 +9,15 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
 from app.db.models import AppUser
-from app.db.subscription_tiers import TierModelLimit
 from app.redis.settings import settings as redis_settings
 from app.db.database import engine, get_session
 from app.db import models
 from app.redis.event_bus import RedisEventBus
-from app.services.subscription_check.entitlements import remaining_requests_for_model
+from app.services.subscription_check.entitlements import (
+    get_active_subscriptions,
+    get_active_usage_packs,
+    select_text_entitlement,
+)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/debug-login", scheme_name="Bearer")
 
@@ -83,18 +86,21 @@ async def rate_limit_check(
     return True
 
 
-async def get_available_models(current_user: AppUser, tier: TierModelLimit, session: AsyncSession = get_session()) -> list:
+async def get_available_models(current_user: AppUser, session: AsyncSession) -> list:
+    subscriptions = await get_active_subscriptions(session, current_user.id)
+    packs = await get_active_usage_packs(session, current_user.id)
+    model_names: set[str] = set()
+    for sub in subscriptions:
+        for limit in sub.tier.tier_model_limits:
+            model_names.add(limit.model_name)
+    for pack in packs:
+        for limit in pack.pack.pack_model_limits:
+            model_names.add(limit.model_name)
+
     available_models = []
-
-    # 1. Get all limits for this tier
-    limits = await session.exec(
-        select(TierModelLimit).where(TierModelLimit.tier_id == tier.id)
-    )
-
-    # 2. Check remaining for each
-    for limit in limits.all():
-        rem = await remaining_requests_for_model(session, current_user.id, tier.id, limit.model_name)
-        if rem > 0:
-            available_models.append(limit.model_name)
+    for model_name in sorted(model_names):
+        ent = await select_text_entitlement(session, current_user.id, model_name)
+        if ent["remaining"] > 0:
+            available_models.append(model_name)
 
     return available_models

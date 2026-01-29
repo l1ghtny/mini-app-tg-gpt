@@ -1,5 +1,6 @@
 ﻿from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
+from typing import Literal
 from app.api.dependencies import get_current_user
 from app.core.metrics import track_event, track_value
 from app.db.models import AppUser
@@ -12,7 +13,11 @@ class FrontendEvent(BaseModel):
     value: float = 1.0
     type: str = "event" # "event" (counter) or "value" (distribution)
 
-@metrics.post("/track")
+class TrackEventResponse(BaseModel):
+    status: Literal["ok"]
+
+
+@metrics.post("/track", response_model=TrackEventResponse)
 async def track_frontend_event(
     payload: FrontendEvent,
     background_tasks: BackgroundTasks,
@@ -33,4 +38,4 @@ async def track_frontend_event(
             str(user.id),
             payload.tags
         )
-    return {"status": "ok"}
+    return TrackEventResponse(status="ok")

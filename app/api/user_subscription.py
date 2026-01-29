@@ -6,7 +6,7 @@ from app.api.dependencies import get_current_user
 from app.core.metrics import track_event
 from app.db.database import get_session
 from app.db.models import PaymentMethod
-from app.schemas.subscriptions import SubscriptionResponse
+from app.schemas.subscriptions import SubscriptionResponse, CancelSubscriptionResponse
 from app.services.subscription_check.entitlements import get_current_subscription
 
 user_subscription = APIRouter(tags=['user/subscription'], prefix="/user/subscription")
@@ -35,7 +35,7 @@ async def get_active_subscription(session: AsyncSession = Depends(get_session), 
         return result
 
 
-@user_subscription.post("/cancel")
+@user_subscription.post("/cancel", response_model=CancelSubscriptionResponse)
 async def cancel_subscription(
         background_tasks: BackgroundTasks,
         session: AsyncSession = Depends(get_session),
@@ -82,4 +82,4 @@ async def cancel_subscription(
 
     await session.commit()
 
-    return {"status": "success", "message": "Auto-renewal cancelled."}
+    return CancelSubscriptionResponse(status="success", message="Auto-renewal cancelled.")
