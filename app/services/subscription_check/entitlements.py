@@ -68,6 +68,8 @@ async def get_active_subscriptions(
             .selectinload(SubscriptionTier.tier_model_limits),
             selectinload(UserSubscription.tier)
             .selectinload(SubscriptionTier.tier_image_model_limits),
+            selectinload(UserSubscription.tier)
+            .selectinload(SubscriptionTier.tier_image_quality_limits),
         )
     )
     return (await session.exec(q)).all()
@@ -485,6 +487,8 @@ async def list_image_entitlements(
         used = max(0, cap - remaining) if cap > 0 else 0
         source = _tier_usage_source(tier)
         pacing = None
+        allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
+        allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
         tier_entries.append({
             "kind": "tier",
             "source": source,
@@ -497,6 +501,8 @@ async def list_image_entitlements(
             "remaining_credits": remaining,
             "pacing": pacing,
             "daily_image_limit": tier.daily_image_limit,
+            "allowed_image_qualities": allowed_qualities,
+            "allowed_image_models": allowed_models,
             "expires_at": None,
             "purchased_at": None,
         })
@@ -571,6 +577,9 @@ async def select_image_entitlement(
             "used": 0,
             "remaining_credits": 0,
             "cost": 0,
+            "allowed": False,
+            "throttle_reason": "unavailable",
+            "wait_time": None,
         }
     cost = pricing.credit_cost or 1.0
     breakdown = await list_image_entitlements(session, user_id, image_model)
@@ -578,7 +587,24 @@ async def select_image_entitlement(
     tier_entries = [e for e in entitlements if e["kind"] == "tier"]
     pack_entries = [e for e in entitlements if e["kind"] == "pack"]
 
+    throttled_waits: list[timedelta] = []
+    model_allowed = False
+    quality_allowed = False
+    if pack_entries:
+        model_allowed = True
+        quality_allowed = True
+
     for ent in tier_entries:
+        allowed_models = ent.get("allowed_image_models") or []
+        if allowed_models and image_model not in allowed_models:
+            continue
+        model_allowed = True
+
+        allowed_qualities = ent.get("allowed_image_qualities") or []
+        if allowed_qualities and quality not in allowed_qualities:
+            continue
+        quality_allowed = True
+
         if ent["remaining_credits"] < cost:
             continue
         if ent.get("source") == "subscription":
@@ -586,7 +612,7 @@ async def select_image_entitlement(
             if tier_id:
                 daily_credits = ent.get("daily_image_limit") or 0
                 daily_target = daily_credits if daily_credits > 0 else 4.0
-                is_throttled, _ = await check_image_pacing(
+                is_throttled, wait_time = await check_image_pacing(
                     session,
                     user_id,
                     daily_target=daily_target,
@@ -594,9 +620,13 @@ async def select_image_entitlement(
                     tier_id=tier_id,
                 )
                 if is_throttled:
+                    throttled_waits.append(wait_time)
                     continue
         selected = ent.copy()
         selected["cost"] = cost
+        selected["allowed"] = True
+        selected["throttle_reason"] = None
+        selected["wait_time"] = None
         return selected
 
     for ent in pack_entries:
@@ -604,7 +634,56 @@ async def select_image_entitlement(
             continue
         selected = ent.copy()
         selected["cost"] = cost
+        selected["allowed"] = True
+        selected["throttle_reason"] = None
+        selected["wait_time"] = None
         return selected
+
+    if not model_allowed:
+        return {
+            "kind": "none",
+            "source": "none",
+            "tier_id": None,
+            "usage_pack_id": None,
+            "cap": 0,
+            "used": 0,
+            "remaining_credits": 0,
+            "cost": cost,
+            "allowed": False,
+            "throttle_reason": "model_restricted",
+            "wait_time": None,
+        }
+
+    if model_allowed and not quality_allowed:
+        return {
+            "kind": "none",
+            "source": "none",
+            "tier_id": None,
+            "usage_pack_id": None,
+            "cap": 0,
+            "used": 0,
+            "remaining_credits": 0,
+            "cost": cost,
+            "allowed": False,
+            "throttle_reason": "quality_restricted",
+            "wait_time": None,
+        }
+
+    if throttled_waits:
+        wait_time = min(throttled_waits)
+        return {
+            "kind": "none",
+            "source": "none",
+            "tier_id": None,
+            "usage_pack_id": None,
+            "cap": 0,
+            "used": 0,
+            "remaining_credits": 0,
+            "cost": cost,
+            "allowed": False,
+            "throttle_reason": "pacing",
+            "wait_time": wait_time,
+        }
 
     return {
         "kind": "none",
@@ -615,6 +694,9 @@ async def select_image_entitlement(
         "used": 0,
         "remaining_credits": 0,
         "cost": cost,
+        "allowed": False,
+        "throttle_reason": "quota",
+        "wait_time": None,
     }
 
 

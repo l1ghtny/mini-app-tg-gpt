@@ -47,6 +47,8 @@ class SubscriptionTierResponse(BaseModel):
     image_quality_pricing: List[ImageQualityPricingResponse] = []
     is_recurring: bool
     daily_image_limit: int
+    allowed_image_qualities: List[str] = []
+    allowed_image_models: List[str] = []
     tier_id: str
 
 

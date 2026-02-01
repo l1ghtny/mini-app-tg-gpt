@@ -3,7 +3,6 @@ from datetime import datetime, UTC
 from enum import Enum
 from typing import Optional, Literal, List
 from sqlalchemy import Column, UniqueConstraint, DateTime
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field, Relationship
 
 
@@ -46,6 +45,7 @@ class SubscriptionTier(SQLModel, table=True):
     user_subscriptions: List["UserSubscription"] = Relationship(back_populates="tier")
     tier_model_limits: List["TierModelLimit"] = Relationship(back_populates="tier")
     tier_image_model_limits: List["TierImageModelLimit"] = Relationship(back_populates="tier")
+    tier_image_quality_limits: List["TierImageQualityLimit"] = Relationship(back_populates="tier")
     access_code: List["AccessCode"] = Relationship(back_populates="tier")
     access_code_discount: List["AccessCodeDiscount"] = Relationship(back_populates="tier")
 
@@ -138,6 +138,18 @@ class TierImageModelLimit(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("tier_id", "image_model", name="uq_tier_image_model"),)
 
     tier: SubscriptionTier = Relationship(back_populates="tier_image_model_limits")
+
+class TierImageQualityLimit(SQLModel, table=True):
+
+    __tablename__ = "tier_image_quality_limit"
+
+    """Allowed image qualities per tier (independent of model)."""
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    tier_id: uuid.UUID = Field(foreign_key="subscription_tier.id", index=True)
+    quality: str = Field(index=True)
+    __table_args__ = (UniqueConstraint("tier_id", "quality", name="uq_tier_image_quality"),)
+
+    tier: SubscriptionTier = Relationship(back_populates="tier_image_quality_limits")
 
 class UserSubscription(SQLModel, table=True):
 
