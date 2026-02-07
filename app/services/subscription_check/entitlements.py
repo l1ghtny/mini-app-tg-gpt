@@ -214,7 +214,7 @@ async def remaining_requests_for_model(session: AsyncSession, user_id: uuid.UUID
     cap = cap_row or 0
 
     if cap == -1:
-        return 100000
+        return -1
 
     if cap == 0:
         return 0
@@ -257,7 +257,7 @@ async def remaining_image_requests_for_model(
     cap = cap_row or 0
 
     if cap == -1:
-        return 100000
+        return -1
 
     if cap == 0:
         return 0
@@ -290,7 +290,7 @@ async def remaining_pack_requests_for_model(
 
     cap = limit.request_credits or 0
     if cap == -1:
-        return 100000
+        return -1
     if cap == 0:
         return 0
 
@@ -319,7 +319,7 @@ async def remaining_pack_image_requests_for_model(
 
     cap = limit.credit_amount or 0
     if cap == -1:
-        return 100000
+        return -1
     if cap == 0:
         return 0
 
@@ -596,12 +596,12 @@ async def select_image_entitlement(
 
     for ent in tier_entries:
         allowed_models = ent.get("allowed_image_models") or []
-        if allowed_models and image_model not in allowed_models:
+        if quality and image_model not in allowed_models:
             continue
         model_allowed = True
 
         allowed_qualities = ent.get("allowed_image_qualities") or []
-        if allowed_qualities and quality not in allowed_qualities:
+        if quality and quality not in allowed_qualities:
             continue
         quality_allowed = True
 

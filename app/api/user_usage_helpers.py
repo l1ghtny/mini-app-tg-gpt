@@ -5,6 +5,7 @@ from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import ImageQualityPricing, RequestLedger
+from app.db.subscription_tiers import TierImageModelLimit, TierImageQualityLimit
 from app.schemas.usage import FeatureUsageResponse, UserImageUsageResponse, UserTextUsageResponse
 from app.services.subscription_check.entitlements import (
     get_active_tier,
@@ -90,6 +91,9 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
     if not image_models:
         return UserImageUsageResponse(status="active", models=[])
 
+    quality_allowed_by_model: dict[TierImageModelLimit.image_model, list[TierImageQualityLimit.quality]]
+
+
     pricing_rows = (await session.exec(
         select(ImageQualityPricing)
         .where(
@@ -108,8 +112,18 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
         entitlements = breakdown["entitlements"]
         total_remaining_credits = breakdown["total_remaining_credits"]
 
+        if image_model == any(pack.pack_image_model_limits for pack in packs):
+            quality_allowed_by_model = {{image_model}: ['low', 'medium', 'high']}
+        else:
+            for ent in entitlements:
+                if ent["kind"] == "tier":
+                    quality_allowed_by_model = {image_model: ent["allowed_image_qualities"]}
+
         qualities = []
         for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: p.quality):
+            if pricing.quality not in quality_allowed_by_model[image_model]:
+                continue
+
             cost = pricing.credit_cost or 1.0
             remaining = int(math.floor(total_remaining_credits / cost)) if cost > 0 else 0
 

@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Literal, Optional, Iterable
+from typing import List, Literal, Optional, Iterable, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -59,7 +59,7 @@ class NewMessageRequest(BaseModel):
     role: Literal["user", "assistant"]
     content: List[MessageContent]
     model: AllowedModels
-    tool_choice: Optional[AllowedToolChoices] = "auto"
+    tool_choice: Optional[Union[AllowedToolChoices, List]] = "auto"
     image_model: Optional[AllowedImageModels] = None
     image_quality: Optional[ImageQualitySetting] = None
 

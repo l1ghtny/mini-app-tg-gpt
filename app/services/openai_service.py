@@ -249,7 +249,7 @@ async def generate_conversation_title(first_message: str) -> str:
     try:
         # We use a simple, fast model for this non-streaming task.
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             messages=[
                 {"role": "system", "content": "You are an expert at creating short, concise titles. Summarize the user's message in 5 words or less. Do not use quotation marks or punctuation."},
                 {"role": "user", "content": first_message}

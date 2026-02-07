@@ -154,6 +154,8 @@ async def handle_create_message(
     history_for_openai = await _build_history_for_openai(session, conversation_id)
     redis_bus = RedisEventBus(bus)
 
+    request_tool_choice = request.tool_choice if request.tool_choice != [] else "none"
+
     _queue_generation(
         background_tasks,
         conversation_id=conversation_id,
@@ -163,7 +165,7 @@ async def handle_create_message(
         bus=redis_bus,
         instructions=system_prompt,
         model=request.model,
-        tool_choice=request.tool_choice,
+        tool_choice=request_tool_choice,
         tools=tools,
         request_id=idempotency_key,
         image_entitlement_tier_id=image_entitlement.tier_id,
