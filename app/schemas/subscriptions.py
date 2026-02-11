@@ -109,3 +109,13 @@ class CancelSubscriptionResponse(BaseModel):
 class TierSubscribeResponse(BaseModel):
     status: Literal["ok"]
     tier_id: str
+
+
+class FullUsagePackResponse(UsagePackResponse):
+    model_limits: List[UsagePackModelLimitResponse] = []
+    image_model_limits: List[UsagePackImageModelLimitResponse] = []
+
+
+class MockUsagePackPurchaseRequest(BaseModel):
+    user_id: str
+    pack_id: str

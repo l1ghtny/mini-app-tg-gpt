@@ -3,6 +3,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+from app.schemas.subscriptions import UsagePackResponse
+
 
 class TextEntitlementEntry(BaseModel):
     kind: Literal["tier", "pack"]
@@ -93,3 +95,20 @@ class ImageModelUsage(BaseModel):
 class UserImageUsageResponse(BaseModel):
     status: Literal["none", "active"]
     models: list[ImageModelUsage]
+
+
+class UsagePackBalanceInfo(BaseModel):
+    pack_id: str
+    name: str
+    total_credits: float
+    used_credits: float
+    remaining_credits: float
+    expires_at: Optional[datetime] = None
+    purchased_at: Optional[datetime] = None
+    pack_details: UsagePackResponse
+
+
+class UsageBalanceResponse(BaseModel):
+    active_packs_count: int
+    label: str
+    packs: list[UsagePackBalanceInfo] = []

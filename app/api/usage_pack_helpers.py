@@ -13,7 +13,7 @@ from app.schemas.subscriptions import (
 )
 
 
-def _pack_to_response(pack: UsagePack) -> UsagePackResponse:
+def pack_to_response(pack: UsagePack) -> UsagePackResponse:
     return UsagePackResponse(
         id=str(pack.id),
         name=pack.name,
@@ -55,7 +55,7 @@ async def list_public_packs(session: AsyncSession) -> list[UsagePackResponse]:
         )
     )).all()
 
-    return [_pack_to_response(pack) for pack in packs]
+    return [pack_to_response(pack) for pack in packs]
 
 
 async def get_pack(session: AsyncSession, pack_id: uuid.UUID) -> UsagePackResponse:
@@ -70,4 +70,4 @@ async def get_pack(session: AsyncSession, pack_id: uuid.UUID) -> UsagePackRespon
     if not pack or not pack.is_active:
         raise HTTPException(status_code=404, detail="Usage pack not found")
 
-    return _pack_to_response(pack)
+    return pack_to_response(pack)

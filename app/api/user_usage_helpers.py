@@ -112,7 +112,7 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
         entitlements = breakdown["entitlements"]
         total_remaining_credits = breakdown["total_remaining_credits"]
 
-        if image_model == any(pack.pack_image_model_limits for pack in packs):
+        if image_model == any(pack.pack.pack_image_model_limits for pack in packs):
             quality_allowed_by_model = {{image_model}: ['low', 'medium', 'high']}
         else:
             for ent in entitlements:

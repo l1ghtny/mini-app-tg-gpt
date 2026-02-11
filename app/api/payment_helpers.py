@@ -8,7 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
 from app.core.metrics import track_event, track_value
-from app.db.models import Payment, PaymentMethod, PaymentProductType
+from app.db.models import Payment, PaymentMethod, PaymentProductType, AppUser
 from app.db.subscription_tiers import (
     SubscriptionStatus,
     SubscriptionTier,
@@ -22,6 +22,7 @@ from app.schemas.subscriptions import (
     InitUsagePackPaymentRequest,
     PaymentInitResponse,
     PaymentStatusResponse,
+    MockUsagePackPurchaseRequest,
 )
 from app.services.banking.tbank import tbank_service
 
@@ -338,3 +339,67 @@ async def save_payment_method(session: AsyncSession, user_id: uuid.UUID) -> None
         is_default=True,
     )
     session.add(method)
+
+
+async def mock_usage_pack_purchase(
+    session: AsyncSession,
+    background_tasks: BackgroundTasks,
+    payload: MockUsagePackPurchaseRequest,
+) -> Response:
+    """
+    Mocks the purchase of a usage pack.
+    1. Creates a Payment record (NEW).
+    2. Simulates a webhook callback (CONFIRMED).
+    """
+    try:
+        user_id = uuid.UUID(payload.user_id)
+        pack_id = uuid.UUID(payload.pack_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    user = await session.get(AppUser, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    pack = await session.get(UsagePack, pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="Usage pack not found")
+
+    amount_cents = int(pack.price_cents * 100)
+
+    # 1. Create Payment record
+    payment = Payment(
+        user_id=user.id,
+        tier_name=pack.name,
+        amount=amount_cents,
+        tbank_status="NEW",
+        product_type=PaymentProductType.usage_pack,
+        pack_id=pack.id,
+        tbank_payment_id=f"MOCK-{uuid.uuid4()}",
+    )
+    session.add(payment)
+    await session.commit()
+    await session.refresh(payment)
+
+    # 2. Simulate Webhook (CONFIRMED)
+    # We can reuse handle_tbank_webhook logic, but we need to bypass signature verification.
+    # Or we can just directly update the payment and call activate_usage_pack.
+    # Let's do the latter to be more direct and avoid mocking tbank_service.verify_notification.
+
+    payment.tbank_status = "CONFIRMED"
+    session.add(payment)
+
+    settings.custom_logger.info("Mock Payment %s confirmed! Adding usage pack...", payment.id)
+    await activate_usage_pack(session, payment)
+    settings.custom_logger.info("Usage pack added!")
+
+    background_tasks.add_task(
+        track_event,
+        "usage_pack_purchased_mock",
+        str(payment.user_id),
+        {"pack": payment.tier_name},
+    )
+
+    await session.commit()
+
+    return Response(content=f"Mock purchase successful. Payment ID: {payment.id}", media_type="text/plain")

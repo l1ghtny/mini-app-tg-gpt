@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import payment_helpers
@@ -12,7 +12,9 @@ from app.schemas.subscriptions import (
     InitUsagePackPaymentRequest,
     PaymentInitResponse,
     PaymentStatusResponse,
+    MockUsagePackPurchaseRequest,
 )
+from app.core.config import settings
 
 payments = APIRouter(tags=["payments"], prefix="/payments/tbank")
 
@@ -51,3 +53,21 @@ async def tbank_webhook(
 ):
     data = await request.json()
     return await payment_helpers.handle_tbank_webhook(session, background_tasks, data)
+
+
+@payments.post("/mock-usage-pack-purchase", response_class=Response)
+async def mock_usage_pack_purchase(
+    payload: MockUsagePackPurchaseRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Mocks the purchase of a usage pack for testing purposes.
+    It simulates the full flow:
+    1. Init payment (mocked)
+    2. Webhook callback (mocked) -> activates pack
+    """
+    if settings.ENVIRONMENT != 'local':
+        raise HTTPException(status_code=403, detail="Not allowed in production")
+
+    return await payment_helpers.mock_usage_pack_purchase(session, background_tasks, payload)
