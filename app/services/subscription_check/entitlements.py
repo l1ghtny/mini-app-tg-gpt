@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select, func, case, cast
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.models import RequestLedger
+from app.db.models import RequestLedger, utcnow_naive
 from app.db.subscription_tiers import SubscriptionTier, TierModelLimit, UserSubscription, SubscriptionStatus
 
 
@@ -85,7 +85,7 @@ async def usage_window_start_dt(session: AsyncSession, user_id: uuid.UUID, tier:
     )).first()
 
     # Safe fallback (shouldn't happen): calendar month start in Python
-    now = datetime.utcnow()
+    now = utcnow_naive()
     if not sub or not sub.started_at:
         return datetime(now.year, now.month, 1, 0, 0, 0)
 
