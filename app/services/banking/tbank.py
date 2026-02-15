@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import httpx
 from app.core.config import settings
 
@@ -57,7 +57,7 @@ class TBankService:
         calculated_token = self._generate_token(data)
         return received_token == calculated_token
 
-    async def init_payment(self, order_id: str, amount_cents: int, description: str, user_id: str, recurrent: bool = False, receipt: dict = None) -> tuple[str, str]:
+    async def init_payment(self, order_id: str, amount_cents: int, description: str, user_id: str, recurrent: bool = False, receipt: dict = None, data: dict = None) -> tuple[str, str]:
         """
         Initializes payment and returns (PaymentURL, PaymentId)
         """
@@ -68,6 +68,9 @@ class TBankService:
             "Description": description,
             "DATA": {"user_id": user_id}
         }
+
+        if data:
+            payload["DATA"].update(data)
 
         if recurrent:
             payload["Recurrent"] = "Y"
@@ -133,10 +136,33 @@ class TBankService:
 
         return active_cards
 
-    async def charge(self, payment_id: str, rebill_id: str) -> bool:
+    async def charge_qr(self, payment_id: str, account_token: str) -> bool:
         """
-        Executes a recurring charge using a previous PaymentId (from Init) and RebillId.
+        Executes a recurring SBP charge using AccountToken.
         """
+        payload = {
+            "TerminalKey": self.terminal_key,
+            "PaymentId": payment_id,
+            "AccountToken": account_token,
+        }
+        payload["Token"] = self._generate_token(payload)
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{self.base_url}/ChargeQr", json=payload)
+            data = resp.json()
+
+        if not data.get("Success", False):
+            raise Exception(f"TBank ChargeQr Failed: {data.get('Message')} {data.get('Details', '')}")
+
+        return True
+
+    async def charge(self, payment_id: str, rebill_id: str, payment_type: str = "card") -> bool:
+        """
+        Executes a recurring charge using a previous PaymentId (from Init) and RebillId (or AccountToken).
+        """
+        if payment_type == "sbp":
+            return await self.charge_qr(payment_id, rebill_id)
+
         payload = {
             "TerminalKey": self.terminal_key,
             "PaymentId": payment_id,

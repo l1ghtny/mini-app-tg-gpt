@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import logging
 import sys
 import os
@@ -16,7 +16,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.config import settings
 from app.db.database import engine
 from app.db.subscription_tiers import UserSubscription, SubscriptionTier, SubscriptionStatus
-from app.db.models import PaymentMethod, Payment
+from app.db.models import PaymentMethod, Payment, PaymentMethodType
 from app.services.banking.tbank import tbank_service
 
 # Setup Logging
@@ -27,12 +27,19 @@ MAX_RETRIES = 3  # Days/Attempts to keep trying before downgrading
 
 
 async def execute_recurring_charge(session: AsyncSession, user_id: uuid.UUID, amount_cents: int, description: str,
-                                   rebill_id: str) -> bool:
+                                   payment_method: PaymentMethod) -> bool:
     """
-    Executes the TBank charge logic using a specific RebillId.
+    Executes the TBank charge logic using a saved payment method (Card or SBP).
     Returns True if TBank accepted the request (Init successful).
     Returns False if TBank rejected it immediately (Error).
     """
+    # Determine token and type
+    token = payment_method.rebill_id if payment_method.type == PaymentMethodType.card.value else payment_method.account_token
+
+    if not token:
+        logger.error(f"User {user_id}: Payment method {payment_method.id} has no token.")
+        return False
+
     # Create local Payment record
     payment = Payment(
         user_id=user_id,
@@ -46,6 +53,13 @@ async def execute_recurring_charge(session: AsyncSession, user_id: uuid.UUID, am
 
     try:
         # 1. INIT
+        # For recurring charge (Charge or ChargeQr), we first Init.
+        # Note: ChargeQr flow might differ slightly?
+        # Documentation for ChargeQr says: "Метод проводит платеж по привязанному счету по QR через СБП."
+        # Arguments: TerminalKey, PaymentId, AccountToken.
+        # PaymentId comes from Init.
+        # So yes, we Init first.
+
         payment_url, tbank_payment_id = await tbank_service.init_payment(
             order_id=str(payment.id),
             amount_cents=amount_cents,
@@ -59,7 +73,11 @@ async def execute_recurring_charge(session: AsyncSession, user_id: uuid.UUID, am
         await session.commit()
 
         # 2. CHARGE
-        await tbank_service.charge(payment_id=tbank_payment_id, rebill_id=rebill_id)
+        await tbank_service.charge(
+            payment_id=tbank_payment_id,
+            rebill_id=token,
+            payment_type=payment_method.type
+        )
 
         logger.info(f"User {user_id}: Recurring charge initiated (Payment {payment.id})")
         return True
@@ -147,7 +165,7 @@ async def main():
                                 old_sub.user_id,
                                 int(tier.price_cents * 100),
                                 f"Subscription: {tier.name}",
-                                payment_method.rebill_id
+                                payment_method
                             )
 
                             # D. EXTEND GRACE PERIOD (Crucial Step)

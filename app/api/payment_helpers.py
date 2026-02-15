@@ -8,7 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
 from app.core.metrics import track_event, track_value
-from app.db.models import Payment, PaymentMethod, PaymentProductType, AppUser
+from app.db.models import Payment, PaymentMethod, PaymentProductType, AppUser, PaymentMethodType
 from app.db.subscription_tiers import (
     SubscriptionStatus,
     SubscriptionTier,
@@ -74,6 +74,9 @@ async def init_subscription_payment(
         }
 
     try:
+        # Pass QR: true to enable SBP recurring flow if selected by user
+        extra_data = {"QR": "true"}
+
         payment_url, tbank_id = await tbank_service.init_payment(
             order_id=str(payment.id),
             amount_cents=amount_cents,
@@ -81,6 +84,7 @@ async def init_subscription_payment(
             user_id=str(user.id),
             recurrent=True,
             receipt=receipt_data,
+            data=extra_data,
         )
 
         payment.tbank_payment_id = tbank_id
@@ -151,6 +155,13 @@ async def init_usage_pack_payment(
         }
 
     try:
+        # Pass QR: true to enable SBP options (though usage packs might not be recurring,
+        # passing it doesn't hurt if Recurrent is False, but usually we don't save token for one-off)
+        # However, InitPaymentRequest for usage pack has recurrent=False in original code.
+        # If we want to allow saving card for future usage packs, we'd need recurrent=True.
+        # Original code had recurrent=False. I'll stick to False but pass data just in case.
+        extra_data = {"QR": "true"}
+
         payment_url, tbank_id = await tbank_service.init_payment(
             order_id=str(payment.id),
             amount_cents=amount_cents,
@@ -158,6 +169,7 @@ async def init_usage_pack_payment(
             user_id=str(user.id),
             recurrent=False,
             receipt=receipt_data,
+            data=extra_data,
         )
 
         payment.tbank_payment_id = tbank_id
@@ -224,7 +236,7 @@ async def handle_tbank_webhook(
 
     if new_status == "CONFIRMED" and success:
         try:
-            await save_payment_method(session, payment.user_id)
+            await save_payment_method(session, payment.user_id, data)
         except Exception as exc:
             logger.error("Failed to save payment method: %s", exc)
 
@@ -315,7 +327,55 @@ async def activate_usage_pack(session: AsyncSession, payment: Payment) -> None:
     session.add(pack_purchase)
 
 
-async def save_payment_method(session: AsyncSession, user_id: uuid.UUID) -> None:
+async def save_payment_method(session: AsyncSession, user_id: uuid.UUID, webhook_data: dict = None) -> None:
+    """
+    Saves payment method from webhook data (preferred) or fetches card list (fallback).
+    Supports both Card (RebillId) and SBP (AccountToken).
+    """
+    # 1. Try to find AccountToken (SBP)
+    if webhook_data and "AccountToken" in webhook_data:
+        account_token = webhook_data["AccountToken"]
+        phone = webhook_data.get("Phone")
+
+        # Check if exists
+        existing = await session.exec(select(PaymentMethod).where(PaymentMethod.account_token == account_token))
+        if existing.first():
+            return
+
+        method = PaymentMethod(
+            user_id=user_id,
+            account_token=account_token,
+            type=PaymentMethodType.sbp.value,
+            phone=phone,
+            is_default=True
+        )
+        session.add(method)
+        logger.info(f"Saved SBP payment method for user {user_id}")
+        return
+
+    # 2. Try to find RebillId (Card) in webhook
+    if webhook_data and "RebillId" in webhook_data:
+        rebill_id = str(webhook_data["RebillId"])
+        pan = webhook_data.get("Pan", "****")
+        # Ensure we don't save duplicates
+        existing = await session.exec(select(PaymentMethod).where(PaymentMethod.rebill_id == rebill_id))
+        if existing.first():
+            return
+
+        method = PaymentMethod(
+            user_id=user_id,
+            rebill_id=rebill_id,
+            type=PaymentMethodType.card.value,
+            pan=pan,
+            card_type="Card", # Usually not provided in webhook detail, can be updated later if needed
+            exp_date=webhook_data.get("ExpDate", ""),
+            is_default=True,
+        )
+        session.add(method)
+        logger.info(f"Saved Card payment method for user {user_id} from webhook")
+        return
+
+    # 3. Fallback: GetCardList (Legacy behavior for Cards)
     cards = await tbank_service.get_card_list(str(user_id))
     if not cards:
         return
@@ -337,8 +397,10 @@ async def save_payment_method(session: AsyncSession, user_id: uuid.UUID) -> None
         card_type=str(card_type),
         exp_date=exp,
         is_default=True,
+        type=PaymentMethodType.card.value
     )
     session.add(method)
+    logger.info(f"Saved Card payment method for user {user_id} from GetCardList")
 
 
 async def mock_usage_pack_purchase(
