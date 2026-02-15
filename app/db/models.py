@@ -237,19 +237,33 @@ class Payment(SQLModel, table=True):
     user: "AppUser" = Relationship()
 
 
+class PaymentMethodType(str, Enum):
+    card = "card"
+    sbp = "sbp"
+
+
 class PaymentMethod(SQLModel, table=True):
     __tablename__ = "payment_methods"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
 
-    # TBank "RebillId" - the token we use to charge money later
-    rebill_id: str = Field(index=True)
+    # Existing card token
+    rebill_id: Optional[str] = Field(default=None, index=True)
+
+    # New SBP token
+    account_token: Optional[str] = Field(default=None, index=True)
+
+    # Type discriminator
+    type: str = Field(default="card", index=True)
 
     # Card info for UI (e.g., "Visa •••• 4242")
     card_type: str = Field(default="Unknown")
     pan: str = Field(default="****")
     exp_date: str = Field(default="")  # MMYY
+
+    # Phone for SBP if available
+    phone: Optional[str] = Field(default=None)
 
     is_default: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow_naive)
@@ -273,5 +287,3 @@ class ImageQualityPricing(SQLModel, table=True):
     credit_cost: float = Field(default=1.0)  # How many 'daily bucket units' this consumes
     description: Optional[str] = None  # e.g., "1024x1024, fast"
     is_active: bool = Field(default=True)
-
-
