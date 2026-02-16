@@ -7,6 +7,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.access_codes import access_codes
 from app.api.auth import auth
+from app.api.chat_folders import router as chat_folders_router
 from app.api.images import images
 from app.api.metrics import metrics
 from app.api.payments import payments
@@ -102,6 +103,7 @@ dark = APIRouter()
 fsd.install(dark, path="/docs")
 app.include_router(dark)
 app.include_router(chat_router, prefix="/api/v1", tags=['conversations'])
+app.include_router(chat_folders_router, prefix="/api/v1", tags=['chat-folders'])
 app.include_router(auth, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
 app.include_router(user_usage, prefix="/api/v1")

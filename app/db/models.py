@@ -8,6 +8,7 @@ from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey,
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 import uuid
+import uuid6
 
 ## Helper function for default_factory
 def utcnow_naive():
@@ -22,17 +23,36 @@ class AppUser(SQLModel, table=True):
     has_sent_first_message: bool = Field(default=False)
     campaign: Optional[str] = Field(default=None, index=True)
 
+    default_prompt: str = Field(default="Ты помощник, готовый ответить на вопросы.")
+
     conversations: List["Conversation"] = Relationship(back_populates="user")
+    folders: List["ChatFolder"] = Relationship(back_populates="user")
     requests: List["RequestLedger"] = Relationship(back_populates="user")
     payments: List["Payment"] = Relationship(back_populates="user")
+
+
+class ChatFolder(SQLModel, table=True):
+    __tablename__ = "chat_folder"
+
+    id: uuid.UUID = Field(default_factory=uuid6.uuid7, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    name: str = Field(index=True)
+    prompt: Optional[str] = Field(default=None)
+
+    user: AppUser = Relationship(back_populates="folders")
+    conversations: List["Conversation"] = Relationship(
+        back_populates="folder",
+        sa_relationship_kwargs={"cascade": "all"}
+    )
+
 
 class Conversation(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     title: str = Field(index=True, default="New Chat")
     user_id: uuid.UUID = Field(foreign_key="app_user.id")
+    folder_id: Optional[uuid.UUID] = Field(default=None, foreign_key="chat_folder.id", index=True)
     model: str = Field(default="gpt-5-nano")
     image_model: str = Field(default="gpt-image-1.5", nullable=True)
-    system_prompt: Optional[str] = Field(default="Ты помощник, готовый ответить на вопросы.")
     image_quality: str = Field(default="low") # low, medium, high
 
     updated_at: datetime = Field(
@@ -42,6 +62,7 @@ class Conversation(SQLModel, table=True):
 
 
     user: AppUser = Relationship(back_populates="conversations")
+    folder: Optional[ChatFolder] = Relationship(back_populates="conversations")
     messages: List["Message"] = Relationship(
         back_populates="conversation",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}

@@ -38,12 +38,12 @@ class Message(BaseModel):
 class ConversationAPI(BaseModel):
     id: uuid.UUID
     title: str
+    folder_id: Optional[uuid.UUID] = None
 
-    class ConversationAPI(BaseModel):
-        model_config = ConfigDict(
-            from_attributes=True,
-            extra="ignore",
-        )
+    model_config = ConfigDict(
+        from_attributes=True,
+        extra="ignore",
+    )
 
 
 class ConversationWithMessages(ConversationAPI):
@@ -65,11 +65,12 @@ class NewMessageRequest(BaseModel):
 
 
 class UpdateConversationSettingsRequest(BaseModel):
-    system_prompt: Optional[str] = None
+    folder_id: Optional[uuid.UUID] = None
     model: Optional[AllowedModels] = None
     image_model: Optional[AllowedImageModels] = None
     tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
-    image_quality: Optional[ImageQualitySetting]
+    image_quality: Optional[ImageQualitySetting] = None
+    # system_prompt removed as per requirement
 
 
 class MessageCreated(BaseModel):
