@@ -1,7 +1,7 @@
 """add SBP fields to PaymentMethod
 
 Revision ID: f1a2b3c4d5e6
-Revises: e5b7d7f2a9c1
+Revises: 69a355643294
 Create Date: 2026-02-15 12:00:00.000000
 
 """
