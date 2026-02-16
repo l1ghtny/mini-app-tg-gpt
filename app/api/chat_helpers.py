@@ -17,7 +17,7 @@ from app.api.dependencies import get_available_models
 from app.api.helpers import generate_and_publish, load_conversation
 from app.core.metrics import track_event
 from app.db import models
-from app.db.models import AppUser, Conversation, Message, RequestLedger
+from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import (
     MessageCreated,
@@ -125,8 +125,10 @@ async def handle_create_message(
             )
         raise HTTPException(status_code=402, detail="image_quota_exceeded")
 
+    resolved_system_prompt = _resolve_system_prompt(conversation, current_user)
+
     system_prompt = _apply_image_quota_notice(
-        conversation.system_prompt,
+        resolved_system_prompt,
         image_allowed=image_entitlement.allowed,
         throttle_reason=image_entitlement.throttle_reason,
         wait_time=image_entitlement.wait_time,
@@ -325,8 +327,14 @@ async def handle_update_conversation_settings(
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if request.system_prompt is not None:
-        conversation.system_prompt = request.system_prompt
+    req_data = request.model_dump(exclude_unset=True)
+    if "folder_id" in req_data:
+        folder_id = req_data["folder_id"]
+        if folder_id is not None:
+             folder = await session.get(ChatFolder, folder_id)
+             if not folder or folder.user_id != current_user.id:
+                  raise HTTPException(status_code=404, detail="Folder not found")
+        conversation.folder_id = folder_id
 
     if request.model is not None:
         conversation.model = request.model
@@ -441,7 +449,24 @@ async def _load_conversation_for_user(
     conversation_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> Conversation:
-    conversation = await load_conversation(session, conversation_id)
+    # Eagerly load folder to access its prompt
+    query = (
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .options(selectinload(Conversation.folder))
+    )
+    conversation = (await session.exec(query)).first()
+
+    if not conversation:
+        # Check standard load if not found, or just raise 404
+        # Original logic raised 403 if found but wrong user.
+        # But here I'm querying by ID only first to check existence?
+        # No, simpler: Query by ID, then check user_id.
+        pass
+
+    if not conversation:
+         raise HTTPException(status_code=404, detail="Conversation not found")
+
     if conversation.user_id != user_id:
         raise HTTPException(
             status_code=403,
@@ -570,6 +595,12 @@ def _apply_image_quota_notice(
         "Tell the user to click on their profile in the sidebar menu and purchase additional usage packs. "
         "Don't suggest prompts for usage in other apps.\n\n"
     )
+
+
+def _resolve_system_prompt(conversation: Conversation, user: AppUser) -> str:
+    if conversation.folder and conversation.folder.prompt:
+        return conversation.folder.prompt
+    return user.default_prompt
 
 
 async def _create_user_message(
