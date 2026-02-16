@@ -47,6 +47,7 @@ async def generate_and_publish(
     async with AsyncSession(engine, expire_on_commit=False) as session:
         buffers: dict[int, str] = {}
         last_ckpt: dict[int, int] = {}
+        content_cache: dict[int, MessageContent] = {}
         assistant_message_id_str = str(assistant_message_id)
 
         try:
@@ -76,6 +77,7 @@ async def generate_and_publish(
                     image_entitlement_pack_id=image_entitlement_pack_id,
                     buffers=buffers,
                     last_ckpt=last_ckpt,
+                    content_cache=content_cache,
                 )
 
         except Exception as e:
@@ -99,6 +101,7 @@ async def _handle_stream_event(
         image_entitlement_pack_id: Optional[uuid.UUID],
         buffers: dict[int, str],
         last_ckpt: dict[int, int],
+        content_cache: dict[int, MessageContent],
 ) -> None:
     event_type = ev.get("type")
 
@@ -111,14 +114,14 @@ async def _handle_stream_event(
 
         checkpoint_bytes = settings.CHECKPOINT_BYTES
         if len(buffers[i]) - last_ckpt.get(i, 0) >= checkpoint_bytes:
-            await _upsert_text(assistant_message_id, i, buffers[i], session=session)
+            await _upsert_text(assistant_message_id, i, buffers[i], session=session, content_cache=content_cache)
             last_ckpt[i] = len(buffers[i])
         return
 
     if event_type == "text.done":
         i = ev["index"]
         if i in buffers:
-            await _upsert_text(assistant_message_id, i, buffers[i], session=session)
+            await _upsert_text(assistant_message_id, i, buffers[i], session=session, content_cache=content_cache)
 
         await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
         print("UPDATED REQUEST LEDGER")
@@ -188,25 +191,37 @@ def _extract_image_quality(
     return None
 
 
-async def _upsert_text(message_id, ordinal, text, *, session: AsyncSession | None = None):
+async def _upsert_text(message_id, ordinal, text, *, session: AsyncSession | None = None, content_cache: dict[int, MessageContent] | None = None):
     if session is None:
         async with AsyncSession(engine, expire_on_commit=False) as session:
             await _upsert_text(message_id, ordinal, text, session=session)
         return
 
-    res = await session.exec(
-        select(MessageContent).where(
-            MessageContent.message_id == message_id,
-            MessageContent.ordinal == ordinal,
-            MessageContent.type == "text",
+    row = None
+    if content_cache is not None and ordinal in content_cache:
+        row = content_cache[ordinal]
+
+    if not row:
+        res = await session.exec(
+            select(MessageContent).where(
+                MessageContent.message_id == message_id,
+                MessageContent.ordinal == ordinal,
+                MessageContent.type == "text",
+            )
         )
-    )
-    row = res.first()
+        row = res.first()
+        if content_cache is not None and row:
+            content_cache[ordinal] = row
+
     if row:
         row.value = text
+        session.add(row)
     else:
         row = MessageContent(message_id=message_id, ordinal=ordinal, type="text", value=text)
         session.add(row)
+        if content_cache is not None:
+            content_cache[ordinal] = row
+
     await session.commit()
 
 

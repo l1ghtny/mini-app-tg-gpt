@@ -79,51 +79,15 @@ async def handle_create_message(
     if existing_response:
         return existing_response
 
-    text_entitlement = await _require_text_entitlement(session, current_user, request.model)
-    await _enforce_gpt52_safeguard(session, current_user, request.model)
     conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
 
-    image_model, image_quality = _resolve_image_settings(request, conversation)
-    image_entitlement = await _require_image_entitlement(
-        session,
-        current_user.id,
+    (
+        text_entitlement,
+        image_entitlement,
+        tools,
         image_model,
         image_quality,
-    )
-    tools = await _build_tools(
-        image_entitlement.allowed,
-        image_model,
-        image_quality,
-    )
-
-    if request.tool_choice == "image_generation" and not image_entitlement.allowed:
-        if image_entitlement.throttle_reason == "pacing":
-            wait_seconds = (
-                int(image_entitlement.wait_time.total_seconds())
-                if image_entitlement.wait_time
-                else 0
-            )
-            raise HTTPException(
-                status_code=429,
-                detail={"error": "image_pacing_active", "wait_seconds": wait_seconds},
-            )
-        if image_entitlement.throttle_reason == "quality_restricted":
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "image_quality_not_allowed",
-                    "requested_quality": image_quality,
-                },
-            )
-        if image_entitlement.throttle_reason == "model_restricted":
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "image_model_not_allowed",
-                    "requested_model": image_model,
-                },
-            )
-        raise HTTPException(status_code=402, detail="image_quota_exceeded")
+    ) = await _check_entitlements(session, current_user, request, conversation)
 
     resolved_system_prompt = _resolve_system_prompt(conversation, current_user)
 
@@ -388,6 +352,68 @@ async def _get_idempotency_response(
     )
 
 
+async def _check_entitlements(
+    session: AsyncSession,
+    user: AppUser,
+    request: NewMessageRequest,
+    conversation: Conversation,
+) -> tuple[TextEntitlementSelection, ImageEntitlementSelection, list, str, str]:
+    text_entitlement = await _require_text_entitlement(session, user, request.model)
+    await _enforce_gpt52_safeguard(session, user, request.model)
+
+    image_model, image_quality = _resolve_image_settings(request, conversation)
+    image_entitlement = await _require_image_entitlement(
+        session,
+        user.id,
+        image_model,
+        image_quality,
+    )
+    tools = await _build_tools(
+        image_entitlement.allowed,
+        image_model,
+        image_quality,
+    )
+
+    if request.tool_choice == "image_generation" and not image_entitlement.allowed:
+        _raise_image_entitlement_error(image_entitlement, image_model, image_quality)
+
+    return text_entitlement, image_entitlement, tools, image_model, image_quality
+
+
+def _raise_image_entitlement_error(
+    image_entitlement: ImageEntitlementSelection,
+    image_model: str,
+    image_quality: str,
+) -> None:
+    if image_entitlement.throttle_reason == "pacing":
+        wait_seconds = (
+            int(image_entitlement.wait_time.total_seconds())
+            if image_entitlement.wait_time
+            else 0
+        )
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "image_pacing_active", "wait_seconds": wait_seconds},
+        )
+    if image_entitlement.throttle_reason == "quality_restricted":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "image_quality_not_allowed",
+                "requested_quality": image_quality,
+            },
+        )
+    if image_entitlement.throttle_reason == "model_restricted":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "image_model_not_allowed",
+                "requested_model": image_model,
+            },
+        )
+    raise HTTPException(status_code=402, detail="image_quota_exceeded")
+
+
 async def _require_text_entitlement(
     session: AsyncSession,
     user: AppUser,
@@ -650,11 +676,11 @@ async def _build_history_for_openai(
     result = await session.exec(
         select(Message)
         .where(Message.conversation_id == conversation_id)
+        .options(selectinload(Message.content))
         .order_by(Message.created_at.asc())
     )
     msgs = result.all()
     for msg in msgs:
-        await session.refresh(msg, attribute_names=["content"])
         parts = []
         for c in msg.content:
             if c.type == "text" and msg.role == "user":

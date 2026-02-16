@@ -1,11 +1,12 @@
 ﻿import uuid
 from datetime import datetime, timedelta, UTC
+from typing import Optional
 
 from sqlalchemy.orm import selectinload
 from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.models import RequestLedger
+from app.db.models import RequestLedger, ImageQualityPricing
 from app.db.subscription_tiers import (
     SubscriptionTier,
     TierModelLimit,
@@ -344,27 +345,18 @@ async def remaining_images(session: AsyncSession, user_id: uuid.UUID, tier: Subs
 
     start_dt = await usage_window_start_dt(session, user_id, tier)
 
-    statement = select(
-        RequestLedger.model_name,
-        func.count(RequestLedger.id)
-    ).where(
-        RequestLedger.user_id == user_id,
-        _tier_usage_filter(tier.id),
-        RequestLedger.feature == "image",
-        RequestLedger.state.in_(("reserved", "consumed")),
-        RequestLedger.created_at >= start_dt
-    ).group_by(RequestLedger.model_name)
+    used_total = (await session.exec(
+        select(func.coalesce(func.sum(RequestLedger.cost), 0))
+        .where(
+            RequestLedger.user_id == user_id,
+            _tier_usage_filter(tier.id),
+            RequestLedger.feature == "image",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.created_at >= start_dt
+        )
+    )).one()
 
-    results = (await session.exec(statement)).all()
-
-    used_total = 0
-    for model_name, count in results:
-        if model_name == "gpt-image-1.5":
-            used_total += (count * 2)
-        else:
-            used_total += count
-
-    return max(0, cap - used_total)
+    return max(0, cap - int(used_total))
 
 
 def _tier_usage_source(tier: SubscriptionTier) -> str:
@@ -405,69 +397,365 @@ def _sort_usage_packs(packs: list[UserUsagePack]) -> list[UserUsagePack]:
     return sorted(packs, key=sort_key)
 
 
+async def get_tier_usage_counts(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    tier: SubscriptionTier,
+    model_names: list[str]
+) -> dict[str, int]:
+    if not model_names:
+        return {}
+
+    start_dt = await usage_window_start_dt(session, user_id, tier)
+
+    statement = (
+        select(RequestLedger.model_name, func.count())
+        .where(
+            RequestLedger.user_id == user_id,
+            _tier_usage_filter(tier.id),
+            RequestLedger.feature == "text",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.created_at >= start_dt,
+            RequestLedger.model_name.in_(model_names)
+        )
+        .group_by(RequestLedger.model_name)
+    )
+
+    results = (await session.exec(statement)).all()
+    return {r[0]: r[1] for r in results}
+
+
+async def get_pack_usage_counts(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    pack_ids: list[uuid.UUID],
+    model_names: list[str]
+) -> dict[tuple[uuid.UUID, str], int]:
+    if not pack_ids or not model_names:
+        return {}
+
+    statement = (
+        select(RequestLedger.usage_pack_id, RequestLedger.model_name, func.count())
+        .where(
+            RequestLedger.user_id == user_id,
+            RequestLedger.usage_pack_id.in_(pack_ids),
+            RequestLedger.feature == "text",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.model_name.in_(model_names)
+        )
+        .group_by(RequestLedger.usage_pack_id, RequestLedger.model_name)
+    )
+
+    results = (await session.exec(statement)).all()
+    # Map (pack_id, model_name) -> count
+    return {(r[0], r[1]): r[2] for r in results}
+
+
+async def get_tier_image_usage_sums(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    tier: SubscriptionTier,
+    image_models: list[str]
+) -> dict[str, float]:
+    if not image_models:
+        return {}
+
+    start_dt = await usage_window_start_dt(session, user_id, tier)
+
+    statement = (
+        select(RequestLedger.model_name, func.coalesce(func.sum(RequestLedger.cost), 0))
+        .where(
+            RequestLedger.user_id == user_id,
+            _tier_usage_filter(tier.id),
+            RequestLedger.feature == "image",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.created_at >= start_dt,
+            RequestLedger.model_name.in_(image_models)
+        )
+        .group_by(RequestLedger.model_name)
+    )
+
+    results = (await session.exec(statement)).all()
+    return {r[0]: r[1] for r in results}
+
+
+async def get_pack_image_usage_sums(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    pack_ids: list[uuid.UUID],
+    image_models: list[str]
+) -> dict[tuple[uuid.UUID, str], float]:
+    if not pack_ids or not image_models:
+        return {}
+
+    statement = (
+        select(RequestLedger.usage_pack_id, RequestLedger.model_name, func.coalesce(func.sum(RequestLedger.cost), 0))
+        .where(
+            RequestLedger.user_id == user_id,
+            RequestLedger.usage_pack_id.in_(pack_ids),
+            RequestLedger.feature == "image",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.model_name.in_(image_models)
+        )
+        .group_by(RequestLedger.usage_pack_id, RequestLedger.model_name)
+    )
+
+    results = (await session.exec(statement)).all()
+    return {(r[0], r[1]): r[2] for r in results}
+
+
+async def list_text_entitlements_bulk(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    model_names: Optional[list[str]] = None,
+    subscriptions: Optional[list[UserSubscription]] = None,
+    usage_packs: Optional[list[UserUsagePack]] = None,
+) -> dict[str, dict]:
+    # 1. Get active subs and packs
+    subs = subscriptions if subscriptions is not None else await get_active_subscriptions(session, user_id)
+    packs = usage_packs if usage_packs is not None else await get_active_usage_packs(session, user_id)
+
+    # 2. Determine models if not provided
+    if model_names is None:
+        model_names_set = set()
+        for sub in subs:
+            for limit in sub.tier.tier_model_limits:
+                model_names_set.add(limit.model_name)
+        for pack in packs:
+            for limit in pack.pack.pack_model_limits:
+                model_names_set.add(limit.model_name)
+        model_names = list(model_names_set)
+
+    if not model_names:
+        return {}
+
+    # 3. Fetch usage counts
+    # For tiers
+    tier_usages = {}  # tier_id -> {model_name -> count}
+    for sub in subs:
+        tier_usages[sub.tier.id] = await get_tier_usage_counts(session, user_id, sub.tier, model_names)
+
+    # For packs
+    pack_ids = [p.id for p in packs]
+    pack_usage_map = await get_pack_usage_counts(session, user_id, pack_ids, model_names)
+
+    # 4. Build result
+    result = {}
+
+    sorted_subs = _sort_subscriptions(subs)
+    sorted_packs = _sort_usage_packs(packs)
+
+    for model_name in model_names:
+        tier_entries = []
+        for sub in sorted_subs:
+            tier = sub.tier
+            limit = next((l for l in tier.tier_model_limits if l.model_name == model_name), None)
+            if not limit:
+                continue
+
+            used = tier_usages.get(tier.id, {}).get(model_name, 0)
+            cap = limit.monthly_requests or 0
+
+            if cap == -1:
+                remaining = -1
+            elif cap == 0:
+                remaining = 0
+            else:
+                remaining = max(0, cap - used)
+
+            tier_entries.append({
+                "kind": "tier",
+                "source": _tier_usage_source(tier),
+                "tier_id": str(tier.id),
+                "usage_pack_id": None,
+                "pack_id": None,
+                "name": tier.name,
+                "cap": cap,
+                "used": used,
+                "remaining": remaining,
+                "expires_at": None,
+                "purchased_at": None,
+            })
+
+        pack_entries = []
+        for pack in sorted_packs:
+            limit = next((l for l in pack.pack.pack_model_limits if l.model_name == model_name), None)
+            if not limit:
+                continue
+
+            used = pack_usage_map.get((pack.id, model_name), 0)
+            cap = limit.request_credits or 0
+
+            if cap == -1:
+                remaining = -1
+            elif cap == 0:
+                remaining = 0
+            else:
+                remaining = max(0, cap - used)
+
+            pack_entries.append({
+                "kind": "pack",
+                "source": pack.source.value,
+                "tier_id": None,
+                "usage_pack_id": str(pack.id),
+                "pack_id": str(pack.pack_id),
+                "name": pack.pack.name,
+                "cap": cap,
+                "used": used,
+                "remaining": remaining,
+                "expires_at": pack.expires_at,
+                "purchased_at": pack.purchased_at,
+            })
+
+        entitlements = tier_entries + pack_entries
+        selected = next((e for e in tier_entries if e["remaining"] > 0 or e["remaining"] == -1), None)
+        if not selected:
+            selected = next((e for e in pack_entries if e["remaining"] > 0 or e["remaining"] == -1), None)
+
+        total_remaining = sum(e["remaining"] for e in entitlements if e["remaining"] != -1)
+
+        result[model_name] = {
+            "entitlements": entitlements,
+            "selected": selected,
+            "total_remaining": total_remaining,
+        }
+
+    return result
+
+
 async def list_text_entitlements(
     session: AsyncSession,
     user_id: uuid.UUID,
     model_name: str,
 ) -> dict:
-    tier_entries = []
-    subs = await get_active_subscriptions(session, user_id)
-    for sub in _sort_subscriptions(subs):
-        tier = sub.tier
-        limit = next((l for l in tier.tier_model_limits if l.model_name == model_name), None)
-        if not limit:
-            continue
-        remaining = await remaining_requests_for_model(session, user_id, tier.id, model_name)
-        cap = limit.monthly_requests or 0
-        used = max(0, cap - remaining) if cap > 0 else 0
-        tier_entries.append({
-            "kind": "tier",
-            "source": _tier_usage_source(tier),
-            "tier_id": str(tier.id),
-            "usage_pack_id": None,
-            "pack_id": None,
-            "name": tier.name,
-            "cap": cap,
-            "used": used,
-            "remaining": remaining,
-            "expires_at": None,
-            "purchased_at": None,
-        })
+    # Use bulk implementation for single model to avoid code duplication
+    bulk_result = await list_text_entitlements_bulk(session, user_id, [model_name])
+    return bulk_result.get(model_name, {
+        "entitlements": [],
+        "selected": None,
+        "total_remaining": 0,
+    })
 
-    pack_entries = []
-    packs = await get_active_usage_packs(session, user_id)
-    for pack in _sort_usage_packs(packs):
-        limit = next((l for l in pack.pack.pack_model_limits if l.model_name == model_name), None)
-        if not limit:
-            continue
-        remaining = await remaining_pack_requests_for_model(session, pack, model_name)
-        cap = limit.request_credits or 0
-        used = max(0, cap - remaining) if cap > 0 else 0
-        pack_entries.append({
-            "kind": "pack",
-            "source": pack.source.value,
-            "tier_id": None,
-            "usage_pack_id": str(pack.id),
-            "pack_id": str(pack.pack_id),
-            "name": pack.pack.name,
-            "cap": cap,
-            "used": used,
-            "remaining": remaining,
-            "expires_at": pack.expires_at,
-            "purchased_at": pack.purchased_at,
-        })
 
-    entitlements = tier_entries + pack_entries
-    selected = next((e for e in tier_entries if e["remaining"] > 0), None)
-    if not selected:
-        selected = next((e for e in pack_entries if e["remaining"] > 0), None)
+async def list_image_entitlements_bulk(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    image_models: Optional[list[str]] = None,
+    subscriptions: Optional[list[UserSubscription]] = None,
+    usage_packs: Optional[list[UserUsagePack]] = None,
+) -> dict[str, dict]:
+    # 1. Get active subs and packs
+    subs = subscriptions if subscriptions is not None else await get_active_subscriptions(session, user_id)
+    packs = usage_packs if usage_packs is not None else await get_active_usage_packs(session, user_id)
 
-    total_remaining = sum(e["remaining"] for e in entitlements)
-    return {
-        "entitlements": entitlements,
-        "selected": selected,
-        "total_remaining": total_remaining,
-    }
+    # 2. Determine models if not provided
+    if image_models is None:
+        image_models_set = set()
+        for sub in subs:
+            for limit in sub.tier.tier_image_model_limits:
+                image_models_set.add(limit.image_model)
+        for pack in packs:
+            for limit in pack.pack.pack_image_model_limits:
+                image_models_set.add(limit.image_model)
+        image_models = list(image_models_set)
+
+    if not image_models:
+        return {}
+
+    # 3. Fetch usage sums
+    tier_usages = {}
+    for sub in subs:
+        tier_usages[sub.tier.id] = await get_tier_image_usage_sums(session, user_id, sub.tier, image_models)
+
+    pack_ids = [p.id for p in packs]
+    pack_usage_map = await get_pack_image_usage_sums(session, user_id, pack_ids, image_models)
+
+    # 4. Build result
+    result = {}
+    sorted_subs = _sort_subscriptions(subs)
+    sorted_packs = _sort_usage_packs(packs)
+
+    for image_model in image_models:
+        tier_entries = []
+        for sub in sorted_subs:
+            tier = sub.tier
+            limit = next((l for l in tier.tier_image_model_limits if l.image_model == image_model), None)
+            if not limit:
+                continue
+
+            used = tier_usages.get(tier.id, {}).get(image_model, 0.0)
+            cap = limit.monthly_requests or 0
+
+            if cap == -1:
+                remaining = -1
+            elif cap == 0:
+                remaining = 0
+            else:
+                remaining = max(0, cap - used)
+
+            source = _tier_usage_source(tier)
+            pacing = None
+            allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
+            allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
+
+            tier_entries.append({
+                "kind": "tier",
+                "source": source,
+                "tier_id": str(tier.id),
+                "usage_pack_id": None,
+                "pack_id": None,
+                "name": tier.name,
+                "cap": cap,
+                "used": used,
+                "remaining_credits": remaining,
+                "pacing": pacing,
+                "daily_image_limit": tier.daily_image_limit,
+                "allowed_image_qualities": allowed_qualities,
+                "allowed_image_models": allowed_models,
+                "expires_at": None,
+                "purchased_at": None,
+            })
+
+        pack_entries = []
+        for pack in sorted_packs:
+            limit = next((l for l in pack.pack.pack_image_model_limits if l.image_model == image_model), None)
+            if not limit:
+                continue
+
+            used = pack_usage_map.get((pack.id, image_model), 0.0)
+            cap = limit.credit_amount or 0
+
+            if cap == -1:
+                remaining = -1
+            elif cap == 0:
+                remaining = 0
+            else:
+                remaining = max(0, cap - used)
+
+            pack_entries.append({
+                "kind": "pack",
+                "source": pack.source.value,
+                "tier_id": None,
+                "usage_pack_id": str(pack.id),
+                "pack_id": str(pack.pack_id),
+                "name": pack.pack.name,
+                "cap": cap,
+                "used": used,
+                "remaining_credits": remaining,
+                "expires_at": pack.expires_at,
+                "purchased_at": pack.purchased_at,
+                "daily_image_limit": None,
+            })
+
+        entitlements = tier_entries + pack_entries
+        total_remaining_credits = sum(e["remaining_credits"] for e in entitlements if e["remaining_credits"] != -1)
+
+        result[image_model] = {
+            "entitlements": entitlements,
+            "total_remaining_credits": total_remaining_credits,
+        }
+
+    return result
 
 
 async def list_image_entitlements(
@@ -475,68 +763,11 @@ async def list_image_entitlements(
     user_id: uuid.UUID,
     image_model: str,
 ) -> dict:
-    tier_entries = []
-    subs = await get_active_subscriptions(session, user_id)
-    for sub in _sort_subscriptions(subs):
-        tier = sub.tier
-        limit = next((l for l in tier.tier_image_model_limits if l.image_model == image_model), None)
-        if not limit:
-            continue
-        remaining = await remaining_image_requests_for_model(session, user_id, tier.id, image_model)
-        cap = limit.monthly_requests or 0
-        used = max(0, cap - remaining) if cap > 0 else 0
-        source = _tier_usage_source(tier)
-        pacing = None
-        allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
-        allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
-        tier_entries.append({
-            "kind": "tier",
-            "source": source,
-            "tier_id": str(tier.id),
-            "usage_pack_id": None,
-            "pack_id": None,
-            "name": tier.name,
-            "cap": cap,
-            "used": used,
-            "remaining_credits": remaining,
-            "pacing": pacing,
-            "daily_image_limit": tier.daily_image_limit,
-            "allowed_image_qualities": allowed_qualities,
-            "allowed_image_models": allowed_models,
-            "expires_at": None,
-            "purchased_at": None,
-        })
-
-    pack_entries = []
-    packs = await get_active_usage_packs(session, user_id)
-    for pack in _sort_usage_packs(packs):
-        limit = next((l for l in pack.pack.pack_image_model_limits if l.image_model == image_model), None)
-        if not limit:
-            continue
-        remaining = await remaining_pack_image_requests_for_model(session, pack, image_model)
-        cap = limit.credit_amount or 0
-        used = max(0, cap - remaining) if cap > 0 else 0
-        pack_entries.append({
-            "kind": "pack",
-            "source": pack.source.value,
-            "tier_id": None,
-            "usage_pack_id": str(pack.id),
-            "pack_id": str(pack.pack_id),
-            "name": pack.pack.name,
-            "cap": cap,
-            "used": used,
-            "remaining_credits": remaining,
-            "expires_at": pack.expires_at,
-            "purchased_at": pack.purchased_at,
-            "daily_image_limit": None,
-        })
-
-    entitlements = tier_entries + pack_entries
-    total_remaining_credits = sum(e["remaining_credits"] for e in entitlements)
-    return {
-        "entitlements": entitlements,
-        "total_remaining_credits": total_remaining_credits,
-    }
+    bulk_result = await list_image_entitlements_bulk(session, user_id, [image_model])
+    return bulk_result.get(image_model, {
+        "entitlements": [],
+        "total_remaining_credits": 0,
+    })
 
 
 async def select_text_entitlement(

@@ -11,8 +11,8 @@ from app.services.subscription_check.entitlements import (
     get_active_tier,
     get_active_subscriptions,
     get_active_usage_packs,
-    list_image_entitlements,
-    list_text_entitlements,
+    list_image_entitlements_bulk,
+    list_text_entitlements_bulk,
     remaining_images,
 )
 from app.services.subscription_check.pacing import check_image_pacing
@@ -32,15 +32,19 @@ async def get_text_usage(session: AsyncSession, user) -> UserTextUsageResponse:
         for limit in pack.pack.pack_model_limits:
             model_names.add(limit.model_name)
 
+    sorted_model_names = sorted(model_names)
+    bulk_entitlements = await list_text_entitlements_bulk(session, user.id, sorted_model_names)
+
     models = []
-    for model_name in sorted(model_names):
-        ent = await list_text_entitlements(session, user.id, model_name)
-        models.append({
-            "model": model_name,
-            "total_remaining": ent["total_remaining"],
-            "selected": ent["selected"],
-            "entitlements": ent["entitlements"],
-        })
+    for model_name in sorted_model_names:
+        ent = bulk_entitlements.get(model_name)
+        if ent:
+            models.append({
+                "model": model_name,
+                "total_remaining": ent["total_remaining"],
+                "selected": ent["selected"],
+                "entitlements": ent["entitlements"],
+            })
 
     return UserTextUsageResponse(status="active", models=models)
 
@@ -91,8 +95,8 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
     if not image_models:
         return UserImageUsageResponse(status="active", models=[])
 
-    quality_allowed_by_model: dict[TierImageModelLimit.image_model, list[TierImageQualityLimit.quality]]
-
+    sorted_image_models = sorted(image_models)
+    bulk_entitlements = await list_image_entitlements_bulk(session, user.id, sorted_image_models)
 
     pricing_rows = (await session.exec(
         select(ImageQualityPricing)
@@ -107,21 +111,34 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
         pricing_by_model.setdefault(row.image_model, []).append(row)
 
     models = []
-    for image_model in sorted(image_models):
-        breakdown = await list_image_entitlements(session, user.id, image_model)
+    for image_model in sorted_image_models:
+        breakdown = bulk_entitlements.get(image_model)
+        if not breakdown:
+            continue
         entitlements = breakdown["entitlements"]
         total_remaining_credits = breakdown["total_remaining_credits"]
 
-        if image_model == any(pack.pack.pack_image_model_limits for pack in packs):
-            quality_allowed_by_model = {{image_model}: ['low', 'medium', 'high']}
+        # Check if this model is enabled by any pack
+        is_in_packs = False
+        for pack in packs:
+            for limit in pack.pack.pack_image_model_limits:
+                if limit.image_model == image_model:
+                    is_in_packs = True
+                    break
+            if is_in_packs:
+                break
+
+        allowed_qualities = set()
+        if is_in_packs:
+            allowed_qualities = {'low', 'medium', 'high'}
         else:
             for ent in entitlements:
                 if ent["kind"] == "tier":
-                    quality_allowed_by_model = {image_model: ent["allowed_image_qualities"]}
+                    allowed_qualities.update(ent.get("allowed_image_qualities", []))
 
         qualities = []
         for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: p.quality):
-            if pricing.quality not in quality_allowed_by_model[image_model]:
+            if pricing.quality not in allowed_qualities:
                 continue
 
             cost = pricing.credit_cost or 1.0

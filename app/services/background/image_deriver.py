@@ -98,6 +98,10 @@ async def ensure_openai_compatible_image_url(
         # Not our bucket / unknown domain → let OpenAI fetch it as-is
         return url_or_key
 
+    # Optimization: If it's a derived image, we know we created it and it is compatible.
+    if key.startswith("derived/"):
+        return _public_url(key)
+
     # HEAD → content-type
     meta = await head_object(key)
     mime = (meta.get("ContentType") or "application/octet-stream").lower()
