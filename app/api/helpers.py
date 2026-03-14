@@ -2,7 +2,7 @@
 import hashlib
 import uuid
 from pprint import pprint
-from typing import Optional, Iterable
+from typing import Any, Optional, Iterable
 
 from fastapi import HTTPException
 from openai.types.beta import FileSearchToolParam
@@ -39,7 +39,7 @@ async def generate_and_publish(
         tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
         instructions: Optional[str] = None,
         model: Optional[str] = "gpt-5-nano",
-        tool_choice: Optional[str] = "auto",
+        tool_choice: Optional[str | dict[str, Any]] = "auto",
         request_id: Optional[str] = None,
         image_entitlement_tier_id: Optional[uuid.UUID] = None,
         image_entitlement_pack_id: Optional[uuid.UUID] = None,

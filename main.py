@@ -67,20 +67,21 @@ if settings.SENTRY_DSN:
 
 
 
-origins = [
-    "http://localhost:5172",
-    "http://127.0.0.1:5172",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-    "https://gpt-mini-app.lightny.pro",
-    "http://192.168.1.137:5173",
-    "http://192.168.1.137:4173",
-    "https://gpt-mini-app-ru.lightny.pro",
-    "https://gpt-mini-app-dev.lightny.pro",
-]
+# origins = [
+#     "http://localhost:5172",
+#     "http://127.0.0.1:5172",
+#     "http://localhost:5173",
+#     "http://127.0.0.1:5173",
+#     "http://localhost:4173",
+#     "http://127.0.0.1:4173",
+#     "https://gpt-mini-app.lightny.pro",
+#     "http://192.168.1.137:5173",
+#     "http://192.168.1.137:4173",
+#     "https://gpt-mini-app-ru.lightny.pro",
+#     "https://gpt-mini-app-dev.lightny.pro",
+# ]
 
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,

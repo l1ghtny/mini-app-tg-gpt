@@ -2,7 +2,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import BackgroundTasks, HTTPException, Request, Response
 from redis.asyncio import Redis
@@ -40,6 +40,13 @@ from app.services.subscription_check.entitlements import (
 from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
 from app.services.tasks import generate_and_save_title
+
+_TOOL_TYPE_ALIASES = {
+    "web_search_preview": "web_search",
+    "web_search_preview_2025_03_11": "web_search",
+    "web_search_2025_08_26": "web_search",
+}
+_BASIC_TOOL_CHOICES = {"auto", "none", "required"}
 
 
 @dataclass(frozen=True)
@@ -84,10 +91,14 @@ async def handle_create_message(
     (
         text_entitlement,
         image_entitlement,
-        tools,
+        available_tools,
         image_model,
         image_quality,
     ) = await _check_entitlements(session, current_user, request, conversation)
+    tools, request_tool_choice, ledger_tool_choice = _resolve_openai_tooling(
+        request.tool_choice,
+        available_tools,
+    )
 
     resolved_system_prompt = _resolve_system_prompt(conversation, current_user)
 
@@ -112,15 +123,13 @@ async def handle_create_message(
         model_name=request.model,
         feature="text",
         cost=image_entitlement.cost,
-        tool_choice=request.tool_choice,
+        tool_choice=ledger_tool_choice,
         tier_id=text_entitlement.tier_id,
         usage_pack_id=text_entitlement.usage_pack_id,
     )
 
     history_for_openai = await _build_history_for_openai(session, conversation_id)
     redis_bus = RedisEventBus(bus)
-
-    request_tool_choice = request.tool_choice if request.tool_choice != [] else "none"
 
     _queue_generation(
         background_tasks,
@@ -374,10 +383,117 @@ async def _check_entitlements(
         image_quality,
     )
 
-    if request.tool_choice == "image_generation" and not image_entitlement.allowed:
+    if _is_image_generation_requested(request.tool_choice) and not image_entitlement.allowed:
         _raise_image_entitlement_error(image_entitlement, image_model, image_quality)
 
     return text_entitlement, image_entitlement, tools, image_model, image_quality
+
+
+def _normalize_tool_name(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    raw = value.strip().lower()
+    if not raw:
+        return None
+    return _TOOL_TYPE_ALIASES.get(raw, raw)
+
+
+def _extract_tool_type(tool: Any) -> str | None:
+    if isinstance(tool, dict):
+        tool_type = tool.get("type")
+    else:
+        tool_type = getattr(tool, "type", None)
+    return tool_type if isinstance(tool_type, str) and tool_type else None
+
+
+def _serialize_tool_choice_for_ledger(tool_choice: Any) -> str:
+    if isinstance(tool_choice, list):
+        normalized = []
+        seen = set()
+        for item in tool_choice:
+            tool_name = _normalize_tool_name(item)
+            if not tool_name or tool_name in seen:
+                continue
+            seen.add(tool_name)
+            normalized.append(tool_name)
+        return ",".join(normalized) if normalized else "none"
+
+    normalized = _normalize_tool_name(tool_choice)
+    return normalized or "auto"
+
+
+def _is_image_generation_requested(tool_choice: Any) -> bool:
+    if isinstance(tool_choice, list):
+        return any(_normalize_tool_name(item) == "image_generation" for item in tool_choice)
+    return _normalize_tool_name(tool_choice) == "image_generation"
+
+
+def _resolve_openai_tooling(
+    request_tool_choice: Any,
+    available_tools: list,
+) -> tuple[list, str | dict[str, Any], str]:
+    ledger_choice = _serialize_tool_choice_for_ledger(request_tool_choice)
+
+    tool_by_type: dict[str, Any] = {}
+    for tool in available_tools:
+        tool_type = _extract_tool_type(tool)
+        normalized_type = _normalize_tool_name(tool_type)
+        if normalized_type and normalized_type not in tool_by_type:
+            tool_by_type[normalized_type] = tool
+
+    default_tools = list(tool_by_type.values())
+    if not default_tools:
+        return [], "none", ledger_choice
+
+    if isinstance(request_tool_choice, list):
+        normalized_choices = []
+        seen_choices = set()
+        for choice in request_tool_choice:
+            normalized = _normalize_tool_name(choice)
+            if not normalized or normalized in seen_choices:
+                continue
+            seen_choices.add(normalized)
+            normalized_choices.append(normalized)
+
+        if not normalized_choices:
+            return [], "none", ledger_choice
+
+        selected_tools = [tool_by_type[name] for name in normalized_choices if name in tool_by_type]
+        if not selected_tools:
+            return default_tools, "auto", ledger_choice
+
+        allowed_tool_defs = []
+        for tool in selected_tools:
+            tool_type = _extract_tool_type(tool)
+            if tool_type:
+                allowed_tool_defs.append({"type": tool_type})
+
+        if not allowed_tool_defs:
+            return selected_tools, "auto", ledger_choice
+
+        return (
+            selected_tools,
+            {"type": "allowed_tools", "mode": "auto", "tools": allowed_tool_defs},
+            ledger_choice,
+        )
+
+    normalized_choice = _normalize_tool_name(request_tool_choice)
+
+    if normalized_choice in _BASIC_TOOL_CHOICES:
+        return default_tools, normalized_choice, ledger_choice
+
+    if normalized_choice and normalized_choice in tool_by_type:
+        selected_tool = tool_by_type[normalized_choice]
+        selected_type = _extract_tool_type(selected_tool)
+        if selected_type:
+            return (
+                [selected_tool],
+                {"type": "allowed_tools", "mode": "required", "tools": [{"type": selected_type}]},
+                ledger_choice,
+            )
+        return [selected_tool], "required", ledger_choice
+
+    return default_tools, "auto", ledger_choice
 
 
 def _raise_image_entitlement_error(
@@ -706,7 +822,7 @@ def _queue_generation(
     bus: RedisEventBus,
     instructions: str | None,
     model: str,
-    tool_choice: str | None,
+    tool_choice: str | dict[str, Any] | None,
     tools: list,
     request_id: str,
     image_entitlement_tier_id: Optional[uuid.UUID],
