@@ -129,3 +129,11 @@ async def handle_move_conversation(
     await session.commit()
     await session.refresh(conversation)
     return conversation
+
+
+async def handle_folder_search(query: str, session: AsyncSession):
+    async with session:
+        result = (await session.exec(select(ChatFolder).where(ChatFolder.name.ilike(f"%{query}%")))).all()
+        return result
+
+

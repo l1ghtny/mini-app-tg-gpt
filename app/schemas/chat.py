@@ -70,7 +70,15 @@ class UpdateConversationSettingsRequest(BaseModel):
     image_model: Optional[AllowedImageModels] = None
     tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
     image_quality: Optional[ImageQualitySetting] = None
-    # system_prompt removed as per requirement
+
+
+class ConversationInfo(BaseModel):
+    name: str
+    model: AllowedModels
+    image_model: AllowedImageModels
+    folder_id: Optional[uuid.UUID] = None
+    tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
+    image_quality: ImageQualitySetting
 
 
 class MessageCreated(BaseModel):

@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from fastapi import APIRouter, Depends, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -92,3 +92,8 @@ async def move_conversation(
         session=session,
         current_user=current_user,
     )
+
+@router.get("/chat-folders/search/{string}", response_model=Sequence[ChatFolder])
+async def search_folders(string: str, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+    return await chat_folder_helpers.handle_folder_search(query=string, session=session)
+

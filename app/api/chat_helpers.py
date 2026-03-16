@@ -2,7 +2,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from fastapi import BackgroundTasks, HTTPException, Request, Response
 from redis.asyncio import Redis
@@ -24,7 +24,7 @@ from app.schemas.chat import (
     NewMessageRequest,
     RequestExists,
     RenameRequest,
-    UpdateConversationSettingsRequest,
+    UpdateConversationSettingsRequest, ConversationInfo,
 )
 from app.services.background.image_deriver import (
     ensure_openai_compatible_image_url,
@@ -870,3 +870,22 @@ async def _track_message_metrics(
         str(user.id),
         {"model": model},
     )
+
+async def handle_get_conversation(conversation_id: uuid.UUID, session: AsyncSession) -> ConversationInfo:
+    async with session:
+        conversation = (await session.exec(select(Conversation).where(Conversation.id == conversation_id))).first()
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        conversation_info = ConversationInfo(
+            name=conversation.title,
+            folder_id=conversation.folder_id,
+            model=conversation.model,
+            image_model=conversation.image_model,
+            image_quality=conversation.image_quality
+        )
+        return conversation_info
+
+async def handle_conversation_search(query: str, session: AsyncSession) -> Sequence[Conversation]:
+    async with session:
+        result = (await session.exec(select(Conversation).where(Conversation.title.ilike(f"%{query}%")))).all()
+        return result

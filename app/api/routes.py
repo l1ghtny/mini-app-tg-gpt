@@ -18,7 +18,7 @@ from app.schemas.chat import (
     NewMessageRequest,
     RenameRequest,
     RequestExists,
-    UpdateConversationSettingsRequest,
+    UpdateConversationSettingsRequest, ConversationInfo,
 )
 
 router = APIRouter()
@@ -162,3 +162,13 @@ async def update_conversation_settings(
         session=session,
         current_user=current_user,
     )
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationInfo)
+async def get_conversation(conversation_id: uuid.UUID, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+    return await chat_helpers.handle_get_conversation(conversation_id=conversation_id, session=session)
+
+
+@router.get("conversations/search/{string}")
+async def search_conversations(string: str, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+    return await chat_helpers.handle_conversation_search(query=string, session=session)

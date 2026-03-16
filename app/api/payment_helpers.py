@@ -74,6 +74,7 @@ async def init_subscription_payment(
         }
 
     try:
+        # TODO: Need to figure out how to have the QR code thing
         # Pass QR: true to enable SBP recurring flow if selected by user
         extra_data = {"QR": "true"}
 
@@ -82,9 +83,8 @@ async def init_subscription_payment(
             amount_cents=amount_cents,
             description=f"Subscription: {tier.name}",
             user_id=str(user.id),
-            recurrent=True,
+            recurrent="Y",
             receipt=receipt_data,
-            data=extra_data,
         )
 
         payment.tbank_payment_id = tbank_id
