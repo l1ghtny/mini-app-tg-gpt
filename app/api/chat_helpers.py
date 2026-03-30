@@ -247,7 +247,11 @@ async def handle_sse_conversation(
     *,
     conversation_id: uuid.UUID,
     redis: Redis,
+    session: AsyncSession,
+    current_user: AppUser,
 ) -> Response:
+    await _load_conversation_for_user(session, conversation_id, current_user.id)
+
     message_id = await redis.get(f"conv:{conversation_id}:current")
     if not message_id:
         return Response(status_code=204)
@@ -591,7 +595,6 @@ async def _load_conversation_for_user(
     conversation_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> Conversation:
-    # Eagerly load folder to access its prompt
     query = (
         select(Conversation)
         .where(Conversation.id == conversation_id)
@@ -600,14 +603,7 @@ async def _load_conversation_for_user(
     conversation = (await session.exec(query)).first()
 
     if not conversation:
-        # Check standard load if not found, or just raise 404
-        # Original logic raised 403 if found but wrong user.
-        # But here I'm querying by ID only first to check existence?
-        # No, simpler: Query by ID, then check user_id.
-        pass
-
-    if not conversation:
-         raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     if conversation.user_id != user_id:
         raise HTTPException(
@@ -804,7 +800,7 @@ async def _build_history_for_openai(
             elif c.type == "text" and msg.role == "assistant":
                 parts.append({"type": "output_text", "text": c.value})
             elif (c.type in ("image_url", "image")) and msg.role == "user":
-                compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_side=2048)
+                compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_size=2048)
                 parts.append({"type": "input_image", "image_url": compatible_url})
                 if compatible_url != c.value:
                     await rewrite_message_image_url(session, c.value, compatible_url, message_id=msg.id)
@@ -871,21 +867,43 @@ async def _track_message_metrics(
         {"model": model},
     )
 
-async def handle_get_conversation(conversation_id: uuid.UUID, session: AsyncSession) -> ConversationInfo:
-    async with session:
-        conversation = (await session.exec(select(Conversation).where(Conversation.id == conversation_id))).first()
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        conversation_info = ConversationInfo(
-            name=conversation.title,
-            folder_id=conversation.folder_id,
-            model=conversation.model,
-            image_model=conversation.image_model,
-            image_quality=conversation.image_quality
+async def handle_get_conversation(
+    *,
+    conversation_id: uuid.UUID,
+    session: AsyncSession,
+    current_user: AppUser,
+) -> ConversationInfo:
+    conversation = (
+        await session.exec(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.user_id == current_user.id,
+            )
         )
-        return conversation_info
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
-async def handle_conversation_search(query: str, session: AsyncSession) -> Sequence[Conversation]:
-    async with session:
-        result = (await session.exec(select(Conversation).where(Conversation.title.ilike(f"%{query}%")))).all()
-        return result
+    return ConversationInfo(
+        name=conversation.title,
+        folder_id=conversation.folder_id,
+        model=conversation.model,
+        image_model=conversation.image_model,
+        image_quality=conversation.image_quality,
+    )
+
+
+async def handle_conversation_search(
+    *,
+    query: str,
+    session: AsyncSession,
+    current_user: AppUser,
+) -> Sequence[Conversation]:
+    return (
+        await session.exec(
+            select(Conversation).where(
+                Conversation.user_id == current_user.id,
+                Conversation.title.ilike(f"%{query}%"),
+            )
+        )
+    ).all()

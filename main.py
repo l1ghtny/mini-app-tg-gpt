@@ -38,7 +38,7 @@ def before_send(event, hint):
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="0.9.3",
+    version="0.9.4",
     docs_url=None
 )
 
@@ -50,7 +50,7 @@ if settings.SENTRY_DSN:
         environment=settings.ENVIRONMENT,
         release=app.version,
         # Capture only 10% of transactions for performance monitoring
-        traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
+        traces_sample_rate=0.1 if settings.ENVIRONMENT in ("production", "production_main_server") else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
         before_send=before_send, # filter non-500 http errors
         send_default_pii=True, # send info about http calls (includes AI, currently using for openAI costs)
@@ -64,24 +64,19 @@ if settings.SENTRY_DSN:
             "metrics_aggregator": True,
         },
     )
-
-
-
-# origins = [
-#     "http://localhost:5172",
-#     "http://127.0.0.1:5172",
-#     "http://localhost:5173",
-#     "http://127.0.0.1:5173",
-#     "http://localhost:4173",
-#     "http://127.0.0.1:4173",
-#     "https://gpt-mini-app.lightny.pro",
-#     "http://192.168.1.137:5173",
-#     "http://192.168.1.137:4173",
-#     "https://gpt-mini-app-ru.lightny.pro",
-#     "https://gpt-mini-app-dev.lightny.pro",
-# ]
-
-origins = ["*"]
+origins = [
+    "http://localhost:5172",
+    "http://127.0.0.1:5172",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "https://gpt-mini-app.lightny.pro",
+    "http://192.168.1.137:5173",
+    "http://192.168.1.137:4173",
+    "https://gpt-mini-app-ru.lightny.pro",
+    "https://gpt-mini-app-dev.lightny.pro",
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -94,7 +89,7 @@ app.add_middleware(
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137", "gpt-api-dev.kosh.games"],
+    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137"],
 )
 
 

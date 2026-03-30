@@ -4,12 +4,15 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.api import user_subscription_helpers
 from app.api.dependencies import get_current_user
 from app.db.database import get_session
-from app.schemas.subscriptions import CancelSubscriptionResponse, SubscriptionResponse
+from app.schemas.subscriptions import (
+    ActiveSubscriptionsResponse,
+    CancelSubscriptionResponse,
+)
 
 user_subscription = APIRouter(tags=["user/subscription"], prefix="/user/subscription")
 
 
-@user_subscription.get("/active", response_model=SubscriptionResponse)
+@user_subscription.get("/active", response_model=ActiveSubscriptionsResponse)
 async def get_active_subscription(
     session: AsyncSession = Depends(get_session),
     user=Depends(get_current_user),

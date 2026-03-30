@@ -112,11 +112,14 @@ async def sse_conversation(
     cid: uuid.UUID,
     request: Request,
     r: Redis = Depends(get_redis),
+    session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
     return await chat_helpers.handle_sse_conversation(
         conversation_id=cid,
         redis=r,
+        session=session,
+        current_user=current_user,
     )
 
 
@@ -166,9 +169,17 @@ async def update_conversation_settings(
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationInfo)
 async def get_conversation(conversation_id: uuid.UUID, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
-    return await chat_helpers.handle_get_conversation(conversation_id=conversation_id, session=session)
+    return await chat_helpers.handle_get_conversation(
+        conversation_id=conversation_id,
+        session=session,
+        current_user=current_user,
+    )
 
 
 @router.get("/conversations/search/{string}")
 async def search_conversations(string: str, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
-    return await chat_helpers.handle_conversation_search(query=string, session=session)
+    return await chat_helpers.handle_conversation_search(
+        query=string,
+        session=session,
+        current_user=current_user,
+    )

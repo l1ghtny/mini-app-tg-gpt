@@ -17,6 +17,10 @@ class SubscriptionResponse(BaseModel):
     tier_id: str
 
 
+class ActiveSubscriptionsResponse(BaseModel):
+    active_subscriptions: List[SubscriptionResponse]
+    primary_subscription_id: Optional[str] = None
+
 
 class TierMonthlyLimits(BaseModel):
     model_name: str
