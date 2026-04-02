@@ -63,6 +63,19 @@ async def fetch_access_code_by_id(session: AsyncSession, code_id: str) -> Access
     return access_code
 
 
+async def fetch_access_code_by_id_for_update(session: AsyncSession, code_id: str) -> AccessCode:
+    result = await session.exec(
+        select(AccessCode)
+        .where(AccessCode.id == code_id)
+        .options(selectinload(AccessCode.discounts))
+        .with_for_update()
+    )
+    access_code = result.first()
+    if not access_code:
+        raise HTTPException(status_code=404, detail="Access code not found")
+    return access_code
+
+
 def ensure_access_code_valid(access_code: AccessCode, now: datetime | None = None) -> None:
     now = now or datetime.now()
     if access_code.expires_at and access_code.expires_at < now:

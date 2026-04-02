@@ -52,7 +52,7 @@ async def login_debug(form: OAuth2PasswordRequestForm = Depends(),
     if not settings.DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not Found")
 
-    telegram_id = telegram_id or int(form.username)#
+    telegram_id = telegram_id or int(form.username)
 
     access_token, bonus_granted = await process_login(session, telegram_id)
 

@@ -187,9 +187,15 @@ async def init_usage_pack_payment(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-async def get_payment_status(session: AsyncSession, payment_id: uuid.UUID) -> PaymentStatusResponse:
+async def get_payment_status(
+    session: AsyncSession,
+    payment_id: uuid.UUID,
+    user: AppUser,
+) -> PaymentStatusResponse:
     payment = await session.get(Payment, payment_id)
     if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    if payment.user_id != user.id:
         raise HTTPException(status_code=404, detail="Payment not found")
 
     return PaymentStatusResponse(
@@ -209,7 +215,7 @@ async def handle_tbank_webhook(
     data: dict,
 ) -> Response:
     if not tbank_service.verify_notification(data):
-        settings.logger.error("Webhook signature verification failed. Data: %s", data)
+        logger.error("Webhook signature verification failed. Data: %s", data)
         return Response(content="OK", media_type="text/plain")
 
     order_id = data.get("OrderId")

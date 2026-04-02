@@ -31,9 +31,10 @@ async def init_payment(
 @payments.get("/status/{payment_id}", response_model=PaymentStatusResponse)
 async def check_payment_status(
     payment_id: uuid.UUID,
+    user: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    return await payment_helpers.get_payment_status(session, payment_id)
+    return await payment_helpers.get_payment_status(session, payment_id, user)
 
 
 @payments.post("/init-usage-pack", response_model=PaymentInitResponse)

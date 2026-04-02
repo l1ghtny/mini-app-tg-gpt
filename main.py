@@ -80,7 +80,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -89,7 +89,7 @@ app.add_middleware(
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137"],
+    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137", "*.kosh.games"],
 )
 
 

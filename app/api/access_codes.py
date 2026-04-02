@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import access_code_helpers
 from app.api.dependencies import get_current_user
+from app.core.config import settings
 from app.db.database import get_session
 from app.schemas.codes import (
     AccessCodeAdminResponse,
@@ -30,7 +31,7 @@ async def redeem_access_code(
     session: AsyncSession = Depends(get_session),
     user=Depends(get_current_user),
 ):
-    access_code = await access_code_helpers.fetch_access_code_by_id(session, code_id)
+    access_code = await access_code_helpers.fetch_access_code_by_id_for_update(session, code_id)
     access_code_helpers.ensure_access_code_valid(access_code)
     return await access_code_helpers.redeem_access_code_for_user(session, user, access_code)
 
@@ -41,4 +42,7 @@ async def create_access_code(
     session: AsyncSession = Depends(get_session),
     user=Depends(get_current_user),
 ):
+    if settings.ENVIRONMENT != "local":
+        raise HTTPException(status_code=403, detail="Not allowed in production")
+
     return await access_code_helpers.create_access_code(session, payload)
