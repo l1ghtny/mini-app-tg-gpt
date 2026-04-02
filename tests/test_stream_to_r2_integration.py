@@ -9,11 +9,12 @@ from app.db import models as m
 pytestmark = pytest.mark.skipif(os.getenv("R2_TEST_LIVE") != "1", reason="Set R2_TEST_LIVE=1 in .env.test")
 
 @pytest.mark.asyncio
-async def test_generate_and_publish_with_b64_image_real_r2():
+async def test_generate_and_publish_with_b64_image_real_r2(monkeypatch):
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url, "TEST_DATABASE_URL must be set in .env.test"
 
     engine = create_async_engine(test_db_url, future=True, echo=False)
+    monkeypatch.setattr(helpers, "engine", engine, raising=False)
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 
@@ -41,22 +42,18 @@ async def test_generate_and_publish_with_b64_image_real_r2():
         async def publish(self, mid, ev): self.events.append(ev)
         async def mark_done(self, mid, ok=True, error=None): self._done=(ok,error)
 
-    import app.services.openai_service as svc
-    original = svc.stream_normalized_openai_response
-    svc.stream_normalized_openai_response = fake_stream
-    try:
-        await helpers.generate_and_publish(
-            conversation_id=convo.id,
-            assistant_message_id=msg.id,
-            user_id=user.id,
-            history_for_openai=[{"role":"user","content":[{"type":"input_text","text":"create an image of a cat"}]}],
-            bus=Bus(),
-            instructions="You are helpful.",
-            model="gpt-5-nano",
-            tool_choice="auto",
-        )
-    finally:
-        svc.stream_normalized_openai_response = original
+    monkeypatch.setattr(helpers, "stream_normalized_openai_response", fake_stream, raising=True)
+    await helpers.generate_and_publish(
+        conversation_id=convo.id,
+        assistant_message_id=msg.id,
+        user_id=user.id,
+        history_for_openai=[{"role":"user","content":[{"type":"input_text","text":"create an image of a cat"}]}],
+        bus=Bus(),
+        instructions="You are helpful.",
+        model="gpt-5-nano",
+        tool_choice="auto",
+        tools=[],
+    )
 
     # Read back the image URL
     async with AsyncSession(engine, expire_on_commit=False) as session:

@@ -1,10 +1,14 @@
 import uuid
-from typing import List, Literal, Optional, Iterable
+from typing import List, Literal, Optional, Iterable, Union
 
 from pydantic import BaseModel, ConfigDict
 
 AllowedModels = Literal["gpt-5.2", "gpt-5-mini", "gpt-5-nano"]
+AllowedImageModels = Literal["gpt-image-1.5"]
 AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter", "auto"]
+
+
+ImageQualitySetting = Literal["low", "medium", "high"]
 
 
 class TextContent(BaseModel):
@@ -34,12 +38,12 @@ class Message(BaseModel):
 class ConversationAPI(BaseModel):
     id: uuid.UUID
     title: str
+    folder_id: Optional[uuid.UUID] = None
 
-    class ConversationAPI(BaseModel):
-        model_config = ConfigDict(
-            from_attributes=True,
-            extra="ignore",
-        )
+    model_config = ConfigDict(
+        from_attributes=True,
+        extra="ignore",
+    )
 
 
 class ConversationWithMessages(ConversationAPI):
@@ -55,14 +59,26 @@ class NewMessageRequest(BaseModel):
     role: Literal["user", "assistant"]
     content: List[MessageContent]
     model: AllowedModels
-    tool_choice: Optional[AllowedToolChoices] = "auto"
+    tool_choice: Optional[Union[AllowedToolChoices, List]] = "auto"
+    image_model: Optional[AllowedImageModels] = None
+    image_quality: Optional[ImageQualitySetting] = None
 
 
 class UpdateConversationSettingsRequest(BaseModel):
-    system_prompt: Optional[str] = None
+    folder_id: Optional[uuid.UUID] = None
     model: Optional[AllowedModels] = None
-    image_model: Optional[str] = None
+    image_model: Optional[AllowedImageModels] = None
     tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
+    image_quality: Optional[ImageQualitySetting] = None
+
+
+class ConversationInfo(BaseModel):
+    name: str
+    model: AllowedModels
+    image_model: AllowedImageModels
+    folder_id: Optional[uuid.UUID] = None
+    tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
+    image_quality: ImageQualitySetting
 
 
 class MessageCreated(BaseModel):

@@ -8,6 +8,7 @@ from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey,
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 import uuid
+import uuid6
 
 ## Helper function for default_factory
 def utcnow_naive():
@@ -22,17 +23,37 @@ class AppUser(SQLModel, table=True):
     has_sent_first_message: bool = Field(default=False)
     campaign: Optional[str] = Field(default=None, index=True)
 
+    default_prompt: str = Field(default="Ты помощник, готовый ответить на вопросы.")
+
     conversations: List["Conversation"] = Relationship(back_populates="user")
+    folders: List["ChatFolder"] = Relationship(back_populates="user")
     requests: List["RequestLedger"] = Relationship(back_populates="user")
     payments: List["Payment"] = Relationship(back_populates="user")
+
+
+class ChatFolder(SQLModel, table=True):
+    __tablename__ = "chat_folder"
+
+    id: uuid.UUID = Field(default_factory=uuid6.uuid7, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    name: str = Field(index=True)
+    prompt: Optional[str] = Field(default=None)
+
+    user: AppUser = Relationship(back_populates="folders")
+    conversations: List["Conversation"] = Relationship(
+        back_populates="folder",
+        sa_relationship_kwargs={"cascade": "all"}
+    )
+
 
 class Conversation(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     title: str = Field(index=True, default="New Chat")
     user_id: uuid.UUID = Field(foreign_key="app_user.id")
+    folder_id: Optional[uuid.UUID] = Field(default=None, foreign_key="chat_folder.id", index=True)
     model: str = Field(default="gpt-5-nano")
-    image_model: str = Field(default="gpt-image-1-mini", nullable=True)
-    system_prompt: Optional[str] = Field(default="Ты помощник, готовый ответить на вопросы.")
+    image_model: str = Field(default="gpt-image-1.5", nullable=True)
+    image_quality: str = Field(default="low") # low, medium, high
 
     updated_at: datetime = Field(
         default_factory=utcnow_naive,
@@ -41,6 +62,7 @@ class Conversation(SQLModel, table=True):
 
 
     user: AppUser = Relationship(back_populates="conversations")
+    folder: Optional[ChatFolder] = Relationship(back_populates="conversations")
     messages: List["Message"] = Relationship(
         back_populates="conversation",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
@@ -173,6 +195,10 @@ class State(str, Enum):
     refunded = "refunded"
     failed = "failed"
 
+class PaymentProductType(str, Enum):
+    subscription = "subscription"
+    usage_pack = "usage_pack"
+
 
 class RequestLedger(SQLModel, table=True):
 
@@ -183,6 +209,8 @@ class RequestLedger(SQLModel, table=True):
     """
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    tier_id: Optional[uuid.UUID] = Field(default=None, foreign_key="subscription_tier.id", index=True)
+    usage_pack_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user_usage_pack.id", index=True)
     # nullable references for diagnostics; DO NOT FK so deletes don’t cascade
     conversation_id: Optional[uuid.UUID] = Field(default=None, index=True)
     assistant_message_id: Optional[uuid.UUID] = Field(default=None, index=True)
@@ -190,6 +218,7 @@ class RequestLedger(SQLModel, table=True):
     request_id: str = Field(index=True)  # client- or server-generated; used for idempotency
     model_name: str = Field(index=True)
     feature: str = Field(index=True)
+    cost: float = Field(default=1.0)
 
     state: State = Field(default=State.reserved, index=True)
     tool_choice: Optional[str] = None     # e.g., "auto" or "image_generation"
@@ -212,6 +241,8 @@ class Payment(SQLModel, table=True):
 
     # We store tier_name directly to preserve history if tiers change
     tier_name: str = Field(index=True)
+    product_type: PaymentProductType = Field(default=PaymentProductType.subscription, index=True)
+    pack_id: Optional[uuid.UUID] = Field(default=None, foreign_key="usage_pack.id", index=True)
 
     # Amount in CENTS (kopecks)
     amount: int = Field(nullable=False)
@@ -227,19 +258,33 @@ class Payment(SQLModel, table=True):
     user: "AppUser" = Relationship()
 
 
+class PaymentMethodType(str, Enum):
+    card = "card"
+    sbp = "sbp"
+
+
 class PaymentMethod(SQLModel, table=True):
     __tablename__ = "payment_methods"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
 
-    # TBank "RebillId" - the token we use to charge money later
-    rebill_id: str = Field(index=True)
+    # Existing card token
+    rebill_id: Optional[str] = Field(default=None, index=True)
+
+    # New SBP token
+    account_token: Optional[str] = Field(default=None, index=True)
+
+    # Type discriminator
+    type: str = Field(default="card", index=True)
 
     # Card info for UI (e.g., "Visa •••• 4242")
     card_type: str = Field(default="Unknown")
     pan: str = Field(default="****")
     exp_date: str = Field(default="")  # MMYY
+
+    # Phone for SBP if available
+    phone: Optional[str] = Field(default=None)
 
     is_default: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow_naive)
@@ -247,3 +292,19 @@ class PaymentMethod(SQLModel, table=True):
     user: "AppUser" = Relationship()
 
 
+class ImageQualityPricing(SQLModel, table=True):
+    """
+    Defines the credit cost for different image qualities.
+    Example rows:
+    - quality="standard", credit_cost=1.0
+    - quality="high",     credit_cost=2.0
+    - quality="ultra",    credit_cost=4.0
+    """
+    __tablename__ = "image_quality_pricing"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    image_model: str = Field(index=True)
+    quality: str = Field()  # e.g., low, medium, high
+    credit_cost: float = Field(default=1.0)  # How many 'daily bucket units' this consumes
+    description: Optional[str] = None  # e.g., "1024x1024, fast"
+    is_active: bool = Field(default=True)

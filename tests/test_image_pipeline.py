@@ -34,6 +34,7 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
     async def fake_stream_normalized_openai_response(*a, **kw):
         # text not required here; just image path
         yield {"type": "part.start", "index": 999, "content_type": "image"}
+        yield {"type": "image.partial", "index": 999, "format": "b64", "data": "partial-b64", "partial_index": 0, "sequence_number": 1}
         yield {"type": "image.ready", "index": 999, "format": "b64", "data": fake_png_b64}
         yield {"type": "done"}
 
@@ -52,7 +53,7 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
         # See real function for reference :contentReference[oaicite:1]{index=1}
         return "https://public.cdn.example/bucket/gen/aa/sha.png"
 
-    async def fake_save_image_url_to_db(image_url: str, ordinal: int, message_id):
+    async def fake_save_image_url_to_db(image_url: str, ordinal: int, message_id, **_kwargs):
         captured["saved"] = (image_url, ordinal, message_id)
 
     monkeypatch.setattr(helpers, "upload_openai_image_to_r2", fake_upload_openai_image_to_r2)
@@ -74,6 +75,7 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
         instructions="You are a helpful assistant.",
         model="gpt-5-nano",
         tool_choice="auto",
+        tools=[],
     )
 
     # ---- 5) Assertions ----
@@ -86,6 +88,11 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
     assert url == "https://public.cdn.example/bucket/gen/aa/sha.png"
     assert ordinal == 999
     assert mid == assistant_message_id
+
+    # c) Partial and final image-url events were published for the frontend stream
+    published_events = [event for kind, _mid, event in bus.events if kind == "publish"]
+    assert any(event.get("type") == "image.partial" and event.get("data") == "partial-b64" for event in published_events)
+    assert any(event.get("type") == "image.url" and event.get("url") == url for event in published_events)
 
     # c) Lifecycle completed
     assert bus.done[1] is True

@@ -28,8 +28,7 @@ async def test_image_flow_records_ledger_and_url(monkeypatch):
         yield {"type":"image.ready","index":1,"format":"b64","data":b64}
         yield {"type":"done"}
 
-    import app.services.openai_service as svc
-    monkeypatch.setattr(svc, "stream_normalized_openai_response", fake_stream, raising=True)
+    monkeypatch.setattr(helpers, "stream_normalized_openai_response", fake_stream, raising=True)
 
     async def fake_upload(data, prefix="gen"):
         return "https://cdn.example/img.png"
@@ -40,7 +39,7 @@ async def test_image_flow_records_ledger_and_url(monkeypatch):
     req_id = str(uuid.uuid4())
     async with AsyncSession(engine, expire_on_commit=False) as s:
         await reserve_request(s, user_id=user.id, conversation_id=convo.id, assistant_message_id=msg.id,
-                              request_id=req_id, model_name="gpt-5-nano", feature="text", tool_choice="auto")
+                              request_id=req_id, model_name="gpt-5-nano", feature="text", cost=1, tool_choice="auto")
 
     class Bus:
         async def publish(self,*a,**k): pass

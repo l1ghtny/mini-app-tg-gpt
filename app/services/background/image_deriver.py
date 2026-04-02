@@ -145,7 +145,7 @@ async def ensure_openai_compatible_image_url(
     ))
     await session.commit()
 
-    await _wait_for_public_reachability(derived_key)
+    await _wait_for_public_reachability(_public_url(derived_key))
 
     return _public_url(derived_key)
 
@@ -179,9 +179,7 @@ async def rewrite_message_image_url(
 async def _wait_for_public_reachability(url: str, max_retries: int = 8, delay: float = 0.75) -> None:
     """
     Polls the public URL to ensure it is reachable AND downloadable before handing it off to OpenAI.
-
-    Important: checking HEAD is not sufficient; some CDNs return 200 for HEAD but GET can still be slow/blocked.
-    We do a small streamed GET to confirm the body can be fetched.
+    HEAD alone can be green while GET is still unavailable on edge/CDN.
     """
     timeout = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -189,15 +187,13 @@ async def _wait_for_public_reachability(url: str, max_retries: int = 8, delay: f
             try:
                 async with client.stream("GET", url, headers={"Range": "bytes=0-65535"}) as resp:
                     if resp.status_code in (200, 206):
-                        # Read a small chunk to ensure the transfer actually starts.
-                        async for _chunk in resp.aiter_bytes():
+                        async for _ in resp.aiter_bytes():
                             return
                     logger.info("Image URL not ready: %s status=%s", url, resp.status_code)
-            except Exception as e:
-                logger.info("Image URL not reachable yet: %s error=%r", url, e)
+            except Exception as exc:
+                logger.info("Image URL not reachable yet: %s error=%r", url, exc)
 
-            # exponential-ish backoff with jitter
             sleep_s = delay * (2 ** min(attempt, 4)) + random.random() * 0.25
             await asyncio.sleep(sleep_s)
 
-        logger.warning("Warning: URL %s did not become downloadable within retries.", url)
+    logger.warning("Warning: URL %s did not become downloadable within retries.", url)

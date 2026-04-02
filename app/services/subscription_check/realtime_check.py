@@ -9,16 +9,22 @@ async def check_tier(current_user, session):
     return tier
 
 
-async def create_tools_list(image_allowed: bool, image_model: str = "gpt-image-1-mini"):
+async def create_tools_list(
+    image_allowed: bool,
+    image_model: str = "gpt-image-1-mini",
+    image_quality: str | None = None,
+):
     base_tools = [WebSearchTool(type="web_search")]
 
     if image_allowed:
         # Dynamic Model Selection
+        quality = image_quality or ("auto" if image_model == "gpt-image-1.5" else "medium")
         base_tools.append(ImageGeneration(
             type="image_generation",
             model=image_model,
-            quality="auto" if image_model == "gpt-image-1.5" else "medium",
+            quality=quality,
             moderation='low',
+            partial_images=2,
         ))
 
     return base_tools

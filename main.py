@@ -7,11 +7,13 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.access_codes import access_codes
 from app.api.auth import auth
+from app.api.chat_folders import router as chat_folders_router
 from app.api.images import images
 from app.api.metrics import metrics
 from app.api.payments import payments
 from app.api.routes import router as chat_router
 from app.api.tiers import tiers
+from app.api.usage_packs import usage_packs
 from app.api.user_subscription import user_subscription
 from app.api.user_usage import user_usage
 from app.core.config import settings
@@ -48,7 +50,7 @@ if settings.SENTRY_DSN:
         environment=settings.ENVIRONMENT,
         release=app.version,
         # Capture only 10% of transactions for performance monitoring
-        traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
+        traces_sample_rate=0.1 if settings.ENVIRONMENT in ("production", "production_main_server") else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
         before_send=before_send, # filter non-500 http errors
         send_default_pii=True, # send info about http calls (includes AI, currently using for openAI costs)
@@ -62,9 +64,6 @@ if settings.SENTRY_DSN:
             "metrics_aggregator": True,
         },
     )
-
-
-
 origins = [
     "http://localhost:5172",
     "http://127.0.0.1:5172",
@@ -75,13 +74,13 @@ origins = [
     "https://gpt-mini-app.lightny.pro",
     "http://192.168.1.137:5173",
     "http://192.168.1.137:4173",
-    "https://gpt-mini-app-ru.lightny.pro"
+    "https://gpt-mini-app-ru.lightny.pro",
+    "https://gpt-mini-app-dev.lightny.pro",
 ]
-
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -90,7 +89,7 @@ app.add_middleware(
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137"],
+    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137", "*.kosh.games"],
 )
 
 
@@ -100,11 +99,13 @@ dark = APIRouter()
 fsd.install(dark, path="/docs")
 app.include_router(dark)
 app.include_router(chat_router, prefix="/api/v1", tags=['conversations'])
+app.include_router(chat_folders_router, prefix="/api/v1", tags=['chat-folders'])
 app.include_router(auth, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
 app.include_router(user_usage, prefix="/api/v1")
 app.include_router(user_subscription, prefix="/api/v1")
 app.include_router(access_codes, prefix="/api/v1")
 app.include_router(tiers, prefix="/api/v1")
+app.include_router(usage_packs, prefix="/api/v1")
 app.include_router(payments, prefix="/api/v1")
 app.include_router(metrics, prefix="/api/v1")

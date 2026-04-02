@@ -29,13 +29,12 @@ async def test_text_request_reserve_and_consume(monkeypatch):
         yield {"type":"text.done","index":0}
         yield {"type":"done"}
 
-    import app.services.openai_service as svc
-    monkeypatch.setattr(svc, "stream_normalized_openai_response", fake_stream, raising=True)
+    monkeypatch.setattr(helpers, "stream_normalized_openai_response", fake_stream, raising=True)
 
     req_id = str(uuid.uuid4())
     async with AsyncSession(engine, expire_on_commit=False) as s:
         await reserve_request(s, user_id=user.id, conversation_id=convo.id, assistant_message_id=msg.id,
-                              request_id=req_id, model_name="gpt-5-nano", feature="text", tool_choice="auto")
+                              request_id=req_id, model_name="gpt-5-nano", feature="text", cost=1, tool_choice="auto")
 
     class Bus:
         async def publish(self,*a,**k): pass

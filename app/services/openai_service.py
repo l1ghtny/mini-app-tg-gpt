@@ -6,15 +6,15 @@ from typing import AsyncGenerator, List, Optional, Dict, Any, Literal, Iterable
 import openai
 from openai import AsyncOpenAI, BadRequestError
 from openai import AuthenticationError, NotFoundError
-from openai.types.responses import FileSearchToolParam, ResponseImageGenCallGeneratingEvent, \
-    ResponseImageGenCallInProgressEvent, ResponseImageGenCallPartialImageEvent, ToolChoiceAllowedParam, \
-    ToolChoiceTypesParam, WebSearchToolParam
+from openai.types.responses import FileSearchToolParam, ToolChoiceAllowedParam, ToolChoiceTypesParam, \
+    WebSearchToolParam
 from openai.types.responses.tool import CodeInterpreter, WebSearchTool, ImageGeneration
 from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.database import get_session, engine
 from app.redis.settings import settings
+from app.core.config import settings as main_settings
 from app.schemas.chat import Message
 from app.services.background.save_openai_usage import log_usage
 
@@ -29,9 +29,11 @@ STYLE_GUIDE = (
 
 client = AsyncOpenAI()
 
+logger = main_settings.custom_logger
+
 
 default_tools = [
-    ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium"),
+    ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium", partial_images=2),
     WebSearchTool(type="web_search")
 ]
 
@@ -49,6 +51,21 @@ async def _retry_delay_s(attempt: int, base: float = 0.8, cap: float = 8.0) -> f
     # exponential backoff with jitter
     exp = min(cap, base * (2 ** attempt))
     return exp + random.random() * 0.25
+
+
+def _is_openai_image_download_timeout(exc: Exception) -> bool:
+    """
+    OpenAI may return a 400 invalid_request_error if it can't fetch an image URL fast enough.
+    We retry these transient URL-download errors.
+    """
+    msg = str(exc)
+    return ("Timeout while downloading" in msg) and (
+        ("param" in msg and "'url'" in msg) or ("param': 'url'" in msg)
+    )
+
+
+async def _retry_delay_s(attempt: int, base: float = 0.8, cap: float = 8.0) -> float:
+    return min(cap, base * (2 ** attempt)) + random.random() * 0.25
 
 
 async def stream_normalized_openai_response(
@@ -89,7 +106,6 @@ async def stream_normalized_openai_response(
     try:
         response = None
         max_openai_retries = 3
-
         for attempt in range(max_openai_retries):
             try:
                 response = await client.responses.create(
@@ -102,17 +118,17 @@ async def stream_normalized_openai_response(
                     service_tier="default",
                 )
                 break
-            except Exception as e:
-                if _is_openai_image_download_timeout(e) and attempt < max_openai_retries - 1:
+            except Exception as exc:
+                if _is_openai_image_download_timeout(exc) and attempt < max_openai_retries - 1:
                     await asyncio.sleep(await _retry_delay_s(attempt))
                     continue
                 raise
 
         # This maps OpenAI event names to our normalised events
         seen_text_part_started: Dict[int, bool] = {}
+        seen_image_part_started: Dict[int, bool] = {}
         try:
             async for event in response:
-                # pprint(event)
                 et = event.type
 
                 # Reasoning “thinking” status
@@ -171,7 +187,9 @@ async def stream_normalized_openai_response(
 
                     if getattr(event.item, "result", None):
                         images_generated += 1
-                        yield {"type": "part.start", "index": event.output_index, "content_type": "image"}  # choose the next ordinal if mixed
+                        if not seen_image_part_started.get(event.output_index):
+                            seen_image_part_started[event.output_index] = True
+                            yield {"type": "part.start", "index": event.output_index, "content_type": "image"}
                         ## There are more parameters you can extract from the ImageGeneration (event.item) object, like: status, quality, revised_prompt, background, output_format
                         yield {
                             "type": "image.ready",
@@ -181,8 +199,31 @@ async def stream_normalized_openai_response(
                         }
                     continue
 
-                elif event == ResponseImageGenCallGeneratingEvent | ResponseImageGenCallInProgressEvent | ResponseImageGenCallPartialImageEvent:
-                    yield {"type": "status", "stage": "image_generation.in_progress"}
+                if et in ("response.image_generation_call.generating", "response.image_generation_call.in_progress"):
+                    output_index = getattr(event, "output_index", 0)
+                    if not seen_image_part_started.get(output_index):
+                        seen_image_part_started[output_index] = True
+                        yield {"type": "part.start", "index": output_index, "content_type": "image"}
+                    yield {
+                        "type": "status",
+                        "stage": "image_generation.in_progress",
+                        "index": output_index,
+                    }
+                    continue
+
+                if et == "response.image_generation_call.partial_image":
+                    output_index = event.output_index
+                    if not seen_image_part_started.get(output_index):
+                        seen_image_part_started[output_index] = True
+                        yield {"type": "part.start", "index": output_index, "content_type": "image"}
+                    yield {
+                        "type": "image.partial",
+                        "index": output_index,
+                        "format": "b64",
+                        "data": event.partial_image_b64,
+                        "partial_index": event.partial_image_index,
+                        "sequence_number": event.sequence_number,
+                    }
                     continue
 
 
@@ -283,6 +324,7 @@ async def generate_conversation_title(first_message: str) -> str:
             temperature=0,
             max_tokens=20,
         )
+        logger.info('Generated conversation title')
         title = response.choices[0].message.content.strip().strip('"').strip('.')
         return title if title else "New Chat"
     except Exception as e:
