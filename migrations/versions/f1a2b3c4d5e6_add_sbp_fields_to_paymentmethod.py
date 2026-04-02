@@ -20,14 +20,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {col["name"] for col in inspector.get_columns('payment_methods')}
+
     # Add new columns
-    op.add_column('payment_methods', sa.Column('account_token', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
-    op.add_column('payment_methods', sa.Column('type', sqlmodel.sql.sqltypes.AutoString(), nullable=False, server_default='card'))
-    op.add_column('payment_methods', sa.Column('phone', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
+    if 'account_token' not in columns:
+        op.add_column('payment_methods', sa.Column('account_token', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
+    if 'type' not in columns:
+        op.add_column('payment_methods', sa.Column('type', sqlmodel.sql.sqltypes.AutoString(), nullable=False, server_default='card'))
+    if 'phone' not in columns:
+        op.add_column('payment_methods', sa.Column('phone', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
 
     # Create indexes for new columns
-    op.create_index(op.f('ix_payment_methods_account_token'), 'payment_methods', ['account_token'], unique=False)
-    op.create_index(op.f('ix_payment_methods_type'), 'payment_methods', ['type'], unique=False)
+    indexes = {idx["name"] for idx in inspector.get_indexes('payment_methods')}
+    account_token_index = op.f('ix_payment_methods_account_token')
+    if account_token_index not in indexes:
+        op.create_index(account_token_index, 'payment_methods', ['account_token'], unique=False)
+    
+    type_index = op.f('ix_payment_methods_type')
+    if type_index not in indexes:
+        op.create_index(type_index, 'payment_methods', ['type'], unique=False)
 
     # Make rebill_id nullable because SBP doesn't have it
     op.alter_column('payment_methods', 'rebill_id',

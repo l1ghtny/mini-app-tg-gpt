@@ -21,27 +21,38 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.create_table(
-        "tier_image_quality_limit",
-        sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("tier_id", sa.Uuid(), nullable=False),
-        sa.Column("quality", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.ForeignKeyConstraint(["tier_id"], ["subscription_tier.id"]),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("tier_id", "quality", name="uq_tier_image_quality"),
-    )
-    op.create_index(
-        op.f("ix_tier_image_quality_limit_tier_id"),
-        "tier_image_quality_limit",
-        ["tier_id"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_tier_image_quality_limit_quality"),
-        "tier_image_quality_limit",
-        ["quality"],
-        unique=False,
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    if not inspector.has_table("tier_image_quality_limit"):
+        op.create_table(
+            "tier_image_quality_limit",
+            sa.Column("id", sa.Uuid(), nullable=False),
+            sa.Column("tier_id", sa.Uuid(), nullable=False),
+            sa.Column("quality", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+            sa.ForeignKeyConstraint(["tier_id"], ["subscription_tier.id"]),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint("tier_id", "quality", name="uq_tier_image_quality"),
+        )
+    
+    indexes = {idx["name"] for idx in inspector.get_indexes("tier_image_quality_limit")}
+    tier_id_index = op.f("ix_tier_image_quality_limit_tier_id")
+    if tier_id_index not in indexes:
+        op.create_index(
+            tier_id_index,
+            "tier_image_quality_limit",
+            ["tier_id"],
+            unique=False,
+        )
+    
+    quality_index = op.f("ix_tier_image_quality_limit_quality")
+    if quality_index not in indexes:
+        op.create_index(
+            quality_index,
+            "tier_image_quality_limit",
+            ["quality"],
+            unique=False,
+        )
 
 
 def downgrade() -> None:
