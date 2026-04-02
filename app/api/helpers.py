@@ -73,6 +73,7 @@ async def generate_and_publish(
                     user_id=user_id,
                     conversation_id=conversation_id,
                     tools=tools,
+                    bus=bus,
                     image_entitlement_tier_id=image_entitlement_tier_id,
                     image_entitlement_pack_id=image_entitlement_pack_id,
                     buffers=buffers,
@@ -97,6 +98,7 @@ async def _handle_stream_event(
         user_id: uuid.UUID,
         conversation_id: uuid.UUID,
         tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
+        bus: RedisEventBus,
         image_entitlement_tier_id: Optional[uuid.UUID],
         image_entitlement_pack_id: Optional[uuid.UUID],
         buffers: dict[int, str],
@@ -131,6 +133,11 @@ async def _handle_stream_event(
         ordinal = ev.get("index", 0)
         url = await upload_openai_image_to_r2(ev["data"], prefix="gen")
         await save_image_url_to_db(url, ordinal, assistant_message_id, session=session)
+        await bus.publish(str(assistant_message_id), {
+            "type": "image.url",
+            "index": ordinal,
+            "url": url,
+        })
 
         image_model = _extract_image_model_name(tools) or "unknown"
         image_quality = _extract_image_quality(tools) or "low"

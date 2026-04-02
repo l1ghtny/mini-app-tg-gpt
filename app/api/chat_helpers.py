@@ -794,6 +794,7 @@ async def _build_history_for_openai(
     msgs = result.all()
     for msg in msgs:
         parts = []
+        assistant_has_image = False
         for c in msg.content:
             if c.type == "text" and msg.role == "user":
                 parts.append({"type": "input_text", "text": c.value})
@@ -804,7 +805,12 @@ async def _build_history_for_openai(
                 parts.append({"type": "input_image", "image_url": compatible_url})
                 if compatible_url != c.value:
                     await rewrite_message_image_url(session, c.value, compatible_url, message_id=msg.id)
-        history.append({"role": msg.role, "content": parts})
+            elif (c.type in ("image_url", "image")) and msg.role == "assistant":
+                assistant_has_image = True
+        if assistant_has_image and not any(part.get("type") == "output_text" for part in parts):
+            parts.append({"type": "output_text", "text": "[Generated an image.]"})
+        if parts:
+            history.append({"role": msg.role, "content": parts})
     return history
 
 

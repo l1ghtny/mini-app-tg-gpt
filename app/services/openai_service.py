@@ -5,9 +5,8 @@ from typing import AsyncGenerator, List, Optional, Dict, Any, Literal, Iterable
 
 from openai import AsyncOpenAI
 from openai import AuthenticationError, NotFoundError
-from openai.types.responses import FileSearchToolParam, ResponseImageGenCallGeneratingEvent, \
-    ResponseImageGenCallInProgressEvent, ResponseImageGenCallPartialImageEvent, ToolChoiceAllowedParam, \
-    ToolChoiceTypesParam, WebSearchToolParam
+from openai.types.responses import FileSearchToolParam, ToolChoiceAllowedParam, ToolChoiceTypesParam, \
+    WebSearchToolParam
 from openai.types.responses.tool import CodeInterpreter, WebSearchTool, ImageGeneration
 from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -33,7 +32,7 @@ logger = main_settings.custom_logger
 
 
 default_tools = [
-    ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium"),
+    ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium", partial_images=2),
     WebSearchTool(type="web_search")
 ]
 
@@ -111,6 +110,7 @@ async def stream_normalized_openai_response(
 
         # This maps OpenAI event names to our normalised events
         seen_text_part_started: Dict[int, bool] = {}
+        seen_image_part_started: Dict[int, bool] = {}
         try:
             async for event in response:
                 et = event.type
@@ -171,7 +171,9 @@ async def stream_normalized_openai_response(
 
                     if getattr(event.item, "result", None):
                         images_generated += 1
-                        yield {"type": "part.start", "index": event.output_index, "content_type": "image"}  # choose the next ordinal if mixed
+                        if not seen_image_part_started.get(event.output_index):
+                            seen_image_part_started[event.output_index] = True
+                            yield {"type": "part.start", "index": event.output_index, "content_type": "image"}
                         ## There are more parameters you can extract from the ImageGeneration (event.item) object, like: status, quality, revised_prompt, background, output_format
                         yield {
                             "type": "image.ready",
@@ -181,8 +183,31 @@ async def stream_normalized_openai_response(
                         }
                     continue
 
-                elif event == ResponseImageGenCallGeneratingEvent | ResponseImageGenCallInProgressEvent | ResponseImageGenCallPartialImageEvent:
-                    yield {"type": "status", "stage": "image_generation.in_progress"}
+                if et in ("response.image_generation_call.generating", "response.image_generation_call.in_progress"):
+                    output_index = getattr(event, "output_index", 0)
+                    if not seen_image_part_started.get(output_index):
+                        seen_image_part_started[output_index] = True
+                        yield {"type": "part.start", "index": output_index, "content_type": "image"}
+                    yield {
+                        "type": "status",
+                        "stage": "image_generation.in_progress",
+                        "index": output_index,
+                    }
+                    continue
+
+                if et == "response.image_generation_call.partial_image":
+                    output_index = event.output_index
+                    if not seen_image_part_started.get(output_index):
+                        seen_image_part_started[output_index] = True
+                        yield {"type": "part.start", "index": output_index, "content_type": "image"}
+                    yield {
+                        "type": "image.partial",
+                        "index": output_index,
+                        "format": "b64",
+                        "data": event.partial_image_b64,
+                        "partial_index": event.partial_image_index,
+                        "sequence_number": event.sequence_number,
+                    }
                     continue
 
 

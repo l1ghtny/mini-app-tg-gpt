@@ -24,6 +24,7 @@ async def create_tools_list(
             model=image_model,
             quality=quality,
             moderation='low',
+            partial_images=2,
         ))
 
     return base_tools
