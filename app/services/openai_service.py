@@ -3,7 +3,8 @@ import random
 import uuid
 from typing import AsyncGenerator, List, Optional, Dict, Any, Literal, Iterable
 
-from openai import AsyncOpenAI
+import openai
+from openai import AsyncOpenAI, BadRequestError
 from openai import AuthenticationError, NotFoundError
 from openai.types.responses import FileSearchToolParam, ToolChoiceAllowedParam, ToolChoiceTypesParam, \
     WebSearchToolParam
@@ -35,6 +36,21 @@ default_tools = [
     ImageGeneration(type="image_generation", model="gpt-image-1-mini", quality="medium", partial_images=2),
     WebSearchTool(type="web_search")
 ]
+
+def _is_openai_image_download_timeout(exc: Exception) -> bool:
+    """
+    OpenAI returns 400 invalid_request_error when it can't download the image URL in time.
+    Example message:
+      "Timeout while downloading https://....png."
+    """
+    s = str(exc)
+    return ("Timeout while downloading" in s) and ("param" in s and "'url'" in s or "param': 'url'" in s)
+
+
+async def _retry_delay_s(attempt: int, base: float = 0.8, cap: float = 8.0) -> float:
+    # exponential backoff with jitter
+    exp = min(cap, base * (2 ** attempt))
+    return exp + random.random() * 0.25
 
 
 def _is_openai_image_download_timeout(exc: Exception) -> bool:
