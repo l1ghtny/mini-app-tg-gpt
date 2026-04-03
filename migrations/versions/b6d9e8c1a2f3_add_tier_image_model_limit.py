@@ -21,28 +21,40 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.create_table(
-        "tier_image_model_limit",
-        sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("tier_id", sa.Uuid(), nullable=False),
-        sa.Column("image_model", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.Column("monthly_requests", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(["tier_id"], ["subscription_tier.id"]),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("tier_id", "image_model", name="uq_tier_image_model"),
-    )
-    op.create_index(
-        op.f("ix_tier_image_model_limit_image_model"),
-        "tier_image_model_limit",
-        ["image_model"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_tier_image_model_limit_tier_id"),
-        "tier_image_model_limit",
-        ["tier_id"],
-        unique=False,
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    if not inspector.has_table("tier_image_model_limit"):
+        op.create_table(
+            "tier_image_model_limit",
+            sa.Column("id", sa.Uuid(), nullable=False),
+            sa.Column("tier_id", sa.Uuid(), nullable=False),
+            sa.Column("image_model", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+            sa.Column("monthly_requests", sa.Integer(), nullable=False),
+            sa.ForeignKeyConstraint(["tier_id"], ["subscription_tier.id"]),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint("tier_id", "image_model", name="uq_tier_image_model"),
+        )
+
+    indexes = {idx["name"] for idx in inspector.get_indexes("tier_image_model_limit")}
+    
+    img_model_index = op.f("ix_tier_image_model_limit_image_model")
+    if img_model_index not in indexes:
+        op.create_index(
+            img_model_index,
+            "tier_image_model_limit",
+            ["image_model"],
+            unique=False,
+        )
+    
+    tier_id_index = op.f("ix_tier_image_model_limit_tier_id")
+    if tier_id_index not in indexes:
+        op.create_index(
+            tier_id_index,
+            "tier_image_model_limit",
+            ["tier_id"],
+            unique=False,
+        )
 
 
 def downgrade() -> None:

@@ -21,15 +21,28 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.add_column("request_ledger", sa.Column("tier_id", sa.Uuid(), nullable=True))
-    op.create_index(op.f("ix_request_ledger_tier_id"), "request_ledger", ["tier_id"], unique=False)
-    op.create_foreign_key(
-        "fk_request_ledger_tier_id_subscription_tier",
-        "request_ledger",
-        "subscription_tier",
-        ["tier_id"],
-        ["id"],
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    columns = {col["name"] for col in inspector.get_columns("request_ledger")}
+    if "tier_id" not in columns:
+        op.add_column("request_ledger", sa.Column("tier_id", sa.Uuid(), nullable=True))
+    
+    indexes = {idx["name"] for idx in inspector.get_indexes("request_ledger")}
+    tier_id_index = op.f("ix_request_ledger_tier_id")
+    if tier_id_index not in indexes:
+        op.create_index(tier_id_index, "request_ledger", ["tier_id"], unique=False)
+    
+    fks = inspector.get_foreign_keys("request_ledger")
+    fk_name = "fk_request_ledger_tier_id_subscription_tier"
+    if not any(fk["name"] == fk_name for fk in fks):
+        op.create_foreign_key(
+            fk_name,
+            "request_ledger",
+            "subscription_tier",
+            ["tier_id"],
+            ["id"],
+        )
 
 
 def downgrade() -> None:
