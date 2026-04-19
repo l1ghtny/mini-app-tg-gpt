@@ -12,6 +12,7 @@ from app.db.models import AppUser, Conversation
 from app.db.database import get_session
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import (
+    CreateConversationRequest,
     ConversationAPI,
     ConversationWithMessages,
     MessageCreated,
@@ -74,12 +75,14 @@ async def stream_message(
 
 @router.post("/conversations", response_model=ConversationAPI)
 async def create_conversation(
+    request: CreateConversationRequest | None = None,
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
     return await chat_helpers.handle_create_conversation(
         session=session,
         current_user=current_user,
+        folder_id=request.folder_id if request else None,
     )
 
 

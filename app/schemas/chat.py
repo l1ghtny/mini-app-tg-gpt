@@ -50,6 +50,10 @@ class ConversationWithMessages(ConversationAPI):
     messages: List[Message] = []
 
 
+class CreateConversationRequest(BaseModel):
+    folder_id: Optional[uuid.UUID] = None
+
+
 class RenameRequest(BaseModel):
     title: str
 

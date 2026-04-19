@@ -194,6 +194,7 @@ async def handle_create_conversation(
     *,
     session: AsyncSession,
     current_user: AppUser,
+    folder_id: uuid.UUID | None = None,
 ) -> Conversation:
     user = await session.get(models.AppUser, current_user.id)
     if not user:
@@ -202,7 +203,16 @@ async def handle_create_conversation(
         await session.commit()
         await session.refresh(user)
 
-    new_conversation = models.Conversation(title="New Chat", user_id=user.id)
+    if folder_id is not None:
+        folder = await session.get(models.ChatFolder, folder_id)
+        if not folder or folder.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+    new_conversation = models.Conversation(
+        title="New Chat",
+        user_id=user.id,
+        folder_id=folder_id,
+    )
     session.add(new_conversation)
     await session.commit()
     await session.refresh(new_conversation)
