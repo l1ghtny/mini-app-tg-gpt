@@ -1,5 +1,8 @@
 ﻿import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from sqlalchemy import Row
 from sqlmodel import select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.models import RequestLedger, ImageQualityPricing
@@ -94,7 +97,7 @@ async def get_image_quality_pricing(
     session: AsyncSession,
     image_model: str,
     quality_name: str,
-) -> ImageQualityPricing | None:
+) -> Row[Any] | None | Any:
     statement = select(ImageQualityPricing).where(
         ImageQualityPricing.image_model == image_model,
         ImageQualityPricing.quality == quality_name,

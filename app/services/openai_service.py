@@ -83,7 +83,7 @@ async def stream_normalized_openai_response(
     Adapts OpenAI Responses API stream into part-oriented events.
     """
 
-    if not tools:
+    if tools is None:
         tools = default_tools
 
     input_tokens = output_tokens = reasoning_tokens = 0

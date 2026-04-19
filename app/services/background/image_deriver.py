@@ -62,25 +62,37 @@ def _flatten_alpha_to_rgb(im: Image.Image) -> Image.Image:
     return im.convert("RGB")
 
 def _transcode(data: bytes, target: str, max_side: int) -> Tuple[bytes, str, bool]:
-    im = Image.open(io.BytesIO(data))
-    im = ImageOps.exif_transpose(im)
-    # downscale
-    if max(im.size) > max_side:
-        im.thumbnail((max_side, max_side))
-    has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
-    buf = io.BytesIO()
-    if target == "jpeg":
-        im = _flatten_alpha_to_rgb(im)
-        im.save(buf, format="JPEG", quality=85, optimize=True)
-        return buf.getvalue(), "image/jpeg", has_alpha
-    elif target == "png":
-        im.save(buf, format="PNG", optimize=True)
-        return buf.getvalue(), "image/png", has_alpha
-    elif target == "webp":
-        im.save(buf, format="WEBP", quality=85, method=6)
-        return buf.getvalue(), "image/webp", has_alpha
-    else:
-        raise ValueError(f"Unsupported target: {target}")
+    with Image.open(io.BytesIO(data)) as im:
+        im = ImageOps.exif_transpose(im)
+        # downscale
+        if max(im.size) > max_side:
+            im.thumbnail((max_side, max_side))
+        has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
+        buf = io.BytesIO()
+        if target == "jpeg":
+            im = _flatten_alpha_to_rgb(im)
+            im.save(buf, format="JPEG", quality=85, optimize=True)
+            return buf.getvalue(), "image/jpeg", has_alpha
+        elif target == "png":
+            im.save(buf, format="PNG", optimize=True)
+            return buf.getvalue(), "image/png", has_alpha
+        elif target == "webp":
+            im.save(buf, format="WEBP", quality=85, method=6)
+            return buf.getvalue(), "image/webp", has_alpha
+        else:
+            raise ValueError(f"Unsupported target: {target}")
+
+
+def _derive_image_sync(original: bytes, mime: str, max_size: int) -> tuple[bytes, str, str]:
+    try:
+        with Image.open(io.BytesIO(original)) as im:
+            has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
+    except Exception:
+        has_alpha = False
+
+    target = _decide_target(mime, has_alpha)
+    converted, converted_mime, _ = _transcode(original, target=target, max_side=max_size)
+    return converted, converted_mime, target
 
 async def ensure_openai_compatible_image_url(
     session: AsyncSession,
@@ -121,16 +133,15 @@ async def ensure_openai_compatible_image_url(
         await _wait_for_public_reachability(_public_url(row.derived_key))
         return _public_url(row.derived_key)
 
-    # Pull original bytes, transcode, and store
+    # Pull original bytes, transcode, and store.
+    # Offload PIL decode/transcode to a worker thread to avoid blocking the event loop.
     original = await get_bytes(key)
-    # Detect alpha to pick target better
-    try:
-        im = Image.open(io.BytesIO(original))
-        has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
-    except Exception:
-        has_alpha = False
-    target = _decide_target(mime, has_alpha)
-    converted, converted_mime, _ = _transcode(original, target=target, max_side=max_size)
+    converted, converted_mime, target = await asyncio.to_thread(
+        _derive_image_sync,
+        original,
+        mime,
+        max_size,
+    )
 
     sha = hashlib.sha256(converted).hexdigest()
     ext = ".jpg" if converted_mime == "image/jpeg" else ".png" if converted_mime == "image/png" else ".webp"

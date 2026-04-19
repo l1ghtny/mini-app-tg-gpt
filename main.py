@@ -38,7 +38,7 @@ def before_send(event, hint):
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="0.9.4",
+    version="0.9.5",
     docs_url=None
 )
 
