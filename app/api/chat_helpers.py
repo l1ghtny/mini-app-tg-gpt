@@ -737,7 +737,7 @@ def _apply_image_quota_notice(
 
 def _resolve_system_prompt(conversation: Conversation, user: AppUser) -> str:
     if conversation.folder and conversation.folder.prompt:
-        return conversation.folder.prompt
+        return "User prompt for this chat:\n\n" + conversation.folder.prompt + "\n\n"
     return user.default_prompt
 
 
