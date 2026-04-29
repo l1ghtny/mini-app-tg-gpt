@@ -25,6 +25,7 @@ from app.schemas.codes import (
 )
 from app.schemas.subscriptions import (
     SubscriptionTierResponse,
+    TierImageModelLimits,
     TierMonthlyLimits,
     UsagePackImageModelLimitResponse,
     UsagePackModelLimitResponse,
@@ -87,6 +88,7 @@ def ensure_access_code_valid(access_code: AccessCode, now: datetime | None = Non
 def _build_tier_response(tier: SubscriptionTier) -> SubscriptionTierResponse:
     allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
     allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
+    image_limit_override = -1 if (tier.daily_image_limit or 0) > 0 else None
     return SubscriptionTierResponse(
         name=tier.name,
         name_ru=tier.name_ru,
@@ -97,6 +99,13 @@ def _build_tier_response(tier: SubscriptionTier) -> SubscriptionTierResponse:
         tier_model_limits=[
             TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests)
             for l in tier.tier_model_limits
+        ],
+        tier_image_model_limits=[
+            TierImageModelLimits(
+                image_model=l.image_model,
+                requests_limit=image_limit_override if image_limit_override is not None else l.monthly_requests,
+            )
+            for l in tier.tier_image_model_limits
         ],
         is_recurring=tier.is_recurring,
         daily_image_limit=tier.daily_image_limit,

@@ -142,12 +142,18 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                 continue
 
             cost = pricing.credit_cost or 1.0
-            remaining = int(math.floor(total_remaining_credits / cost)) if cost > 0 else 0
+            if total_remaining_credits == -1:
+                remaining = -1
+            else:
+                remaining = int(math.floor(total_remaining_credits / cost)) if cost > 0 else 0
 
             sources = []
             for ent in entitlements:
                 ent_remaining_credits = ent["remaining_credits"]
-                ent_remaining = int(math.floor(ent_remaining_credits / cost)) if cost > 0 else 0
+                if ent_remaining_credits == -1:
+                    ent_remaining = -1
+                else:
+                    ent_remaining = int(math.floor(ent_remaining_credits / cost)) if cost > 0 else 0
                 pacing = None
                 if ent["kind"] == "tier" and (ent.get("daily_image_limit") or 0) > 0:
                     daily_target = ent.get("daily_image_limit") or 0
@@ -172,7 +178,7 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                     "usage_pack_id": ent.get("usage_pack_id"),
                     "cap": ent.get("cap"),
                     "used": ent.get("used"),
-                    "remaining": max(0, ent_remaining),
+                    "remaining": ent_remaining if ent_remaining == -1 else max(0, ent_remaining),
                     "remaining_credits": ent_remaining_credits,
                     "pacing": pacing,
                 })
@@ -181,7 +187,7 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                 "quality": pricing.quality,
                 "credit_cost": pricing.credit_cost,
                 "description": pricing.description,
-                "remaining": max(0, remaining),
+                "remaining": remaining if remaining == -1 else max(0, remaining),
                 "remaining_credits": total_remaining_credits,
                 "sources": sources,
             })
