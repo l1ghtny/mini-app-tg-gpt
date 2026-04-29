@@ -31,8 +31,13 @@ class MessageContent(BaseModel):
 
 
 class Message(BaseModel):
+    id: uuid.UUID
     role: str
     content: List[MessageContent]
+    model_config = ConfigDict(
+        from_attributes=True,
+        extra="ignore",
+    )
 
 
 class ConversationAPI(BaseModel):
@@ -91,14 +96,18 @@ class ConversationInfo(BaseModel):
 
 
 class MessageCreated(BaseModel):
+    user_message_id: uuid.UUID
+    assistant_message_id: uuid.UUID
     message_id: uuid.UUID
     stream_url: str
 
 
 class RequestExists(BaseModel):
+    user_message_id: Optional[uuid.UUID] = None
+    assistant_message_id: uuid.UUID
     message_id: uuid.UUID
-    stream_url: Optional[str]
-    messages_url: Optional[str]
+    stream_url: Optional[str] = None
+    messages_url: Optional[str] = None
 
 
 class MessageUpdated(BaseModel):

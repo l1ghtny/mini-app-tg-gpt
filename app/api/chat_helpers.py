@@ -113,7 +113,7 @@ async def handle_create_message(
         image_quality=image_quality,
     )
 
-    await _create_user_message(session, conversation, request, background_tasks)
+    user_msg = await _create_user_message(session, conversation, request, background_tasks)
     assistant_msg = await _create_assistant_message(session, conversation_id)
 
     await reserve_request(
@@ -152,6 +152,8 @@ async def handle_create_message(
     await _track_message_metrics(session, background_tasks, current_user, request.model)
 
     return MessageCreated(
+        user_message_id=user_msg.id,
+        assistant_message_id=assistant_msg.id,
         message_id=assistant_msg.id,
         stream_url=f"/api/v1/conversations/{conversation_id}/messages/{assistant_msg.id}/stream",
     )
@@ -422,6 +424,12 @@ async def _get_idempotency_response(
     if not ledger or not ledger.assistant_message_id:
         return None
 
+    user_message_id = await _find_related_user_message_id(
+        session,
+        conversation_id=conversation_id,
+        assistant_message_id=ledger.assistant_message_id,
+    )
+
     link = await _choose_link_for_message(
         session,
         bus,
@@ -431,12 +439,16 @@ async def _get_idempotency_response(
     )
     if link["stream_url"]:
         return RequestExists(
-            message_id=link["message_id"],
+            user_message_id=user_message_id,
+            assistant_message_id=ledger.assistant_message_id,
+            message_id=ledger.assistant_message_id,
             stream_url=link["stream_url"],
         )
 
     return RequestExists(
-        message_id=link["message_id"],
+        user_message_id=user_message_id,
+        assistant_message_id=ledger.assistant_message_id,
+        message_id=ledger.assistant_message_id,
         messages_url=link["messages_url"],
     )
 
@@ -703,6 +715,28 @@ async def _load_messages_for_conversation(
     if include_content:
         query = query.options(selectinload(Message.content))
     return (await session.exec(query)).all()
+
+
+async def _find_related_user_message_id(
+    session: AsyncSession,
+    *,
+    conversation_id: uuid.UUID,
+    assistant_message_id: uuid.UUID,
+) -> uuid.UUID | None:
+    messages = await _load_messages_for_conversation(
+        session,
+        conversation_id,
+        include_content=False,
+    )
+    target_index = _find_message_index(messages, assistant_message_id)
+    if target_index is None:
+        return None
+
+    for idx in range(target_index - 1, -1, -1):
+        message = messages[idx]
+        if message.role == "user":
+            return message.id
+    return None
 
 
 def _find_message_index(messages: list[Message], message_id: uuid.UUID) -> int | None:
