@@ -20,6 +20,8 @@ from app.db import models
 from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import (
+    EditMessageRequest,
+    MessageUpdated,
     MessageCreated,
     NewMessageRequest,
     RequestExists,
@@ -188,6 +190,70 @@ async def handle_stream_message(
         "X-Accel-Buffering": "no",
     }
     return EventSourceResponse(gen(), headers=headers)
+
+
+async def handle_delete_message(
+    *,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    session: AsyncSession,
+    current_user: AppUser,
+) -> None:
+    conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
+    messages = await _load_messages_for_conversation(
+        session,
+        conversation_id,
+        include_content=False,
+    )
+
+    target_index = _find_message_index(messages, message_id)
+    if target_index is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    for message in messages[target_index:]:
+        await session.delete(message)
+
+    conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    session.add(conversation)
+    await session.commit()
+
+
+async def handle_edit_message(
+    *,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    request: EditMessageRequest,
+    session: AsyncSession,
+    current_user: AppUser,
+) -> MessageUpdated:
+    conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
+    messages = await _load_messages_for_conversation(
+        session,
+        conversation_id,
+        include_content=True,
+    )
+
+    target_index = _find_message_index(messages, message_id)
+    if target_index is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    target_message = messages[target_index]
+    if target_message.role != "user":
+        raise HTTPException(status_code=409, detail="Only user messages can be edited")
+
+    await _replace_message_content(session, target_message, request)
+
+    for message in messages[target_index + 1:]:
+        await session.delete(message)
+
+    conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    session.add(conversation)
+    await session.commit()
+
+    return MessageUpdated(
+        message_id=target_message.id,
+        deleted_after=max(0, len(messages) - target_index - 1),
+    )
 
 
 async def handle_create_conversation(
@@ -621,6 +687,67 @@ async def _load_conversation_for_user(
             detail="Not authorized to send messages to this conversation",
         )
     return conversation
+
+
+async def _load_messages_for_conversation(
+    session: AsyncSession,
+    conversation_id: uuid.UUID,
+    *,
+    include_content: bool,
+) -> list[Message]:
+    query = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc(), Message.id.asc())
+    )
+    if include_content:
+        query = query.options(selectinload(Message.content))
+    return (await session.exec(query)).all()
+
+
+def _find_message_index(messages: list[Message], message_id: uuid.UUID) -> int | None:
+    for idx, message in enumerate(messages):
+        if message.id == message_id:
+            return idx
+    return None
+
+
+async def _replace_message_content(
+    session: AsyncSession,
+    message: Message,
+    request: EditMessageRequest,
+) -> None:
+    text_value = request.content
+    has_text = bool(text_value and text_value.strip())
+    image_values = [image for image in (request.images or []) if image]
+    if not has_text and not image_values:
+        raise HTTPException(status_code=400, detail="Edited message must include text or images")
+
+    for part in list(message.content):
+        await session.delete(part)
+
+    ordinal = 0
+    if has_text:
+        session.add(
+            models.MessageContent(
+                message_id=message.id,
+                ordinal=ordinal,
+                type="text",
+                value=text_value,
+            )
+        )
+        ordinal += 1
+
+    for image_url in image_values:
+        session.add(
+            models.MessageContent(
+                message_id=message.id,
+                ordinal=ordinal,
+                type="image_url",
+                value=image_url,
+            )
+        )
+        ordinal += 1
 
 
 def _resolve_image_settings(request: NewMessageRequest, conversation: Conversation) -> tuple[str, str]:

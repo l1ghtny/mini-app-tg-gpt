@@ -15,6 +15,8 @@ from app.schemas.chat import (
     CreateConversationRequest,
     ConversationAPI,
     ConversationWithMessages,
+    EditMessageRequest,
+    MessageUpdated,
     MessageCreated,
     NewMessageRequest,
     RenameRequest,
@@ -46,6 +48,46 @@ async def create_message(
         session=session,
         current_user=current_user,
         bus=bus,
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}/messages/{message_id}",
+    status_code=204,
+    response_class=Response,
+)
+async def delete_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    await chat_helpers.handle_delete_message(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        session=session,
+        current_user=current_user,
+    )
+    return Response(status_code=204)
+
+
+@router.put(
+    "/conversations/{conversation_id}/messages/{message_id}",
+    response_model=MessageUpdated,
+)
+async def edit_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    request: EditMessageRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await chat_helpers.handle_edit_message(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        request=request,
+        session=session,
+        current_user=current_user,
     )
 
 

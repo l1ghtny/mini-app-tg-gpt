@@ -76,11 +76,12 @@ origins = [
     "http://192.168.1.137:4173",
     "https://gpt-mini-app-ru.lightny.pro",
     "https://gpt-mini-app-dev.lightny.pro",
+    "https://preview--chat-bot-telegram.lovable.app"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

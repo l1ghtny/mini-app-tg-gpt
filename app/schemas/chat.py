@@ -68,6 +68,11 @@ class NewMessageRequest(BaseModel):
     image_quality: Optional[ImageQualitySetting] = None
 
 
+class EditMessageRequest(BaseModel):
+    content: str
+    images: Optional[List[str]] = None
+
+
 class UpdateConversationSettingsRequest(BaseModel):
     folder_id: Optional[uuid.UUID] = None
     model: Optional[AllowedModels] = None
@@ -94,3 +99,8 @@ class RequestExists(BaseModel):
     message_id: uuid.UUID
     stream_url: Optional[str]
     messages_url: Optional[str]
+
+
+class MessageUpdated(BaseModel):
+    message_id: uuid.UUID
+    deleted_after: int = 0
