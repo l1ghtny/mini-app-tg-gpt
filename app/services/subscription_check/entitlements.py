@@ -819,15 +819,13 @@ async def select_image_entitlement(
     pack_entries = [e for e in entitlements if e["kind"] == "pack"]
 
     throttled_waits: list[timedelta] = []
-    model_allowed = False
-    quality_allowed = False
-    if pack_entries:
-        model_allowed = True
-        quality_allowed = True
+    model_allowed = bool(pack_entries)
+    quality_allowed = bool(pack_entries)
 
+    eligible_tier_entries = []
     for ent in tier_entries:
         allowed_models = ent.get("allowed_image_models") or []
-        if quality and image_model not in allowed_models:
+        if image_model not in allowed_models:
             continue
         model_allowed = True
 
@@ -835,24 +833,12 @@ async def select_image_entitlement(
         if quality and quality not in allowed_qualities:
             continue
         quality_allowed = True
+        eligible_tier_entries.append(ent)
 
-        if ent["remaining_credits"] < cost:
-            continue
-        if ent.get("source") == "subscription":
-            tier_id = uuid.UUID(ent["tier_id"]) if ent.get("tier_id") else None
-            if tier_id:
-                daily_credits = ent.get("daily_image_limit") or 0
-                daily_target = daily_credits if daily_credits > 0 else 4.0
-                is_throttled, wait_time = await check_image_pacing(
-                    session,
-                    user_id,
-                    daily_target=daily_target,
-                    cost=cost,
-                    tier_id=tier_id,
-                )
-                if is_throttled:
-                    throttled_waits.append(wait_time)
-                    continue
+    daily_tier_entries = [e for e in eligible_tier_entries if (e.get("daily_image_limit") or 0) > 0]
+    monthly_tier_entries = [e for e in eligible_tier_entries if (e.get("daily_image_limit") or 0) <= 0]
+
+    def _allow(ent: dict) -> dict:
         selected = ent.copy()
         selected["cost"] = cost
         selected["allowed"] = True
@@ -860,15 +846,41 @@ async def select_image_entitlement(
         selected["wait_time"] = None
         return selected
 
+    def _has_sufficient_credits(ent: dict) -> bool:
+        remaining = ent.get("remaining_credits", 0)
+        return remaining == -1 or remaining >= cost
+
+    # Daily tiers are prioritized universally (free and paid).
+    for ent in daily_tier_entries:
+        if not _has_sufficient_credits(ent):
+            continue
+        tier_id = uuid.UUID(ent["tier_id"]) if ent.get("tier_id") else None
+        if not tier_id:
+            continue
+        daily_target = ent.get("daily_image_limit") or 0
+        is_throttled, wait_time = await check_image_pacing(
+            session,
+            user_id,
+            daily_target=daily_target,
+            cost=cost,
+            tier_id=tier_id,
+        )
+        if is_throttled:
+            throttled_waits.append(wait_time)
+            continue
+        return _allow(ent)
+
+    # Monthly-only tiers use the old monthly window flow.
+    for ent in monthly_tier_entries:
+        if not _has_sufficient_credits(ent):
+            continue
+        return _allow(ent)
+
+    # Packs are always monthly credit pools and are checked after tiers.
     for ent in pack_entries:
-        if ent["remaining_credits"] < cost:
+        if not _has_sufficient_credits(ent):
             continue
-        selected = ent.copy()
-        selected["cost"] = cost
-        selected["allowed"] = True
-        selected["throttle_reason"] = None
-        selected["wait_time"] = None
-        return selected
+        return _allow(ent)
 
     if not model_allowed:
         return {

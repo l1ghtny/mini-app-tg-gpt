@@ -149,9 +149,8 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                 ent_remaining_credits = ent["remaining_credits"]
                 ent_remaining = int(math.floor(ent_remaining_credits / cost)) if cost > 0 else 0
                 pacing = None
-                if ent["kind"] == "tier" and ent["source"] == "subscription":
-                    daily_credits = ent.get("daily_image_limit") or 0
-                    daily_target = daily_credits if daily_credits > 0 else 4.0
+                if ent["kind"] == "tier" and (ent.get("daily_image_limit") or 0) > 0:
+                    daily_target = ent.get("daily_image_limit") or 0
                     tier_id = uuid.UUID(ent["tier_id"]) if ent.get("tier_id") else None
                     if tier_id:
                         is_throttled, wait_time = await check_image_pacing(
