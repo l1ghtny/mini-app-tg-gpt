@@ -1,7 +1,6 @@
 ﻿import base64
 import hashlib
 import uuid
-from pprint import pprint
 from typing import Any, Optional, Iterable
 
 from fastapi import HTTPException
@@ -12,7 +11,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import Conversation, MessageContent
-from app.r2.methods import put_bytes
+from app.r2.methods import delete_object, put_bytes
 from app.r2.settings import Settings
 from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
@@ -48,6 +47,7 @@ async def generate_and_publish(
         buffers: dict[int, str] = {}
         last_ckpt: dict[int, int] = {}
         content_cache: dict[int, MessageContent] = {}
+        partial_image_keys: dict[int, list[str]] = {}
         assistant_message_id_str = str(assistant_message_id)
 
         try:
@@ -63,7 +63,9 @@ async def generate_and_publish(
                     conversation_id=conversation_id,
                     request_id=request_id,
             ):
-                await bus.publish(assistant_message_id_str, ev)
+                # Raw base64 image payloads can be large; publish URL events instead.
+                if ev.get("type") not in {"image.partial", "image.ready"}:
+                    await bus.publish(assistant_message_id_str, ev)
 
                 await _handle_stream_event(
                     ev=ev,
@@ -79,9 +81,11 @@ async def generate_and_publish(
                     buffers=buffers,
                     last_ckpt=last_ckpt,
                     content_cache=content_cache,
+                    partial_image_keys=partial_image_keys,
                 )
 
         except Exception as e:
+            await _cleanup_partial_images(partial_image_keys)
             await bus.publish(assistant_message_id_str, {"type": "error", "error": str(e)})
             await bus.mark_done(assistant_message_id_str, ok=False, error=str(e))
             raise
@@ -104,6 +108,7 @@ async def _handle_stream_event(
         buffers: dict[int, str],
         last_ckpt: dict[int, int],
         content_cache: dict[int, MessageContent],
+        partial_image_keys: dict[int, list[str]],
 ) -> None:
     event_type = ev.get("type")
 
@@ -131,7 +136,7 @@ async def _handle_stream_event(
 
     if event_type == "image.ready":
         ordinal = ev.get("index", 0)
-        url = await upload_openai_image_to_r2(ev["data"], prefix="gen")
+        url, _ = await upload_openai_image_to_r2_with_key(ev["data"], prefix="gen")
         await save_image_url_to_db(url, ordinal, assistant_message_id, session=session)
         await bus.publish(str(assistant_message_id), {
             "type": "image.url",
@@ -154,7 +159,34 @@ async def _handle_stream_event(
             image_entitlement_tier_id,
             image_entitlement_pack_id,
         )
+        # Final image is ready; remove temporary partial images for this output index.
+        await _cleanup_partial_images({ordinal: partial_image_keys.pop(ordinal, [])})
         print("SAVED THE IMAGE")
+        return
+
+    if event_type == "image.partial":
+        ordinal = ev.get("index", 0)
+        partial_url, partial_key = await upload_openai_image_to_r2_with_key(
+            ev["data"],
+            prefix="gen-partial",
+            suffix=f"{ordinal}-{ev.get('partial_index', 0)}-{ev.get('sequence_number', 0)}",
+        )
+        partial_image_keys.setdefault(ordinal, []).append(partial_key)
+        await bus.publish(str(assistant_message_id), {
+            "type": "image.partial",
+            "index": ordinal,
+            "format": "url",
+            "url": partial_url,
+            "partial_index": ev.get("partial_index", 0),
+            "sequence_number": ev.get("sequence_number", 0),
+        })
+        await bus.publish(str(assistant_message_id), {
+            "type": "image.partial_url",
+            "index": ordinal,
+            "url": partial_url,
+            "partial_index": ev.get("partial_index", 0),
+            "sequence_number": ev.get("sequence_number", 0),
+        })
         return
 
     if event_type == "status":
@@ -261,11 +293,31 @@ async def fetch_assistant_text(session: AsyncSession, message_id: uuid.UUID) -> 
 
 
 async def upload_openai_image_to_r2(b64_png: str, prefix: str = "gen"):
+    url, _ = await upload_openai_image_to_r2_with_key(b64_png, prefix=prefix)
+    return url
+
+
+async def upload_openai_image_to_r2_with_key(
+        b64_png: str,
+        prefix: str = "gen",
+        suffix: str | None = None,
+) -> tuple[str, str]:
     data = base64.b64decode(b64_png)
     sha = hashlib.sha256(data).hexdigest()
-    key = f"{prefix}/{sha[:2]}/{sha}.png"
+    filename = f"{sha}-{suffix}.png" if suffix else f"{sha}.png"
+    key = f"{prefix}/{sha[:2]}/{filename}"
     bucket, key = await put_bytes(key, data, content_type="image/png", metadata={"source": "openai"})
-    return f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}"
+    return f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}", key
+
+
+async def _cleanup_partial_images(partial_keys_by_index: dict[int, list[str]]) -> None:
+    for keys in partial_keys_by_index.values():
+        for key in keys:
+            try:
+                await delete_object(key)
+            except Exception:
+                # Best-effort cleanup for temporary objects.
+                continue
 
 
 # To use this function, we need to have a message created already

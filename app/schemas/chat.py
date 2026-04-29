@@ -4,7 +4,7 @@ from typing import List, Literal, Optional, Iterable, Union
 from pydantic import BaseModel, ConfigDict
 
 AllowedModels = Literal["gpt-5.2", "gpt-5-mini", "gpt-5-nano"]
-AllowedImageModels = Literal["gpt-image-1.5"]
+AllowedImageModels = Literal["gpt-image-1.5", "gpt-image-2"]
 AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter", "auto"]
 
 

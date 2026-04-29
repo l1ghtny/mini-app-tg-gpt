@@ -45,18 +45,26 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
     monkeypatch.setattr(helpers, "AsyncSession", FakeAsyncSessionCtx)
 
     # ---- 3) Spy the two functions we want to verify ----
-    captured = {"upload_called_with": None, "saved": None}
+    captured = {
+        "upload_calls": [],
+        "saved": None,
+        "deleted_keys": [],
+    }
 
-    async def fake_upload_openai_image_to_r2(b64_png: str, prefix: str = "gen"):
-        captured["upload_called_with"] = b64_png
-        # Simulate R2 public URL (helpers.upload_openai_image_to_r2 builds this from put_bytes + Settings)
-        # See real function for reference :contentReference[oaicite:1]{index=1}
-        return "https://public.cdn.example/bucket/gen/aa/sha.png"
+    async def fake_upload_openai_image_to_r2_with_key(b64_png: str, prefix: str = "gen", suffix: str | None = None):
+        captured["upload_calls"].append((b64_png, prefix, suffix))
+        if prefix == "gen-partial":
+            return "https://public.cdn.example/bucket/gen-partial/aa/partial.png", "gen-partial/aa/partial.png"
+        return "https://public.cdn.example/bucket/gen/aa/final.png", "gen/aa/final.png"
 
     async def fake_save_image_url_to_db(image_url: str, ordinal: int, message_id, **_kwargs):
         captured["saved"] = (image_url, ordinal, message_id)
 
-    monkeypatch.setattr(helpers, "upload_openai_image_to_r2", fake_upload_openai_image_to_r2)
+    async def fake_delete_object(key: str):
+        captured["deleted_keys"].append(key)
+
+    monkeypatch.setattr(helpers, "upload_openai_image_to_r2_with_key", fake_upload_openai_image_to_r2_with_key)
+    monkeypatch.setattr(helpers, "delete_object", fake_delete_object)
     monkeypatch.setattr(helpers, "save_image_url_to_db", fake_save_image_url_to_db)
 
     # ---- 4) Drive the function under test ----
@@ -79,20 +87,25 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
     )
 
     # ---- 5) Assertions ----
-    # a) Upload function got base64
-    assert captured["upload_called_with"] == fake_png_b64
+    # a) Upload function got both partial and final base64 payloads
+    assert len(captured["upload_calls"]) == 2
+    assert captured["upload_calls"][0][0] == "partial-b64"
+    assert captured["upload_calls"][0][1] == "gen-partial"
+    assert captured["upload_calls"][1][0] == fake_png_b64
+    assert captured["upload_calls"][1][1] == "gen"
 
     # b) DB saver called with returned URL and your chosen ordinal (index)
     assert captured["saved"] is not None
     url, ordinal, mid = captured["saved"]
-    assert url == "https://public.cdn.example/bucket/gen/aa/sha.png"
+    assert url == "https://public.cdn.example/bucket/gen/aa/final.png"
     assert ordinal == 999
     assert mid == assistant_message_id
 
-    # c) Partial and final image-url events were published for the frontend stream
+    # c) Partial and final image URL events were published for the frontend stream
     published_events = [event for kind, _mid, event in bus.events if kind == "publish"]
-    assert any(event.get("type") == "image.partial" and event.get("data") == "partial-b64" for event in published_events)
+    assert any(event.get("type") == "image.partial_url" and event.get("url") == "https://public.cdn.example/bucket/gen-partial/aa/partial.png" for event in published_events)
     assert any(event.get("type") == "image.url" and event.get("url") == url for event in published_events)
+    assert "gen-partial/aa/partial.png" in captured["deleted_keys"]
 
     # c) Lifecycle completed
     assert bus.done[1] is True

@@ -124,7 +124,7 @@ async def handle_create_message(
         request_id=idempotency_key,
         model_name=request.model,
         feature="text",
-        cost=image_entitlement.cost,
+        cost=1.0,
         tool_choice=ledger_tool_choice,
         tier_id=text_entitlement.tier_id,
         usage_pack_id=text_entitlement.usage_pack_id,

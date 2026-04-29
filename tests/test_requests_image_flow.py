@@ -30,11 +30,11 @@ async def test_image_flow_records_ledger_and_url(monkeypatch):
 
     monkeypatch.setattr(helpers, "stream_normalized_openai_response", fake_stream, raising=True)
 
-    async def fake_upload(data, prefix="gen"):
-        return "https://cdn.example/img.png"
+    async def fake_upload_with_key(data, prefix="gen", suffix=None):
+        return "https://cdn.example/img.png", "gen/aa/final.png"
 
     # mock R2: don’t hit network in unit test
-    monkeypatch.setattr(helpers, "upload_openai_image_to_r2", fake_upload, raising=False)
+    monkeypatch.setattr(helpers, "upload_openai_image_to_r2_with_key", fake_upload_with_key, raising=False)
 
     req_id = str(uuid.uuid4())
     async with AsyncSession(engine, expire_on_commit=False) as s:
