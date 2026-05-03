@@ -53,6 +53,13 @@ async def test_image_flow_records_ledger_and_url(monkeypatch):
     )
 
     async with AsyncSession(engine, expire_on_commit=False) as s:
+        text_rl = (await s.exec(select(RequestLedger).where(
+            RequestLedger.user_id == user.id,
+            RequestLedger.request_id == req_id,
+            RequestLedger.feature == "text",
+        ))).first()
+        assert text_rl is not None and text_rl.state == app.db.models.State.consumed
+
         imgs = (await s.exec(select(RequestLedger).where(
             RequestLedger.user_id==user.id, RequestLedger.feature=="image"
         ))).all()

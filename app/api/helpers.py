@@ -48,6 +48,7 @@ async def generate_and_publish(
         last_ckpt: dict[int, int] = {}
         content_cache: dict[int, MessageContent] = {}
         partial_image_keys: dict[int, list[str]] = {}
+        lifecycle: dict[str, bool] = {"text_request_finalized": False}
         assistant_message_id_str = str(assistant_message_id)
 
         try:
@@ -82,6 +83,7 @@ async def generate_and_publish(
                     last_ckpt=last_ckpt,
                     content_cache=content_cache,
                     partial_image_keys=partial_image_keys,
+                    lifecycle=lifecycle,
                 )
 
         except Exception as e:
@@ -109,6 +111,7 @@ async def _handle_stream_event(
         last_ckpt: dict[int, int],
         content_cache: dict[int, MessageContent],
         partial_image_keys: dict[int, list[str]],
+        lifecycle: dict[str, bool],
 ) -> None:
     event_type = ev.get("type")
 
@@ -130,8 +133,9 @@ async def _handle_stream_event(
         if i in buffers:
             await _upsert_text(assistant_message_id, i, buffers[i], session=session, content_cache=content_cache)
 
-        await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
-        print("UPDATED REQUEST LEDGER")
+        if not lifecycle.get("text_request_finalized"):
+            await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
+            lifecycle["text_request_finalized"] = True
         return
 
     if event_type == "image.ready":
@@ -193,8 +197,21 @@ async def _handle_stream_event(
         # not saving to DB
         return
 
+    if event_type in {"reasoning.summary.delta", "reasoning.summary.done"}:
+        # UI-only events for frontend stream
+        return
+
+    if event_type == "done":
+        # Some responses (for example image-only) may not emit text.done.
+        if not lifecycle.get("text_request_finalized"):
+            await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
+            lifecycle["text_request_finalized"] = True
+        return
+
     if event_type == "error":
-        await finalize_request(session, request_id=request_id, user_id=user_id, success=False)
+        if not lifecycle.get("text_request_finalized"):
+            await finalize_request(session, request_id=request_id, user_id=user_id, success=False)
+            lifecycle["text_request_finalized"] = True
         # optional: mark message status in DB
         return
 

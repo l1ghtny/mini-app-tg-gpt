@@ -628,7 +628,8 @@ async def _require_text_entitlement(
     model: str,
 ) -> TextEntitlementSelection:
     text_entitlement = await select_text_entitlement(session, user.id, model)
-    if text_entitlement["remaining"] <= 0:
+    remaining = text_entitlement["remaining"]
+    if remaining != -1 and remaining <= 0:
         available_models = await get_available_models(user, session)
         if not available_models:
             raise HTTPException(status_code=402, detail="No text usage available")
@@ -648,7 +649,7 @@ async def _require_text_entitlement(
         else None
     )
     return TextEntitlementSelection(
-        remaining=text_entitlement["remaining"],
+        remaining=remaining,
         tier_id=tier_id,
         usage_pack_id=usage_pack_id,
     )
