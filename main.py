@@ -10,6 +10,7 @@ from app.api.auth import auth
 from app.api.chat_folders import router as chat_folders_router
 from app.api.images import images
 from app.api.metrics import metrics
+from app.api.models_catalog import models_catalog
 from app.api.payments import payments
 from app.api.routes import router as chat_router
 from app.api.tiers import tiers
@@ -110,3 +111,4 @@ app.include_router(tiers, prefix="/api/v1")
 app.include_router(usage_packs, prefix="/api/v1")
 app.include_router(payments, prefix="/api/v1")
 app.include_router(metrics, prefix="/api/v1")
+app.include_router(models_catalog, prefix="/api/v1")

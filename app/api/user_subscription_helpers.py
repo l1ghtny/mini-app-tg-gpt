@@ -1,5 +1,6 @@
 from calendar import monthrange
 from datetime import datetime
+import re
 
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import selectinload
@@ -44,6 +45,11 @@ def _format_ts(dt: datetime | None) -> str | None:
     return dt.strftime("%H:%M:%S %d.%m.%Y") if dt else None
 
 
+def _tier_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return slug or "tier"
+
+
 async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscriptionsResponse:
     query = (
         select(UserSubscription)
@@ -72,6 +78,8 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
                 started_at=sub.started_at.strftime("%H:%M:%S %d.%m.%Y"),
                 expires_at=_format_ts(expires_at),
                 tier_name=sub.tier.name,
+                tier_slug=_tier_slug(sub.tier.name),
+                tier_rank=sub.tier.index or 0,
                 tier_name_ru=sub.tier.name_ru,
                 tier_description=sub.tier.description,
                 tier_description_ru=sub.tier.description_ru,

@@ -74,6 +74,8 @@ async def test_active_subscription_prefers_paid_over_free():
     assert len(result.active_subscriptions) == 2
     assert result.primary_subscription_id is not None
     assert result.active_subscriptions[0].tier_name == paid_name
+    assert result.active_subscriptions[0].tier_slug == paid_name
+    assert result.active_subscriptions[0].tier_rank == 10
     assert result.active_subscriptions[0].tier_price == 1000
     assert {sub.tier_name for sub in result.active_subscriptions} == {free_name, paid_name}
 
@@ -120,4 +122,6 @@ async def test_active_subscription_recurring_without_expiry_gets_fallback_expiry
 
     assert len(result.active_subscriptions) == 1
     assert result.active_subscriptions[0].tier_name == paid_name
+    assert result.active_subscriptions[0].tier_slug == paid_name
+    assert result.active_subscriptions[0].tier_rank == 10
     assert result.active_subscriptions[0].expires_at is not None

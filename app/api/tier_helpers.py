@@ -1,4 +1,5 @@
 import uuid
+import re
 
 from fastapi import HTTPException
 from sqlalchemy.orm import selectinload
@@ -15,6 +16,11 @@ from app.schemas.subscriptions import (
     TierSubscribeResponse,
 )
 from app.services.subscription_check.realtime_check import check_tier
+
+
+def _tier_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return slug or "tier"
 
 
 async def list_public_tiers(session: AsyncSession, user) -> list[SubscriptionTierResponse]:
@@ -126,6 +132,8 @@ def _build_tier_response(
     return SubscriptionTierResponse(
         name=tier.name,
         name_ru=tier.name_ru,
+        slug=_tier_slug(tier.name),
+        rank=tier.index or 0,
         description=tier.description,
         description_ru=tier.description_ru,
         price_cents=tier.price_cents,

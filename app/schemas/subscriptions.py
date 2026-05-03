@@ -10,6 +10,8 @@ class SubscriptionResponse(BaseModel):
     started_at: str
     expires_at: Optional[str]
     tier_name: str
+    tier_slug: str
+    tier_rank: int
     tier_name_ru: str
     tier_description: str
     tier_description_ru: str
@@ -42,6 +44,8 @@ class ImageQualityPricingResponse(BaseModel):
 class SubscriptionTierResponse(BaseModel):
     name: str
     name_ru: str
+    slug: str
+    rank: int
     description: str
     description_ru: str
     price_cents: int

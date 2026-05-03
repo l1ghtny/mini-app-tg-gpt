@@ -124,6 +124,78 @@ class AiModelPricing(SQLModel, table=True):
         Index("ix_pricing_provider_model_active", "provider", "model_name", "is_active"),
     )
 
+
+class TextModelCatalog(SQLModel, table=True):
+    __tablename__ = "text_model_catalog"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    provider: str = Field(index=True)
+    model_name: str = Field(index=True)
+
+    display_name: str
+    display_name_ru: Optional[str] = None
+    tagline: Optional[str] = None
+    tagline_ru: Optional[str] = None
+    description: Optional[str] = None
+    description_ru: Optional[str] = None
+
+    best_for: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    best_for_ru: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    not_great_for: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    not_great_for_ru: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+
+    speed: Optional[str] = None
+    intelligence: Optional[int] = None
+    context_window: Optional[int] = None
+
+    supports: dict = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    tier_required: Optional[dict] = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    badges: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    credit_cost_hint: Optional[Decimal] = Field(default=None, sa_column=Column(Numeric(18, 6), nullable=True))
+
+    is_active: bool = Field(default=True)
+    sort_index: int = Field(default=0)
+    created_at: datetime = Field(default_factory=utcnow_naive)
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    __table_args__ = (
+        UniqueConstraint("provider", "model_name", name="uq_text_model_catalog_provider_model"),
+        Index("ix_text_model_catalog_active_sort", "is_active", "sort_index"),
+    )
+
+
+class ImageModelCatalog(SQLModel, table=True):
+    __tablename__ = "image_model_catalog"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    provider: str = Field(index=True)
+    model_name: str = Field(index=True)
+
+    display_name: str
+    display_name_ru: Optional[str] = None
+    tagline: Optional[str] = None
+    tagline_ru: Optional[str] = None
+    description: Optional[str] = None
+    description_ru: Optional[str] = None
+
+    best_for: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    best_for_ru: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    speed: Optional[str] = None
+
+    tier_required: Optional[dict] = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    badges: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+
+    is_active: bool = Field(default=True)
+    sort_index: int = Field(default=0)
+    created_at: datetime = Field(default_factory=utcnow_naive)
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    __table_args__ = (
+        UniqueConstraint("provider", "model_name", name="uq_image_model_catalog_provider_model"),
+        Index("ix_image_model_catalog_active_sort", "is_active", "sort_index"),
+    )
+
+
 class TokenUsage(SQLModel, table=True):
     """
     Ledger of usage per response/operation (no raw JSON payloads).
@@ -307,4 +379,5 @@ class ImageQualityPricing(SQLModel, table=True):
     quality: str = Field()  # e.g., low, medium, high
     credit_cost: float = Field(default=1.0)  # How many 'daily bucket units' this consumes
     description: Optional[str] = None  # e.g., "1024x1024, fast"
+    description_ru: Optional[str] = None
     is_active: bool = Field(default=True)

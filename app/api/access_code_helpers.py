@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 
 from dateutil.relativedelta import relativedelta
 from fastapi import HTTPException
@@ -86,12 +87,15 @@ def ensure_access_code_valid(access_code: AccessCode, now: datetime | None = Non
 
 
 def _build_tier_response(tier: SubscriptionTier) -> SubscriptionTierResponse:
+    slug = re.sub(r"[^a-z0-9]+", "-", (tier.name or "").lower()).strip("-") or "tier"
     allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
     allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
     image_limit_override = -1 if (tier.daily_image_limit or 0) > 0 else None
     return SubscriptionTierResponse(
         name=tier.name,
         name_ru=tier.name_ru,
+        slug=slug,
+        rank=tier.index or 0,
         description=tier.description,
         description_ru=tier.description_ru,
         price_cents=tier.price_cents,
