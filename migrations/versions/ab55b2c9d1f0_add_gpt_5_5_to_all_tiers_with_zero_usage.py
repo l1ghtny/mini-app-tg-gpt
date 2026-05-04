@@ -76,7 +76,7 @@ def upgrade() -> None:
         }
         for tier_id in missing_tier_ids
     ]
-    op.execute(sa.insert(tier_model_limit), rows)
+    bind.execute(sa.insert(tier_model_limit), rows)
 
 
 def downgrade() -> None:
