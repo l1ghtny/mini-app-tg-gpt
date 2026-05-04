@@ -11,7 +11,6 @@ models_catalog = APIRouter(tags=["models"], prefix="/models")
 
 @models_catalog.get("/catalog", response_model=ModelsCatalogResponse)
 async def get_models_catalog(
-    user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    return await model_catalog_helpers.get_models_catalog(session, user)
+    return await model_catalog_helpers.get_models_catalog(session)

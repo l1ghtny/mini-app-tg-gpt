@@ -83,6 +83,8 @@ async def _seed_reference_data(engine) -> None:
 
         session.add(TierModelLimit(tier_id=free.id, model_name="gpt-5-nano", monthly_requests=100))
         session.add(TierModelLimit(tier_id=pro.id, model_name="gpt-5-nano", monthly_requests=10000))
+        session.add(TierModelLimit(tier_id=free.id, model_name="gpt-5.5", monthly_requests=0))
+        session.add(TierModelLimit(tier_id=pro.id, model_name="gpt-5.5", monthly_requests=0))
 
         session.add_all([
             ImageQualityPricing(image_model="gpt-image-1.5", quality="low", credit_cost=1.0),

@@ -56,9 +56,7 @@ def _quality_sort_key(q: ImageQualityPricing) -> tuple[int, str]:
     return rank, q.quality or ""
 
 
-async def get_models_catalog(session: AsyncSession, user) -> ModelsCatalogResponse:
-    if not user:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+async def get_models_catalog(session: AsyncSession) -> ModelsCatalogResponse:
 
     text_rows = (await session.exec(
         select(TextModelCatalog)
