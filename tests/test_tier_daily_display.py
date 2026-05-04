@@ -29,7 +29,7 @@ def test_tier_response_uses_infinite_image_limits_when_daily_energy_present():
         is_recurring=True,
     )
     tier.tier_model_limits = [
-        TierModelLimit(tier_id=tier_id, model_name="gpt-5-nano", monthly_requests=1000),
+        TierModelLimit(tier_id=tier_id, model_name="gpt-5.4-nano", monthly_requests=1000),
     ]
     tier.tier_image_model_limits = [
         TierImageModelLimit(tier_id=tier_id, image_model="gpt-image-1.5", monthly_requests=25),
@@ -65,7 +65,7 @@ def test_tier_response_exposes_energy_cost_per_quality():
         index=1,
         is_recurring=True,
     )
-    tier.tier_model_limits = [TierModelLimit(tier_id=tier_id, model_name="gpt-5-nano", monthly_requests=1000)]
+    tier.tier_model_limits = [TierModelLimit(tier_id=tier_id, model_name="gpt-5.4-nano", monthly_requests=1000)]
     tier.tier_image_model_limits = [TierImageModelLimit(tier_id=tier_id, image_model="gpt-image-1.5", monthly_requests=100)]
     tier.tier_image_quality_limits = [TierImageQualityLimit(tier_id=tier_id, quality="low")]
 

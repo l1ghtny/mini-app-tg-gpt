@@ -68,7 +68,7 @@ async def test_create_message_returns_user_and_assistant_ids(monkeypatch):
         client_request_id=str(uuid.uuid4()),
         role="user",
         content=[MessageContent(type="text", value="hello")],
-        model="gpt-5-nano",
+        model="gpt-5.4-nano",
         tool_choice="auto",
     )
 
@@ -149,7 +149,7 @@ async def test_create_message_idempotent_response_includes_both_ids(monkeypatch)
         client_request_id=request_id,
         role="user",
         content=[MessageContent(type="text", value="hello")],
-        model="gpt-5-nano",
+        model="gpt-5.4-nano",
         tool_choice="auto",
     )
 

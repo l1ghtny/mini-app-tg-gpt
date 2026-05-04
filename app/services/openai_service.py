@@ -378,7 +378,7 @@ async def _map_openai_event(
 
 async def stream_normalized_openai_response(
     messages: List["Message"],
-    model: Optional[str] = "gpt-5-nano",
+    model: Optional[str] = "gpt-5.4-nano",
     *,
     instructions: Optional[str] = "You are a helpful assistant.",
     tool_choice: Literal["none", "auto", "required"] | ToolChoiceAllowedParam | ToolChoiceTypesParam = "auto",

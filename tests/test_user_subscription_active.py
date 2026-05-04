@@ -24,7 +24,7 @@ async def test_active_subscription_prefers_paid_over_free():
         await session.refresh(user)
 
         free_name = f"free-{uuid.uuid4()}"
-        paid_name = f"pro-{uuid.uuid4()}"
+        paid_name = f"advanced-{uuid.uuid4()}"
 
         free_tier = SubscriptionTier(
             name=free_name,
@@ -38,8 +38,8 @@ async def test_active_subscription_prefers_paid_over_free():
         paid_tier = SubscriptionTier(
             name=paid_name,
             name_ru=paid_name,
-            description="pro",
-            description_ru="pro",
+            description="advanced",
+            description_ru="advanced",
             price_cents=1000,
             index=10,
             is_recurring=True,
@@ -92,12 +92,12 @@ async def test_active_subscription_recurring_without_expiry_gets_fallback_expiry
         await session.commit()
         await session.refresh(user)
 
-        paid_name = f"pro-{uuid.uuid4()}"
+        paid_name = f"advanced-{uuid.uuid4()}"
         paid_tier = SubscriptionTier(
             name=paid_name,
             name_ru=paid_name,
-            description="pro",
-            description_ru="pro",
+            description="advanced",
+            description_ru="advanced",
             price_cents=1000,
             index=10,
             is_recurring=True,

@@ -108,7 +108,7 @@ async def test_history_sliding_window_adds_summary_when_over_budget(monkeypatch)
         history = await chat_helpers._build_history_for_openai(
             session,
             conversation.id,
-            model_name="gpt-5-nano",
+            model_name="gpt-5.4-nano",
         )
         await session.refresh(conversation)
 
@@ -168,7 +168,7 @@ async def test_history_small_dialogue_has_no_summary(monkeypatch):
         history = await chat_helpers._build_history_for_openai(
             session,
             conversation.id,
-            model_name="gpt-5-nano",
+            model_name="gpt-5.4-nano",
         )
         await session.refresh(conversation)
 

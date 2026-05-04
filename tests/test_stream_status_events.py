@@ -96,7 +96,7 @@ async def test_generate_and_publish_emits_rich_status_and_reasoning_events(monke
         history_for_openai=[{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
         bus=bus,
         instructions="You are helpful.",
-        model="gpt-5-nano",
+        model="gpt-5.4-nano",
         tool_choice="auto",
         request_id=str(uuid.uuid4()),
         tools=[],

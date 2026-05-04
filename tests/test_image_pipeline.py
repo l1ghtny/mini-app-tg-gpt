@@ -1,4 +1,4 @@
-﻿import base64
+import base64
 import uuid
 import pytest
 
@@ -81,7 +81,7 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
         history_for_openai=history_for_openai,
         bus=bus,
         instructions="You are a helpful assistant.",
-        model="gpt-5-nano",
+        model="gpt-5.4-nano",
         tool_choice="auto",
         tools=[],
     )

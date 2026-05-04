@@ -47,8 +47,8 @@ async def test_get_available_models_includes_infinite_remaining(monkeypatch):
         SimpleNamespace(
             pack=SimpleNamespace(
                 pack_model_limits=[
-                    SimpleNamespace(model_name="gpt-5-mini"),
-                    SimpleNamespace(model_name="gpt-5-nano"),
+                    SimpleNamespace(model_name="gpt-5.4-mini"),
+                    SimpleNamespace(model_name="gpt-5.4-nano"),
                 ]
             )
         )
@@ -63,7 +63,7 @@ async def test_get_available_models_includes_infinite_remaining(monkeypatch):
     async def _fake_select_text_entitlement(_session, _user_id, model_name):
         if model_name == "gpt-5.2":
             return {"remaining": -1}
-        if model_name == "gpt-5-nano":
+        if model_name == "gpt-5.4-nano":
             return {"remaining": 3}
         return {"remaining": 0}
 
@@ -73,4 +73,4 @@ async def test_get_available_models_includes_infinite_remaining(monkeypatch):
 
     models = await dependencies.get_available_models(user, None)
 
-    assert set(models) == {"gpt-5.2", "gpt-5-nano"}
+    assert set(models) == {"gpt-5.2", "gpt-5.4-nano"}

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import os, uuid, pytest
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -19,7 +19,7 @@ async def test_text_request_reserve_and_consume(monkeypatch):
 
     async with AsyncSession(engine, expire_on_commit=False) as s:
         user = m.AppUser(telegram_id=721000001); s.add(user); await s.commit(); await s.refresh(user)
-        convo = m.Conversation(user_id=user.id, title="T", model="gpt-5-nano"); s.add(convo); await s.commit(); await s.refresh(convo)
+        convo = m.Conversation(user_id=user.id, title="T", model="gpt-5.4-nano"); s.add(convo); await s.commit(); await s.refresh(convo)
         msg = m.Message(conversation_id=convo.id, role="assistant"); s.add(msg); await s.commit(); await s.refresh(msg)
 
     # Fake a tiny text stream
@@ -34,7 +34,7 @@ async def test_text_request_reserve_and_consume(monkeypatch):
     req_id = str(uuid.uuid4())
     async with AsyncSession(engine, expire_on_commit=False) as s:
         await reserve_request(s, user_id=user.id, conversation_id=convo.id, assistant_message_id=msg.id,
-                              request_id=req_id, model_name="gpt-5-nano", feature="text", cost=1, tool_choice="auto")
+                              request_id=req_id, model_name="gpt-5.4-nano", feature="text", cost=1, tool_choice="auto")
 
     class Bus:
         async def publish(self,*a,**k): pass
@@ -43,7 +43,7 @@ async def test_text_request_reserve_and_consume(monkeypatch):
     await helpers.generate_and_publish(
         conversation_id=convo.id, assistant_message_id=msg.id, user_id=user.id,
         history_for_openai=[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],
-        bus=Bus(), instructions="You are helpful.", model="gpt-5-nano", tool_choice="auto",
+        bus=Bus(), instructions="You are helpful.", model="gpt-5.4-nano", tool_choice="auto",
         request_id=req_id, tools=[]
     )
 

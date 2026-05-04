@@ -51,7 +51,7 @@ class Conversation(SQLModel, table=True):
     title: str = Field(index=True, default="New Chat")
     user_id: uuid.UUID = Field(foreign_key="app_user.id")
     folder_id: Optional[uuid.UUID] = Field(default=None, foreign_key="chat_folder.id", index=True)
-    model: str = Field(default="gpt-5-nano")
+    model: str = Field(default="gpt-5.4-nano")
     image_model: str = Field(default="gpt-image-1.5", nullable=True)
     image_quality: str = Field(default="low") # low, medium, high
     history_summary: Optional[str] = Field(default=None, nullable=True)

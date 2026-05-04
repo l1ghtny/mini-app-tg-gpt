@@ -37,7 +37,7 @@ async def generate_and_publish(
         bus: RedisEventBus,
         tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
         instructions: Optional[str] = None,
-        model: Optional[str] = "gpt-5-nano",
+        model: Optional[str] = "gpt-5.4-nano",
         tool_choice: Optional[str | dict[str, Any]] = "auto",
         request_id: Optional[str] = None,
         image_entitlement_tier_id: Optional[uuid.UUID] = None,

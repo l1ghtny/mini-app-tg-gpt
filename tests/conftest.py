@@ -62,11 +62,11 @@ async def _seed_reference_data(engine) -> None:
             index=0,
             is_recurring=False,
         )
-        pro = SubscriptionTier(
-            name="pro",
-            name_ru="pro",
-            description="Pro tier",
-            description_ru="Pro tier",
+        advanced = SubscriptionTier(
+            name="advanced",
+            name_ru="advanced",
+            description="Advanced tier",
+            description_ru="Advanced tier",
             price_cents=1000,
             monthly_images=200,
             daily_image_energy=20,
@@ -78,13 +78,13 @@ async def _seed_reference_data(engine) -> None:
             is_recurring=True,
         )
         session.add(free)
-        session.add(pro)
+        session.add(advanced)
         await session.flush()
 
-        session.add(TierModelLimit(tier_id=free.id, model_name="gpt-5-nano", monthly_requests=100))
-        session.add(TierModelLimit(tier_id=pro.id, model_name="gpt-5-nano", monthly_requests=10000))
+        session.add(TierModelLimit(tier_id=free.id, model_name="gpt-5.4-nano", monthly_requests=100))
+        session.add(TierModelLimit(tier_id=advanced.id, model_name="gpt-5.4-nano", monthly_requests=10000))
         session.add(TierModelLimit(tier_id=free.id, model_name="gpt-5.5", monthly_requests=0))
-        session.add(TierModelLimit(tier_id=pro.id, model_name="gpt-5.5", monthly_requests=0))
+        session.add(TierModelLimit(tier_id=advanced.id, model_name="gpt-5.5", monthly_requests=0))
 
         session.add_all([
             ImageQualityPricing(image_model="gpt-image-1.5", quality="low", credit_cost=10.0),
