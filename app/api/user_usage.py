@@ -6,6 +6,7 @@ from app.api.dependencies import get_current_user
 from app.db.database import get_session
 from app.schemas.usage import (
     FeatureUsageResponse,
+    UserImageEnergyResponse,
     UserImageUsageResponse,
     UserTextUsageResponse,
 )
@@ -35,3 +36,11 @@ async def my_image_model_usage(
     user=Depends(get_current_user),
 ):
     return await user_usage_helpers.get_image_usage(session, user)
+
+
+@user_usage.get("/me/image-energy", response_model=UserImageEnergyResponse)
+async def my_image_energy_usage(
+    session: AsyncSession = Depends(get_session),
+    user=Depends(get_current_user),
+):
+    return await user_usage_helpers.get_image_energy_usage(session, user)

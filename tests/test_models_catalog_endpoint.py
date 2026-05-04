@@ -24,9 +24,8 @@ def _build_test_client() -> TestClient:
 def test_models_catalog_endpoint_returns_catalog(monkeypatch):
     captured = {}
 
-    async def _fake_get_models_catalog(session, user):
+    async def _fake_get_models_catalog(session):
         captured["session"] = session
-        captured["user"] = user
         return ModelsCatalogResponse(
             text_models=[],
             image_models=[],
@@ -43,4 +42,4 @@ def test_models_catalog_endpoint_returns_catalog(monkeypatch):
     assert payload["text_models"] == []
     assert payload["image_models"] == []
     assert payload["updated_at"] == "2026-05-03T00:00:00"
-    assert "user" in captured
+    assert "session" in captured

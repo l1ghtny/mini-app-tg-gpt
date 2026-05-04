@@ -93,7 +93,7 @@ async def test_image_daily_tier_throttled_falls_back_to_pack():
     async with AsyncSession(engine, expire_on_commit=False) as session:
         user, tier, user_pack = await _prepare_daily_tier_and_pack(session, telegram_id=721000402)
 
-        # free tier in tests has daily_image_limit=2 -> burst bucket capacity is 10 credits.
+        # free tier in tests has daily_image_energy=2 -> burst bucket capacity is 10 credits.
         # Add 11 consumed requests to force pacing throttle for the next request.
         for _ in range(11):
             session.add(

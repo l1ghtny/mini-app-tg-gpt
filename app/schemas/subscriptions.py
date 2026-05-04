@@ -38,6 +38,7 @@ class ImageQualityPricingResponse(BaseModel):
     image_model: str
     quality: str
     credit_cost: float
+    energy_cost: float
     description: Optional[str] = None
 
 
@@ -54,7 +55,8 @@ class SubscriptionTierResponse(BaseModel):
     tier_image_model_limits: List[TierImageModelLimits] = []
     image_quality_pricing: List[ImageQualityPricingResponse] = []
     is_recurring: bool
-    daily_image_limit: int
+    daily_image_energy: int = 0
+    image_energy_max: int = 0
     allowed_image_qualities: List[str] = []
     allowed_image_models: List[str] = []
     tier_id: str

@@ -34,7 +34,7 @@ class SubscriptionTier(SQLModel, table=True):
     price_cents: int = Field(default=0)
     # feature caps (requests, not tokens)
     monthly_images: int = Field(default=0)
-    daily_image_limit: int = Field(default=0)
+    daily_image_energy: int = Field(default=0)
     monthly_docs: int = Field(default=0)
     monthly_deepsearch: int = Field(default=0)
     is_active: bool = Field(default=True)

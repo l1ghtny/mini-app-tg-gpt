@@ -20,7 +20,11 @@ from app.db.subscription_tiers import (
     UsagePackSource,
     UsagePackStatus,
 )
-from app.services.subscription_check.pacing import check_image_pacing, get_image_quality_pricing
+from app.services.subscription_check.pacing import (
+    check_image_pacing,
+    get_image_energy_snapshot,
+    get_image_quality_pricing,
+)
 
 
 async def month_start_expr():
@@ -367,6 +371,10 @@ def _tier_usage_source(tier: SubscriptionTier) -> str:
     return "free"
 
 
+def _tier_daily_image_energy(tier: SubscriptionTier) -> int:
+    return int(getattr(tier, "daily_image_energy", 0) or 0)
+
+
 def _sort_subscriptions(subs: list[UserSubscription]) -> list[UserSubscription]:
     def sort_key(sub: UserSubscription) -> tuple[int, int, int, datetime]:
         tier = sub.tier
@@ -711,6 +719,7 @@ async def list_image_entitlements_bulk(
     # 3. Fetch shared usage sums (across allowed image models per source)
     tier_usages = {}
     tier_allowed_models: dict[uuid.UUID, list[str]] = {}
+    tier_energy_snapshots: dict[uuid.UUID, dict] = {}
     for sub in subs:
         allowed = sorted({l.image_model for l in sub.tier.tier_image_model_limits})
         tier_allowed_models[sub.tier.id] = allowed
@@ -720,6 +729,26 @@ async def list_image_entitlements_bulk(
             sub.tier,
             allowed,
         )
+        daily_energy = _tier_daily_image_energy(sub.tier)
+        if daily_energy > 0:
+            snapshot = await get_image_energy_snapshot(
+                session=session,
+                user_id=user_id,
+                daily_target=daily_energy,
+                tier_id=sub.tier.id,
+            )
+            max_energy = int(snapshot.capacity)
+            available_energy = int(snapshot.available_energy)
+            saved_energy = max(0, available_energy - daily_energy)
+            used_energy = max(0, max_energy - available_energy)
+            tier_energy_snapshots[sub.tier.id] = {
+                "daily_energy": daily_energy,
+                "max_energy": max_energy,
+                "available_energy": available_energy,
+                "saved_energy": saved_energy,
+                "used_energy": used_energy,
+                "saved_days": saved_energy // daily_energy if daily_energy > 0 else 0,
+            }
 
     pack_usages: dict[uuid.UUID, float] = {}
     pack_allowed_models: dict[uuid.UUID, list[str]] = {}
@@ -748,9 +777,9 @@ async def list_image_entitlements_bulk(
 
             used = float(tier_usages.get(tier.id, 0.0))
             cap = limit.monthly_requests or 0
-            daily_image_limit = tier.daily_image_limit or 0
+            daily_image_energy = _tier_daily_image_energy(tier)
 
-            if daily_image_limit > 0:
+            if daily_image_energy > 0:
                 cap = -1
                 remaining = -1
             elif cap == -1:
@@ -762,6 +791,7 @@ async def list_image_entitlements_bulk(
 
             source = _tier_usage_source(tier)
             pacing = None
+            energy_balance = tier_energy_snapshots.get(tier.id)
             allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
             allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
 
@@ -776,7 +806,8 @@ async def list_image_entitlements_bulk(
                 "used": used,
                 "remaining_credits": remaining,
                 "pacing": pacing,
-                "daily_image_limit": daily_image_limit,
+                "daily_image_energy": daily_image_energy,
+                "energy_balance": energy_balance,
                 "allowed_image_qualities": allowed_qualities,
                 "allowed_image_models": allowed_models,
                 "expires_at": None,
@@ -811,7 +842,8 @@ async def list_image_entitlements_bulk(
                 "remaining_credits": remaining,
                 "expires_at": pack.expires_at,
                 "purchased_at": pack.purchased_at,
-                "daily_image_limit": None,
+                "daily_image_energy": None,
+                "energy_balance": None,
             })
 
         entitlements = tier_entries + pack_entries
@@ -905,8 +937,11 @@ async def select_image_entitlement(
         quality_allowed = True
         eligible_tier_entries.append(ent)
 
-    daily_tier_entries = [e for e in eligible_tier_entries if (e.get("daily_image_limit") or 0) > 0]
-    monthly_tier_entries = [e for e in eligible_tier_entries if (e.get("daily_image_limit") or 0) <= 0]
+    def _daily_energy_for_entitlement(ent: dict) -> int:
+        return int(ent.get("daily_image_energy") or 0)
+
+    daily_tier_entries = [e for e in eligible_tier_entries if _daily_energy_for_entitlement(e) > 0]
+    monthly_tier_entries = [e for e in eligible_tier_entries if _daily_energy_for_entitlement(e) <= 0]
 
     def _allow(ent: dict) -> dict:
         selected = ent.copy()
@@ -927,7 +962,7 @@ async def select_image_entitlement(
         tier_id = uuid.UUID(ent["tier_id"]) if ent.get("tier_id") else None
         if not tier_id:
             continue
-        daily_target = ent.get("daily_image_limit") or 0
+        daily_target = _daily_energy_for_entitlement(ent)
         is_throttled, wait_time = await check_image_pacing(
             session,
             user_id,

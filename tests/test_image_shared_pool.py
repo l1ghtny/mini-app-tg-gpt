@@ -36,7 +36,7 @@ async def test_image_credits_are_shared_across_models_for_tier():
         assert tier is not None
 
         # Make this tier monthly-only so it uses pool caps in UI/API.
-        tier.daily_image_limit = 0
+        tier.daily_image_energy = 0
         tier.is_recurring = True
         session.add(tier)
 
@@ -96,8 +96,8 @@ async def test_daily_limited_tier_reports_infinite_image_remaining():
         ).first()
         assert tier is not None
 
-        # Any positive daily limit should show this tier as infinite in remaining display.
-        tier.daily_image_limit = 5
+        # Any positive daily energy should show this tier as infinite in remaining display.
+        tier.daily_image_energy = 5
         session.add(tier)
 
         session.add(TierImageModelLimit(tier_id=tier.id, image_model="gpt-image-1.5", monthly_requests=20))

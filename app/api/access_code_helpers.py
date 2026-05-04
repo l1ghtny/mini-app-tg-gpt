@@ -90,7 +90,8 @@ def _build_tier_response(tier: SubscriptionTier) -> SubscriptionTierResponse:
     slug = re.sub(r"[^a-z0-9]+", "-", (tier.name or "").lower()).strip("-") or "tier"
     allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
     allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
-    image_limit_override = -1 if (tier.daily_image_limit or 0) > 0 else None
+    daily_energy = int(getattr(tier, "daily_image_energy", 0) or 0)
+    image_limit_override = -1 if daily_energy > 0 else None
     return SubscriptionTierResponse(
         name=tier.name,
         name_ru=tier.name_ru,
@@ -112,7 +113,8 @@ def _build_tier_response(tier: SubscriptionTier) -> SubscriptionTierResponse:
             for l in tier.tier_image_model_limits
         ],
         is_recurring=tier.is_recurring,
-        daily_image_limit=tier.daily_image_limit,
+        daily_image_energy=daily_energy,
+        image_energy_max=daily_energy * 5,
         allowed_image_qualities=allowed_qualities,
         allowed_image_models=allowed_models,
         tier_id=str(tier.id),

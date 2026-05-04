@@ -23,6 +23,10 @@ def _tier_slug(name: str) -> str:
     return slug or "tier"
 
 
+def _daily_image_energy(tier: SubscriptionTier) -> int:
+    return int(getattr(tier, "daily_image_energy", 0) or 0)
+
+
 async def list_public_tiers(session: AsyncSession, user) -> list[SubscriptionTierResponse]:
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -113,7 +117,8 @@ def _build_tier_response(
     tier: SubscriptionTier,
     pricing_by_model: dict[str, list[ImageQualityPricing]],
 ) -> SubscriptionTierResponse:
-    image_limit_override = -1 if (tier.daily_image_limit or 0) > 0 else None
+    daily_energy = _daily_image_energy(tier)
+    image_limit_override = -1 if daily_energy > 0 else None
     allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
     allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
     allowed_quality_set = set(allowed_qualities)
@@ -126,6 +131,7 @@ def _build_tier_response(
                 image_model=pricing.image_model,
                 quality=pricing.quality,
                 credit_cost=pricing.credit_cost,
+                energy_cost=pricing.credit_cost,
                 description=pricing.description,
             ))
 
@@ -151,7 +157,8 @@ def _build_tier_response(
         ],
         image_quality_pricing=image_pricing,
         is_recurring=tier.is_recurring,
-        daily_image_limit=tier.daily_image_limit,
+        daily_image_energy=daily_energy,
+        image_energy_max=daily_energy * 5,
         allowed_image_qualities=allowed_qualities,
         allowed_image_models=allowed_models,
         tier_id=str(tier.id),
