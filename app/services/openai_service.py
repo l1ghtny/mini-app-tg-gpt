@@ -1,4 +1,5 @@
 import asyncio
+import json
 import random
 import time
 import uuid
@@ -29,6 +30,15 @@ STYLE_GUIDE = (
     "- Use fenced code blocks for code.\n"
     "- Use standard [text](url) links.\n"
     "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
+)
+
+SUMMARY_PROMPT = (
+    "You compress chat history for long-running assistants. "
+    "Return a compact, factual summary that preserves user preferences, constraints, decisions, "
+    "open tasks, and unresolved questions. "
+    "Do not add facts that are not present in the source. "
+    "Use plain text with short bullet lines when useful. "
+    "Keep it concise."
 )
 
 client = AsyncOpenAI()
@@ -476,7 +486,7 @@ async def stream_normalized_openai_response(
 async def generate_conversation_title(first_message: str) -> str:
     try:
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4-nano",
             messages=[
                 {
                     "role": "system",
@@ -493,3 +503,63 @@ async def generate_conversation_title(first_message: str) -> str:
     except Exception as e:
         print(f"Error generating title: {e}")
         return "New Chat"
+
+
+async def summarize_history_chunk(
+    *,
+    previous_summary: str | None,
+    history_chunk: list[dict[str, Any]],
+    model: str = "gpt-5.4-nano",
+    max_output_tokens: int = 2000,
+) -> str:
+    if not history_chunk:
+        return (previous_summary or "").strip()
+
+    payload = {
+        "previous_summary": previous_summary or "",
+        "new_messages": history_chunk,
+    }
+
+    try:
+        response = await client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": SUMMARY_PROMPT}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Update the conversation summary using this JSON payload. "
+                                "Keep important details and remove redundancy.\n\n"
+                                f"{json.dumps(payload, ensure_ascii=False)}"
+                            ),
+                        }
+                    ],
+                },
+            ],
+            max_output_tokens=max_output_tokens,
+            text={"format": {"type": "text"}},
+        )
+    except Exception as exc:
+        logger.warning("Failed to summarize conversation history: %s", exc)
+        return (previous_summary or "").strip()
+
+    output_text = (getattr(response, "output_text", None) or "").strip()
+    if output_text:
+        return output_text
+
+    collected: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        for part in getattr(item, "content", []) or []:
+            text = getattr(part, "text", None)
+            if isinstance(text, str) and text.strip():
+                collected.append(text.strip())
+
+    return "\n".join(collected).strip() or (previous_summary or "").strip()

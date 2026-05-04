@@ -54,6 +54,9 @@ class Conversation(SQLModel, table=True):
     model: str = Field(default="gpt-5-nano")
     image_model: str = Field(default="gpt-image-1.5", nullable=True)
     image_quality: str = Field(default="low") # low, medium, high
+    history_summary: Optional[str] = Field(default=None, nullable=True)
+    history_summary_up_to_message_id: Optional[uuid.UUID] = Field(default=None, nullable=True)
+    history_summary_updated_at: Optional[datetime] = Field(default=None, nullable=True)
 
     updated_at: datetime = Field(
         default_factory=utcnow_naive,

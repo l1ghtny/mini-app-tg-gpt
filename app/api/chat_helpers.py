@@ -17,7 +17,7 @@ from app.api.dependencies import get_available_models
 from app.api.helpers import generate_and_publish, load_conversation
 from app.core.metrics import track_event
 from app.db import models
-from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder
+from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder, TextModelCatalog
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import (
     EditMessageRequest,
@@ -42,6 +42,7 @@ from app.services.subscription_check.entitlements import (
 from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
 from app.services.tasks import generate_and_save_title
+from app.services.openai_service import summarize_history_chunk
 
 _TOOL_TYPE_ALIASES = {
     "web_search_preview": "web_search",
@@ -49,6 +50,14 @@ _TOOL_TYPE_ALIASES = {
     "web_search_2025_08_26": "web_search",
 }
 _BASIC_TOOL_CHOICES = {"auto", "none", "required"}
+
+_DEFAULT_CONTEXT_WINDOW_TOKENS = 128000
+_DEFAULT_HISTORY_BUDGET_TOKENS = 12000
+_MIN_HISTORY_BUDGET_TOKENS = 2500
+_RESERVED_NON_HISTORY_TOKENS = 6000
+_SUMMARY_MAX_OUTPUT_TOKENS = 2000
+_SUMMARY_REFRESH_MIN_NEW_TOKENS = 600
+_SUMMARY_MODEL = "gpt-5-nano"
 
 
 @dataclass(frozen=True)
@@ -66,6 +75,13 @@ class ImageEntitlementSelection:
     cost: float
     throttle_reason: Optional[str]
     wait_time: Optional[timedelta]
+
+
+@dataclass(frozen=True)
+class _HistoryCandidate:
+    message_id: uuid.UUID
+    payload: dict[str, Any]
+    estimated_tokens: int
 
 
 async def handle_create_message(
@@ -130,7 +146,11 @@ async def handle_create_message(
         usage_pack_id=text_entitlement.usage_pack_id,
     )
 
-    history_for_openai = await _build_history_for_openai(session, conversation_id)
+    history_for_openai = await _build_history_for_openai(
+        session,
+        conversation_id,
+        model_name=request.model,
+    )
     redis_bus = RedisEventBus(bus)
 
     _queue_generation(
@@ -955,35 +975,216 @@ async def _create_assistant_message(
 async def _build_history_for_openai(
     session: AsyncSession,
     conversation_id: uuid.UUID,
+    *,
+    model_name: str | None = None,
 ) -> list[dict]:
-    history = []
     result = await session.exec(
         select(Message)
         .where(Message.conversation_id == conversation_id)
         .options(selectinload(Message.content))
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.asc(), Message.id.asc())
     )
     msgs = result.all()
-    for msg in msgs:
-        parts = []
-        assistant_has_image = False
-        for c in msg.content:
-            if c.type == "text" and msg.role == "user":
-                parts.append({"type": "input_text", "text": c.value})
-            elif c.type == "text" and msg.role == "assistant":
-                parts.append({"type": "output_text", "text": c.value})
-            elif (c.type in ("image_url", "image")) and msg.role == "user":
-                compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_size=2048)
-                parts.append({"type": "input_image", "image_url": compatible_url})
-                if compatible_url != c.value:
-                    await rewrite_message_image_url(session, c.value, compatible_url, message_id=msg.id)
-            elif (c.type in ("image_url", "image")) and msg.role == "assistant":
-                assistant_has_image = True
-        if assistant_has_image and not any(part.get("type") == "output_text" for part in parts):
-            parts.append({"type": "output_text", "text": "[Generated an image.]"})
-        if parts:
-            history.append({"role": msg.role, "content": parts})
+    candidates = [_build_history_candidate(msg) for msg in msgs]
+    candidates = [candidate for candidate in candidates if candidate is not None]
+    if not candidates:
+        return []
+
+    context_window = await _resolve_context_window_tokens(session, model_name)
+    history_budget = _compute_history_budget_tokens(context_window)
+
+    selected_reversed: list[_HistoryCandidate] = []
+    selected_tokens = 0
+    for candidate in reversed(candidates):
+        would_overflow = selected_tokens + candidate.estimated_tokens > history_budget
+        if would_overflow and selected_reversed:
+            break
+        selected_reversed.append(candidate)
+        selected_tokens += candidate.estimated_tokens
+        if would_overflow:
+            break
+
+    selected = list(reversed(selected_reversed))
+    dropped_count = len(candidates) - len(selected)
+    dropped = candidates[:dropped_count] if dropped_count > 0 else []
+
+    summary_item = await _maybe_refresh_and_build_summary_item(
+        session=session,
+        conversation_id=conversation_id,
+        dropped_candidates=dropped,
+    )
+
+    history: list[dict[str, Any]] = []
+    if summary_item:
+        history.append(summary_item)
+
+    for candidate in selected:
+        finalized = await _finalize_history_payload(session, candidate)
+        if finalized:
+            history.append(finalized)
+
     return history
+
+
+def _estimate_tokens_from_text(value: str) -> int:
+    return max(1, (len(value) + 3) // 4)
+
+
+def _estimate_part_tokens(part: dict[str, Any]) -> int:
+    part_type = part.get("type")
+    if part_type in {"input_text", "output_text"}:
+        return _estimate_tokens_from_text(part.get("text", "")) + 4
+    if part_type == "input_image":
+        # Image references are expensive in practice; use a conservative estimate.
+        return 300
+    return 8
+
+
+def _estimate_message_tokens(payload: dict[str, Any]) -> int:
+    content = payload.get("content", [])
+    return 8 + sum(_estimate_part_tokens(part) for part in content if isinstance(part, dict))
+
+
+def _build_history_candidate(msg: Message) -> _HistoryCandidate | None:
+    parts: list[dict[str, Any]] = []
+    assistant_has_image = False
+
+    ordered_content = sorted(msg.content, key=lambda c: (c.ordinal, c.id))
+    for c in ordered_content:
+        if c.type == "text" and msg.role == "user":
+            parts.append({"type": "input_text", "text": c.value})
+        elif c.type == "text" and msg.role == "assistant":
+            parts.append({"type": "output_text", "text": c.value})
+        elif (c.type in {"image_url", "image"}) and msg.role == "user":
+            parts.append({"type": "input_image", "image_url": c.value})
+        elif (c.type in {"image_url", "image"}) and msg.role == "assistant":
+            assistant_has_image = True
+
+    if assistant_has_image and not any(part.get("type") == "output_text" for part in parts):
+        parts.append({"type": "output_text", "text": "[Generated an image.]"})
+
+    if not parts:
+        return None
+
+    payload = {"role": msg.role, "content": parts}
+    return _HistoryCandidate(
+        message_id=msg.id,
+        payload=payload,
+        estimated_tokens=_estimate_message_tokens(payload),
+    )
+
+
+async def _finalize_history_payload(
+    session: AsyncSession,
+    candidate: _HistoryCandidate,
+) -> dict[str, Any]:
+    payload = {"role": candidate.payload["role"], "content": []}
+    for part in candidate.payload.get("content", []):
+        if part.get("type") != "input_image":
+            payload["content"].append(part)
+            continue
+
+        source_url = part.get("image_url")
+        if not source_url:
+            continue
+        compatible_url = await ensure_openai_compatible_image_url(session, source_url, max_size=2048)
+        payload["content"].append({"type": "input_image", "image_url": compatible_url})
+        if compatible_url != source_url:
+            await rewrite_message_image_url(session, source_url, compatible_url, message_id=candidate.message_id)
+
+    return payload
+
+
+async def _resolve_context_window_tokens(session: AsyncSession, model_name: str | None) -> int:
+    if not model_name:
+        return _DEFAULT_CONTEXT_WINDOW_TOKENS
+
+    row = (
+        await session.exec(
+            select(TextModelCatalog)
+            .where(
+                TextModelCatalog.model_name == model_name,
+                TextModelCatalog.is_active == True,
+            )
+        )
+    ).first()
+    if row and row.context_window:
+        return row.context_window
+    return _DEFAULT_CONTEXT_WINDOW_TOKENS
+
+
+def _compute_history_budget_tokens(context_window: int) -> int:
+    budget_after_reserve = max(_MIN_HISTORY_BUDGET_TOKENS, context_window - _RESERVED_NON_HISTORY_TOKENS)
+    return min(_DEFAULT_HISTORY_BUDGET_TOKENS, budget_after_reserve)
+
+
+async def _maybe_refresh_and_build_summary_item(
+    *,
+    session: AsyncSession,
+    conversation_id: uuid.UUID,
+    dropped_candidates: list[_HistoryCandidate],
+) -> dict[str, Any] | None:
+    if not dropped_candidates:
+        return None
+
+    conversation = await session.get(Conversation, conversation_id)
+    if not conversation:
+        return None
+
+    summary_text = (conversation.history_summary or "").strip()
+    current_up_to = conversation.history_summary_up_to_message_id
+    dropped_token_total = sum(c.estimated_tokens for c in dropped_candidates)
+
+    start_index = 0
+    if current_up_to is not None:
+        for idx, candidate in enumerate(dropped_candidates):
+            if candidate.message_id == current_up_to:
+                start_index = idx + 1
+                break
+
+    unsummarized_candidates = dropped_candidates[start_index:]
+    unsummarized_tokens = sum(c.estimated_tokens for c in unsummarized_candidates)
+    newest_dropped_id = dropped_candidates[-1].message_id
+
+    should_refresh = (
+        bool(unsummarized_candidates)
+        and (not summary_text or unsummarized_tokens >= _SUMMARY_REFRESH_MIN_NEW_TOKENS)
+    )
+    if should_refresh:
+        refreshed = await summarize_history_chunk(
+            previous_summary=summary_text,
+            history_chunk=[candidate.payload for candidate in unsummarized_candidates],
+            model=_SUMMARY_MODEL,
+            max_output_tokens=_SUMMARY_MAX_OUTPUT_TOKENS,
+        )
+        refreshed = (refreshed or "").strip()
+        if refreshed and (refreshed != summary_text or current_up_to != newest_dropped_id):
+            conversation.history_summary = refreshed
+            conversation.history_summary_up_to_message_id = newest_dropped_id
+            conversation.history_summary_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            session.add(conversation)
+            await session.commit()
+            summary_text = refreshed
+            current_up_to = newest_dropped_id
+
+    if not summary_text:
+        return None
+
+    approx_summary_tokens = _estimate_tokens_from_text(summary_text)
+    if approx_summary_tokens > _SUMMARY_MAX_OUTPUT_TOKENS * 2 and dropped_token_total < _SUMMARY_REFRESH_MIN_NEW_TOKENS:
+        # If the existing summary is too long but there is not enough fresh history to justify
+        # another summarization call, skip injecting it to avoid overspending.
+        return None
+
+    return {
+        "role": "system",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Conversation summary (older context):\n" + summary_text,
+            }
+        ],
+    }
 
 
 def _queue_generation(
