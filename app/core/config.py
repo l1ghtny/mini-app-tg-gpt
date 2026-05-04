@@ -25,6 +25,7 @@ class Settings:
     TBANK_TERMINAL_KEY: str = os.getenv("TBANK_TERMINAL_KEY", "DEMO")
     TBANK_PASSWORD: str = os.getenv("TBANK_PASSWORD", "password")
     TBANK_API_URL: str = "https://securepay.tinkoff.ru/v2"
+    TBANK_TIMEOUT_SECONDS: float = float(os.getenv("TBANK_TIMEOUT_SECONDS", "15"))
     custom_logger = logging.getLogger("uvicorn")
     # Add Sentry Config
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
