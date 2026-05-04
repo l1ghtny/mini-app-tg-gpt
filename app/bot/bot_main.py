@@ -100,29 +100,37 @@ async def cmd_start(message: types.Message):
     # 5. Localization Logic
     if language_code == 'ru':
         welcome_text = (
-            f"👋 **Привет, {message.from_user.first_name}!**\n\n"
-            "Я твой ИИ-ассистент. Я помогу тебе писать тексты, анализировать изображения и решать сложные задачи с помощью GPT-5.\n\n"
-            "👇 **Нажми на кнопку ниже, чтобы запустить приложение:**"
+            f"👋 Добро пожаловать, {message.from_user.first_name}!\n\n"
+            "Я — ваш доступ к мощнейшим нейросетям: GPT-5.4, GPT-5.5 и инструментам для генерации изображений.\n\n"
+            "Никаких сложных текстовых команд. Вся работа происходит в красивом и удобном приложении прямо внутри Telegram.\n\n"
+            "🎁 Вам уже начислены бесплатные запросы к нашим флагманским моделям, чтобы вы могли оценить их интеллект.\n\n"
+            "Нажмите на кнопку «Открыть приложение» ниже (или на иконку меню слева от поля ввода), чтобы начать!"
         )
         welcome_text_no_name = (
-            "👋 **Привет!**\n\n"
-            "Я твой ИИ-ассистент. Я помогу тебе писать тексты, анализировать изображения и решать сложные задачи с помощью GPT-5.\n\n"
-            "👇 **Нажми на кнопку ниже, чтобы запустить приложение:**"
+            "👋 Добро пожаловать!\n\n"
+            "Я — ваш доступ к мощнейшим нейросетям: GPT-5.4, GPT-5.5 и инструментам для генерации изображений.\n\n"
+            "Никаких сложных текстовых команд. Вся работа происходит в красивом и удобном приложении прямо внутри Telegram.\n\n"
+            "🎁 Вам уже начислены бесплатные запросы к нашим флагманским моделям, чтобы вы могли оценить их интеллект.\n\n"
+            "Нажмите на кнопку «Открыть приложение» ниже (или на иконку меню слева от поля ввода), чтобы начать!"
         )
-        button_text = "🚀 Запустить AI"
+        button_text = "🚀 Запустить приложение"
     else:
         # Default to English for 'en' or any other unknown language
         welcome_text = (
-            f"👋 **Hi {message.from_user.first_name}!**\n\n"
-            "I am your AI Assistant. I can help you write text, analyze images, and solve problems using GPT-5.\n\n"
-            "👇 **Tap the button below to launch the app:**"
+            f"👋 Welcome, {message.from_user.first_name}!\n\n"
+            "I’m your gateway to powerful AI models: GPT-5.4, GPT-5.5, and image generation tools.\n\n"
+            "No complicated text commands. Everything works inside a beautiful and convenient app right in Telegram.\n\n"
+            "🎁 You already have free requests to our flagship models, so you can evaluate their intelligence.\n\n"
+            "Tap the “Open app” button below (or the menu icon to the left of the input field) to get started!"
         )
         welcome_text_no_name = (
-            "👋 **Hi!**\n\n"
-            "I am your AI Assistant. I can help you write text, analyze images, and solve problems using GPT-5.\n\n"
-            "👇 **Tap the button below to launch the app:**"
+            "👋 Welcome!\n\n"
+            "I’m your gateway to powerful AI models: GPT-5.4, GPT-5.5, and image generation tools.\n\n"
+            "No complicated text commands. Everything works inside a beautiful and convenient app right in Telegram.\n\n"
+            "🎁 You already have free requests to our flagship models, so you can evaluate their intelligence.\n\n"
+            "Tap the “Open app” button below (or the menu icon to the left of the input field) to get started!"
         )
-        button_text = "🚀 Launch AI App"
+        button_text = "🚀 Open app"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
