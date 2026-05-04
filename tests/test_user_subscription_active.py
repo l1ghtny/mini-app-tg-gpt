@@ -77,6 +77,9 @@ async def test_active_subscription_prefers_paid_over_free():
     assert result.active_subscriptions[0].tier_slug == paid_name
     assert result.active_subscriptions[0].tier_rank == 10
     assert result.active_subscriptions[0].tier_price == 1000
+    assert "T" in result.active_subscriptions[0].started_at
+    assert datetime.fromisoformat(result.active_subscriptions[0].started_at)
+    assert datetime.fromisoformat(result.active_subscriptions[0].expires_at)
     assert {sub.tier_name for sub in result.active_subscriptions} == {free_name, paid_name}
 
 
@@ -125,3 +128,4 @@ async def test_active_subscription_recurring_without_expiry_gets_fallback_expiry
     assert result.active_subscriptions[0].tier_slug == paid_name
     assert result.active_subscriptions[0].tier_rank == 10
     assert result.active_subscriptions[0].expires_at is not None
+    assert datetime.fromisoformat(result.active_subscriptions[0].expires_at)

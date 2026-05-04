@@ -42,7 +42,7 @@ def _subscription_priority_key(sub: UserSubscription) -> tuple[int, int, int, da
 
 
 def _format_ts(dt: datetime | None) -> str | None:
-    return dt.strftime("%H:%M:%S %d.%m.%Y") if dt else None
+    return dt.isoformat(timespec="seconds") if dt else None
 
 
 def _tier_slug(name: str) -> str:
@@ -75,7 +75,7 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
             SubscriptionResponse(
                 subscription_id=str(sub.id),
                 status=sub.status,
-                started_at=sub.started_at.strftime("%H:%M:%S %d.%m.%Y"),
+                started_at=_format_ts(sub.started_at),
                 expires_at=_format_ts(expires_at),
                 tier_name=sub.tier.name,
                 tier_slug=_tier_slug(sub.tier.name),
