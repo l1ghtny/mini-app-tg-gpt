@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Literal, Optional
 
-from openai import AsyncOpenAI, AuthenticationError, NotFoundError
+from openai import APIError, AsyncOpenAI, AuthenticationError, NotFoundError
 from openai.types.responses import (
     FileSearchToolParam,
     ToolChoiceAllowedParam,
@@ -49,12 +49,38 @@ default_tools = [
     WebSearchTool(type="web_search"),
 ]
 
+OPENAI_UPSTREAM_ERROR_CODE = "OPENAI_UPSTREAM_UNAVAILABLE"
+OPENAI_UPSTREAM_USER_MESSAGE = "Sorry, OpenAI has some issues on their end. Please try again in a moment."
+
 
 def _is_openai_image_download_timeout(exc: Exception) -> bool:
     msg = str(exc)
     return ("Timeout while downloading" in msg) and (
         ("param" in msg and "'url'" in msg) or ("param': 'url'" in msg)
     )
+
+
+def _is_retryable_openai_exception(exc: Exception) -> bool:
+    if _is_openai_image_download_timeout(exc):
+        return True
+
+    if isinstance(exc, APIError):
+        status_code = getattr(exc, "status_code", None)
+        if status_code in (408, 409, 429, 500, 502, 503, 504):
+            return True
+        # APIError without explicit status is often transient in streaming paths
+        return True
+
+    msg = str(exc).lower()
+    transient_markers = (
+        "timeout",
+        "temporarily unavailable",
+        "service unavailable",
+        "connection reset",
+        "connection aborted",
+        "rate limit",
+    )
+    return any(marker in msg for marker in transient_markers)
 
 
 async def _retry_delay_s(attempt: int, base: float = 0.8, cap: float = 8.0) -> float:
@@ -398,6 +424,8 @@ async def stream_normalized_openai_response(
     try:
         response = None
         max_openai_retries = 3
+
+        # Retry response creation
         for attempt in range(max_openai_retries):
             try:
                 create_kwargs: Dict[str, Any] = {
@@ -414,19 +442,73 @@ async def stream_normalized_openai_response(
                 response = await client.responses.create(**create_kwargs)
                 break
             except Exception as exc:
-                if _is_openai_image_download_timeout(exc) and attempt < max_openai_retries - 1:
-                    await asyncio.sleep(await _retry_delay_s(attempt))
+                retryable = _is_retryable_openai_exception(exc)
+                is_last_attempt = attempt >= max_openai_retries - 1
+                if retryable and not is_last_attempt:
+                    delay = await _retry_delay_s(attempt)
+                    logger.warning(
+                        "OpenAI create failed (attempt %s/%s), retrying in %.2fs. request_id=%s error=%s",
+                        attempt + 1,
+                        max_openai_retries,
+                        delay,
+                        corr_id,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
                     continue
+
+                logger.exception("OpenAI create failed permanently. request_id=%s", corr_id)
+                yield {
+                    "type": "error",
+                    "code": OPENAI_UPSTREAM_ERROR_CODE,
+                    "data": OPENAI_UPSTREAM_USER_MESSAGE,
+                }
                 raise
 
-        try:
-            async for event in response:
-                mapped_events = await _map_openai_event(event=event, state=state, usage=usage)
-                for mapped in mapped_events:
-                    yield mapped
-        except Exception as e:
-            yield {"type": "error", "data": str(e)}
-            raise
+        # Retry stream iteration
+        for attempt in range(max_openai_retries):
+            try:
+                async for event in response:
+                    mapped_events = await _map_openai_event(event=event, state=state, usage=usage)
+                    for mapped in mapped_events:
+                        yield mapped
+                break
+            except Exception as exc:
+                retryable = _is_retryable_openai_exception(exc)
+                is_last_attempt = attempt >= max_openai_retries - 1
+                if retryable and not is_last_attempt:
+                    delay = await _retry_delay_s(attempt)
+                    logger.warning(
+                        "OpenAI stream failed (attempt %s/%s), recreating stream in %.2fs. request_id=%s error=%s",
+                        attempt + 1,
+                        max_openai_retries,
+                        delay,
+                        corr_id,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+
+                    create_kwargs = {
+                        "model": model,
+                        "tools": tools,
+                        "tool_choice": tool_choice,
+                        "instructions": (instructions or "") + STYLE_GUIDE,
+                        "input": messages,
+                        "stream": True,
+                        "service_tier": "default",
+                    }
+                    if reasoning_summary:
+                        create_kwargs["reasoning"] = {"summary": reasoning_summary}
+                    response = await client.responses.create(**create_kwargs)
+                    continue
+
+                logger.exception("OpenAI stream failed permanently. request_id=%s", corr_id)
+                yield {
+                    "type": "error",
+                    "code": OPENAI_UPSTREAM_ERROR_CODE,
+                    "data": OPENAI_UPSTREAM_USER_MESSAGE,
+                }
+                raise
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
             await log_usage(
@@ -481,6 +563,24 @@ async def stream_normalized_openai_response(
                 web_search_calls=0,
                 images_generated=0,
             )
+    except Exception as exc:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await log_usage(
+                session,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=corr_id,
+                provider="openai",
+                model_name=model,
+                status="error",
+                error_message=str(exc),
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                reasoning_tokens=usage.reasoning_tokens,
+                web_search_calls=usage.web_search_calls,
+                images_generated=usage.images_generated,
+            )
+        raise
 
 
 async def generate_conversation_title(first_message: str) -> str:

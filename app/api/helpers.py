@@ -48,7 +48,11 @@ async def generate_and_publish(
         last_ckpt: dict[int, int] = {}
         content_cache: dict[int, MessageContent] = {}
         partial_image_keys: dict[int, list[str]] = {}
-        lifecycle: dict[str, bool] = {"text_request_finalized": False}
+        lifecycle: dict[str, Any] = {
+            "text_request_finalized": False,
+            "stream_failed": False,
+            "last_error_message": None,
+        }
         assistant_message_id_str = str(assistant_message_id)
 
         try:
@@ -64,7 +68,6 @@ async def generate_and_publish(
                     conversation_id=conversation_id,
                     request_id=request_id,
             ):
-                # Raw base64 image payloads can be large; publish URL events instead.
                 if ev.get("type") not in {"image.partial", "image.ready"}:
                     await bus.publish(assistant_message_id_str, ev)
 
@@ -88,11 +91,26 @@ async def generate_and_publish(
 
         except Exception as e:
             await _cleanup_partial_images(partial_image_keys)
-            await bus.publish(assistant_message_id_str, {"type": "error", "error": str(e)})
-            await bus.mark_done(assistant_message_id_str, ok=False, error=str(e))
+            await bus.publish(assistant_message_id_str, {
+                "type": "error",
+                "error": lifecycle.get("last_error_message") or str(e),
+            })
+            await bus.mark_done(
+                assistant_message_id_str,
+                ok=False,
+                error=lifecycle.get("last_error_message") or str(e),
+            )
             raise
         else:
-            await bus.mark_done(assistant_message_id_str, ok=True)
+            if lifecycle.get("stream_failed"):
+                await bus.mark_done(
+                    assistant_message_id_str,
+                    ok=False,
+                    error=lifecycle.get("last_error_message") or "stream_failed",
+                )
+            else:
+                await bus.mark_done(assistant_message_id_str, ok=True)
+
 
 
 async def _handle_stream_event(
@@ -111,7 +129,7 @@ async def _handle_stream_event(
         last_ckpt: dict[int, int],
         content_cache: dict[int, MessageContent],
         partial_image_keys: dict[int, list[str]],
-        lifecycle: dict[str, bool],
+        lifecycle: dict[str, Any],
 ) -> None:
     event_type = ev.get("type")
 
@@ -209,10 +227,11 @@ async def _handle_stream_event(
         return
 
     if event_type == "error":
+        lifecycle["stream_failed"] = True
+        lifecycle["last_error_message"] = ev.get("data") or ev.get("error") or "OpenAI stream error"
         if not lifecycle.get("text_request_finalized"):
             await finalize_request(session, request_id=request_id, user_id=user_id, success=False)
             lifecycle["text_request_finalized"] = True
-        # optional: mark message status in DB
         return
 
 
