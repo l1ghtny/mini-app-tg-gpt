@@ -34,5 +34,6 @@ class Settings:
     STARTER_BUNDLE_NAME: str = os.getenv("STARTER_BUNDLE")
     WEBAPP_URL: str = os.getenv("WEBAPP_URL")
     BOT_TOKEN_TEST_BOT: str = os.getenv("BOT_TOKEN_TEST_BOT")
+    BROADCAST_ADMIN_TOKEN: str = os.getenv("BROADCAST_ADMIN_TOKEN", "")
 
 settings = Settings()

@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.db.database import engine
 from app.db.models import AppUser
 from app.core.metrics import track_event
-from main import app, before_send
+from main import app
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

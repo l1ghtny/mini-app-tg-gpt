@@ -6,6 +6,7 @@ from sentry_sdk.integrations.openai import OpenAIIntegration
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.access_codes import access_codes
+from app.api.admin_broadcast import admin_broadcast
 from app.api.auth import auth
 from app.api.chat_folders import router as chat_folders_router
 from app.api.images import images
@@ -103,3 +104,4 @@ app.include_router(payments, prefix="/api/v1")
 app.include_router(metrics, prefix="/api/v1")
 app.include_router(models_catalog, prefix="/api/v1")
 app.include_router(whats_new, prefix="/api/v1")
+app.include_router(admin_broadcast, prefix="/api/v1")
