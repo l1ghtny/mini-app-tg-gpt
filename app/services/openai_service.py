@@ -542,7 +542,7 @@ async def summarize_history_chunk(
                     ],
                 },
             ],
-            max_output_tokens=max_output_tokens,
+            max_completion_tokens=max_output_tokens,
             text={"format": {"type": "text"}},
         )
     except Exception as exc:
