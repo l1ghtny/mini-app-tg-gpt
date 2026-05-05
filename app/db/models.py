@@ -31,6 +31,57 @@ class AppUser(SQLModel, table=True):
     payments: List["Payment"] = Relationship(back_populates="user")
 
 
+class WhatsNewItem(SQLModel, table=True):
+    __tablename__ = "whats_new_item"
+
+    id: str = Field(primary_key=True)
+    kind: str = Field(index=True)  # feature | improvement | fix | announcement | promo
+
+    title_en: str
+    title_ru: Optional[str] = None
+    body_en: str
+    body_ru: Optional[str] = None
+
+    icon: Optional[str] = None
+    image_url: Optional[str] = None
+
+    cta_label_en: Optional[str] = None
+    cta_label_ru: Optional[str] = None
+    cta_kind: Optional[str] = None  # open_settings | open_subscription | open_url | dismiss
+    cta_value: Optional[str] = None
+
+    audience_plans: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    min_app_version: Optional[str] = None
+
+    pinned: bool = Field(default=False, index=True)
+    starts_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    published_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('feature','improvement','fix','announcement','promo')",
+            name="ck_whats_new_item_kind",
+        ),
+        CheckConstraint(
+            "cta_kind IS NULL OR cta_kind IN ('open_settings','open_subscription','open_url','dismiss')",
+            name="ck_whats_new_item_cta_kind",
+        ),
+    )
+
+
+class UserWhatsNewState(SQLModel, table=True):
+    __tablename__ = "user_whats_new_state"
+
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", primary_key=True)
+    seen_up_to: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+
 class ChatFolder(SQLModel, table=True):
     __tablename__ = "chat_folder"
 

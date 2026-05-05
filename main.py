@@ -17,6 +17,7 @@ from app.api.tiers import tiers
 from app.api.usage_packs import usage_packs
 from app.api.user_subscription import user_subscription
 from app.api.user_usage import user_usage
+from app.api.whats_new import whats_new
 from app.core.config import settings
 
 logger = settings.custom_logger
@@ -29,7 +30,7 @@ logger = settings.custom_logger
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="1.0.2",
+    version="1.1.0",
     docs_url=None
 )
 
@@ -101,3 +102,4 @@ app.include_router(usage_packs, prefix="/api/v1")
 app.include_router(payments, prefix="/api/v1")
 app.include_router(metrics, prefix="/api/v1")
 app.include_router(models_catalog, prefix="/api/v1")
+app.include_router(whats_new, prefix="/api/v1")
