@@ -102,6 +102,10 @@ class MessageCreated(BaseModel):
     stream_url: str
 
 
+class ConversationStreamRedirect(BaseModel):
+    stream_url: str
+
+
 class RequestExists(BaseModel):
     user_message_id: Optional[uuid.UUID] = None
     assistant_message_id: uuid.UUID

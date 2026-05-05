@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
 from sqlmodel import select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
-from starlette.responses import RedirectResponse
+from starlette.responses import JSONResponse
 
 from app.api.dependencies import get_available_models
 from app.api.helpers import generate_and_publish, load_conversation
@@ -353,9 +353,11 @@ async def handle_sse_conversation(
     message_id = await redis.get(f"conv:{conversation_id}:current")
     if not message_id:
         return Response(status_code=204)
-    return RedirectResponse(
-        url=f"/api/v1/conversations/{conversation_id}/messages/{message_id}/stream",
+    stream_url = f"/api/v1/conversations/{conversation_id}/messages/{message_id}/stream"
+    return JSONResponse(
+        content={"stream_url": stream_url},
         status_code=307,
+        headers={"Location": stream_url},
     )
 
 

@@ -12,6 +12,7 @@ from app.db.models import AppUser, Conversation
 from app.db.database import get_session
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import (
+    ConversationStreamRedirect,
     CreateConversationRequest,
     ConversationAPI,
     ConversationWithMessages,
@@ -152,7 +153,26 @@ async def get_conversation_messages(
     )
 
 
-@router.get("/conversations/{cid}/stream", response_class=Response)
+@router.get(
+    "/conversations/{cid}/stream",
+    response_class=Response,
+    status_code=307,
+    responses={
+        307: {
+            "model": ConversationStreamRedirect,
+            "description": "Active stream found for this conversation.",
+            "headers": {
+                "Location": {
+                    "description": "SSE endpoint for the current assistant message stream.",
+                    "schema": {"type": "string"},
+                }
+            },
+        },
+        204: {
+            "description": "No active stream for this conversation.",
+        },
+    },
+)
 async def sse_conversation(
     cid: uuid.UUID,
     request: Request,
