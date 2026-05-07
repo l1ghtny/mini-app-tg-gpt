@@ -110,6 +110,12 @@ async def generate_and_publish(
                 )
             else:
                 await bus.mark_done(assistant_message_id_str, ok=True)
+        finally:
+            await _clear_active_stream_pointer(
+                bus=bus,
+                conversation_id=conversation_id,
+                assistant_message_id=assistant_message_id_str,
+            )
 
 
 
@@ -354,6 +360,26 @@ async def _cleanup_partial_images(partial_keys_by_index: dict[int, list[str]]) -
             except Exception:
                 # Best-effort cleanup for temporary objects.
                 continue
+
+
+async def _clear_active_stream_pointer(
+    *,
+    bus: RedisEventBus,
+    conversation_id: uuid.UUID,
+    assistant_message_id: str,
+) -> None:
+    key = f"conv:{conversation_id}:current"
+    current = await bus.r.get(key)
+    if current is None:
+        return
+
+    if isinstance(current, bytes):
+        current_value = current.decode("utf-8")
+    else:
+        current_value = str(current)
+
+    if current_value == assistant_message_id:
+        await bus.r.delete(key)
 
 
 # To use this function, we need to have a message created already

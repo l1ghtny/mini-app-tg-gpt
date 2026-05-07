@@ -7,14 +7,29 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import app.api.chat_helpers as chat_helpers
+import app.api.helpers as api_helpers
 from app.api.routes import create_message
 from app.db.models import AppUser, Conversation
 from app.schemas.chat import MessageContent, NewMessageRequest
 
 
 class _DummyRedis:
+    def __init__(self):
+        self._kv = {}
+
     async def exists(self, *_args, **_kwargs):
         return True
+
+    async def set(self, key, value, ex=None):
+        self._kv[key] = value
+        return True
+
+    async def get(self, key):
+        return self._kv.get(key)
+
+    async def delete(self, key):
+        self._kv.pop(key, None)
+        return 1
 
 
 @pytest.mark.asyncio
@@ -71,6 +86,7 @@ async def test_create_message_returns_user_and_assistant_ids(monkeypatch):
         model="gpt-5.4-nano",
         tool_choice="auto",
     )
+    redis = _DummyRedis()
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
         response = await create_message(
@@ -79,7 +95,7 @@ async def test_create_message_returns_user_and_assistant_ids(monkeypatch):
             background_tasks=BackgroundTasks(),
             session=session,
             current_user=user,
-            bus=_DummyRedis(),
+            bus=redis,
             _rate_limit_ok=True,
         )
 
@@ -87,6 +103,7 @@ async def test_create_message_returns_user_and_assistant_ids(monkeypatch):
     assert response.assistant_message_id is not None
     assert response.message_id == response.assistant_message_id
     assert str(response.stream_url).endswith(f"/messages/{response.assistant_message_id}/stream")
+    assert await redis.get(f"conv:{conversation.id}:current") == str(response.assistant_message_id)
 
 
 @pytest.mark.asyncio
@@ -179,3 +196,30 @@ async def test_create_message_idempotent_response_includes_both_ids(monkeypatch)
     assert second.assistant_message_id == first.assistant_message_id
     assert second.message_id == second.assistant_message_id
     assert str(second.stream_url).endswith(f"/messages/{second.assistant_message_id}/stream")
+
+
+class _DummyBus:
+    def __init__(self):
+        self.r = _DummyRedis()
+
+
+@pytest.mark.asyncio
+async def test_clear_active_stream_pointer_deletes_only_matching_message_id():
+    bus = _DummyBus()
+    conversation_id = uuid.uuid4()
+    key = f"conv:{conversation_id}:current"
+    await bus.r.set(key, "mid-1")
+
+    await api_helpers._clear_active_stream_pointer(
+        bus=bus,
+        conversation_id=conversation_id,
+        assistant_message_id="mid-2",
+    )
+    assert await bus.r.get(key) == "mid-1"
+
+    await api_helpers._clear_active_stream_pointer(
+        bus=bus,
+        conversation_id=conversation_id,
+        assistant_message_id="mid-1",
+    )
+    assert await bus.r.get(key) is None

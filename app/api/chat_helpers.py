@@ -19,6 +19,7 @@ from app.core.metrics import track_event
 from app.db import models
 from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder, TextModelCatalog
 from app.redis.event_bus import RedisEventBus
+from app.redis.settings import settings as redis_settings
 from app.schemas.chat import (
     EditMessageRequest,
     MessageUpdated,
@@ -150,6 +151,11 @@ async def handle_create_message(
         session,
         conversation_id,
         model_name=request.model,
+    )
+    await bus.set(
+        _conversation_current_stream_key(conversation_id),
+        str(assistant_msg.id),
+        ex=redis_settings.STREAM_TTL_SECONDS,
     )
     redis_bus = RedisEventBus(bus)
 
@@ -350,7 +356,7 @@ async def handle_sse_conversation(
 ) -> Response:
     await _load_conversation_for_user(session, conversation_id, current_user.id)
 
-    message_id = await redis.get(f"conv:{conversation_id}:current")
+    message_id = await redis.get(_conversation_current_stream_key(conversation_id))
     if not message_id:
         return Response(status_code=204)
     stream_url = f"/api/v1/conversations/{conversation_id}/messages/{message_id}/stream"
@@ -359,6 +365,10 @@ async def handle_sse_conversation(
         status_code=307,
         headers={"Location": stream_url},
     )
+
+
+def _conversation_current_stream_key(conversation_id: uuid.UUID | str) -> str:
+    return f"conv:{conversation_id}:current"
 
 
 async def handle_rename_conversation(
