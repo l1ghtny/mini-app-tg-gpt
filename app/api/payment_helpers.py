@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from dateutil.relativedelta import relativedelta
 from fastapi import BackgroundTasks, HTTPException, Response
-from sqlmodel import select
+from sqlmodel import desc, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
@@ -20,9 +20,14 @@ from app.db.subscription_tiers import (
 from app.schemas.subscriptions import (
     InitPaymentRequest,
     InitUsagePackPaymentRequest,
+    PaymentMethodResponse,
     PaymentInitResponse,
     PaymentStatusResponse,
     MockUsagePackPurchaseRequest,
+    SbpBindInitRequest,
+    SbpBindInitResponse,
+    SbpBindStatusRequest,
+    SbpBindStatusResponse,
 )
 from app.services.banking.tbank import tbank_service
 
@@ -83,8 +88,9 @@ async def init_subscription_payment(
             amount_cents=amount_cents,
             description=f"Subscription: {tier.name}",
             user_id=str(user.id),
-            recurrent="Y",
+            recurrent=True,
             receipt=receipt_data,
+            data=extra_data,
         )
 
         payment.tbank_payment_id = tbank_id
@@ -199,6 +205,136 @@ async def init_usage_pack_payment(
         )
         detail = str(exc).strip() or exc.__class__.__name__
         raise HTTPException(status_code=500, detail=detail)
+
+
+async def init_sbp_account_binding(
+    user: AppUser,
+    payload: SbpBindInitRequest,
+) -> SbpBindInitResponse:
+    try:
+        result = await tbank_service.add_account_qr(
+            description=payload.description,
+            data_type=payload.data_type,
+            bank_id=payload.bank_id,
+            data={"user_id": str(user.id)},
+            redirect_due_date=payload.redirect_due_date,
+        )
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        raise HTTPException(status_code=500, detail=detail)
+
+    request_key = result.get("RequestKey") or result.get("requestKey")
+    if not request_key:
+        raise HTTPException(status_code=500, detail="TBank AddAccountQr response missing RequestKey")
+
+    return SbpBindInitResponse(
+        request_key=str(request_key),
+        payment_id=str(result.get("PaymentId")) if result.get("PaymentId") is not None else None,
+        status=result.get("Status"),
+        payload=result.get("Data"),
+        qr_image=result.get("QrCode") or result.get("Image"),
+        raw=result,
+    )
+
+
+def _extract_account_token(payload: dict) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("AccountToken", "accountToken", "account_token"):
+        token = payload.get(key)
+        if token:
+            return str(token)
+    return None
+
+
+async def _set_default_payment_method(session: AsyncSession, user_id: uuid.UUID, method_id: uuid.UUID) -> None:
+    existing_methods = (await session.exec(
+        select(PaymentMethod).where(PaymentMethod.user_id == user_id, PaymentMethod.is_default == True)
+    )).all()
+
+    for method in existing_methods:
+        if method.id != method_id:
+            method.is_default = False
+            session.add(method)
+
+
+async def _save_or_update_sbp_method(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    account_token: str,
+    phone: str | None = None,
+) -> PaymentMethod:
+    existing = (await session.exec(
+        select(PaymentMethod).where(PaymentMethod.account_token == account_token)
+    )).first()
+    if existing:
+        if phone and not existing.phone:
+            existing.phone = phone
+        existing.is_default = True
+        session.add(existing)
+        await _set_default_payment_method(session, user_id, existing.id)
+        return existing
+
+    method = PaymentMethod(
+        user_id=user_id,
+        account_token=account_token,
+        type=PaymentMethodType.sbp.value,
+        phone=phone,
+        is_default=True,
+    )
+    session.add(method)
+    await session.flush()
+    await _set_default_payment_method(session, user_id, method.id)
+    return method
+
+
+async def get_sbp_account_binding_status(
+    session: AsyncSession,
+    user: AppUser,
+    payload: SbpBindStatusRequest,
+) -> SbpBindStatusResponse:
+    try:
+        result = await tbank_service.get_add_account_qr_state(payload.request_key)
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        raise HTTPException(status_code=500, detail=detail)
+
+    account_token = _extract_account_token(result)
+    phone = result.get("Phone")
+    if account_token:
+        await _save_or_update_sbp_method(session, user.id, account_token, phone=phone)
+        await session.commit()
+
+    return SbpBindStatusResponse(
+        request_key=payload.request_key,
+        status=result.get("Status"),
+        account_token=account_token,
+        phone=phone,
+        raw=result,
+    )
+
+
+async def list_payment_methods(session: AsyncSession, user: AppUser) -> list[PaymentMethodResponse]:
+    methods = (await session.exec(
+        select(PaymentMethod)
+        .where(PaymentMethod.user_id == user.id)
+        .order_by(desc(PaymentMethod.created_at))
+    )).all()
+
+    return [
+        PaymentMethodResponse(
+            id=str(method.id),
+            type=method.type,
+            is_default=method.is_default,
+            pan=method.pan if method.type == PaymentMethodType.card.value else None,
+            card_type=method.card_type if method.type == PaymentMethodType.card.value else None,
+            exp_date=method.exp_date if method.type == PaymentMethodType.card.value else None,
+            phone=method.phone if method.type == PaymentMethodType.sbp.value else None,
+            has_rebill_id=bool(method.rebill_id),
+            has_account_token=bool(method.account_token),
+        )
+        for method in methods
+    ]
 
 
 async def get_payment_status(
@@ -353,23 +489,10 @@ async def save_payment_method(session: AsyncSession, user_id: uuid.UUID, webhook
     Supports both Card (RebillId) and SBP (AccountToken).
     """
     # 1. Try to find AccountToken (SBP)
-    if webhook_data and "AccountToken" in webhook_data:
-        account_token = webhook_data["AccountToken"]
+    account_token = _extract_account_token(webhook_data or {})
+    if account_token:
         phone = webhook_data.get("Phone")
-
-        # Check if exists
-        existing = await session.exec(select(PaymentMethod).where(PaymentMethod.account_token == account_token))
-        if existing.first():
-            return
-
-        method = PaymentMethod(
-            user_id=user_id,
-            account_token=account_token,
-            type=PaymentMethodType.sbp.value,
-            phone=phone,
-            is_default=True
-        )
-        session.add(method)
+        await _save_or_update_sbp_method(session, user_id, account_token, phone=phone)
         logger.info(f"Saved SBP payment method for user {user_id}")
         return
 
@@ -378,8 +501,11 @@ async def save_payment_method(session: AsyncSession, user_id: uuid.UUID, webhook
         rebill_id = str(webhook_data["RebillId"])
         pan = webhook_data.get("Pan", "****")
         # Ensure we don't save duplicates
-        existing = await session.exec(select(PaymentMethod).where(PaymentMethod.rebill_id == rebill_id))
-        if existing.first():
+        existing = (await session.exec(select(PaymentMethod).where(PaymentMethod.rebill_id == rebill_id))).first()
+        if existing:
+            existing.is_default = True
+            session.add(existing)
+            await _set_default_payment_method(session, user_id, existing.id)
             return
 
         method = PaymentMethod(
@@ -392,6 +518,8 @@ async def save_payment_method(session: AsyncSession, user_id: uuid.UUID, webhook
             is_default=True,
         )
         session.add(method)
+        await session.flush()
+        await _set_default_payment_method(session, user_id, method.id)
         logger.info(f"Saved Card payment method for user {user_id} from webhook")
         return
 
@@ -406,8 +534,11 @@ async def save_payment_method(session: AsyncSession, user_id: uuid.UUID, webhook
     card_type = latest_card.get("CardType", "Unknown")
     exp = latest_card.get("ExpDate", "")
 
-    existing = await session.exec(select(PaymentMethod).where(PaymentMethod.rebill_id == rebill_id))
-    if existing.first():
+    existing = (await session.exec(select(PaymentMethod).where(PaymentMethod.rebill_id == rebill_id))).first()
+    if existing:
+        existing.is_default = True
+        session.add(existing)
+        await _set_default_payment_method(session, user_id, existing.id)
         return
 
     method = PaymentMethod(
@@ -420,6 +551,8 @@ async def save_payment_method(session: AsyncSession, user_id: uuid.UUID, webhook
         type=PaymentMethodType.card.value
     )
     session.add(method)
+    await session.flush()
+    await _set_default_payment_method(session, user_id, method.id)
     logger.info(f"Saved Card payment method for user {user_id} from GetCardList")
 
 

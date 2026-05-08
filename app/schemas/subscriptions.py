@@ -1,6 +1,6 @@
 ﻿from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal
 
 
@@ -113,6 +113,46 @@ class PaymentStatusResponse(BaseModel):
     product_type: Literal["subscription", "usage_pack"]
     product_name: str
     pack_id: Optional[str] = None
+
+
+class SbpBindInitRequest(BaseModel):
+    description: str
+    data_type: Literal["PAYLOAD", "IMAGE"] = "PAYLOAD"
+    bank_id: Optional[str] = None
+    redirect_due_date: Optional[str] = None
+
+
+class SbpBindInitResponse(BaseModel):
+    request_key: str
+    payment_id: Optional[str] = None
+    status: Optional[str] = None
+    payload: Optional[str] = None
+    qr_image: Optional[str] = None
+    raw: dict = Field(default_factory=dict)
+
+
+class SbpBindStatusRequest(BaseModel):
+    request_key: str
+
+
+class SbpBindStatusResponse(BaseModel):
+    request_key: str
+    status: Optional[str] = None
+    account_token: Optional[str] = None
+    phone: Optional[str] = None
+    raw: dict = Field(default_factory=dict)
+
+
+class PaymentMethodResponse(BaseModel):
+    id: str
+    type: Literal["card", "sbp"]
+    is_default: bool
+    pan: Optional[str] = None
+    card_type: Optional[str] = None
+    exp_date: Optional[str] = None
+    phone: Optional[str] = None
+    has_rebill_id: bool = False
+    has_account_token: bool = False
 
 
 class CancelSubscriptionResponse(BaseModel):

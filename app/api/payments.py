@@ -10,9 +10,14 @@ from app.db.models import AppUser
 from app.schemas.subscriptions import (
     InitPaymentRequest,
     InitUsagePackPaymentRequest,
+    PaymentMethodResponse,
     PaymentInitResponse,
     PaymentStatusResponse,
     MockUsagePackPurchaseRequest,
+    SbpBindInitRequest,
+    SbpBindInitResponse,
+    SbpBindStatusRequest,
+    SbpBindStatusResponse,
 )
 from app.core.config import settings
 
@@ -44,6 +49,31 @@ async def init_usage_pack_payment(
     session: AsyncSession = Depends(get_session),
 ):
     return await payment_helpers.init_usage_pack_payment(session, user, payload)
+
+
+@payments.post("/sbp/bind/init", response_model=SbpBindInitResponse)
+async def init_sbp_binding(
+    payload: SbpBindInitRequest,
+    user: AppUser = Depends(get_current_user),
+):
+    return await payment_helpers.init_sbp_account_binding(user, payload)
+
+
+@payments.post("/sbp/bind/status", response_model=SbpBindStatusResponse)
+async def get_sbp_binding_status(
+    payload: SbpBindStatusRequest,
+    user: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    return await payment_helpers.get_sbp_account_binding_status(session, user, payload)
+
+
+@payments.get("/methods", response_model=list[PaymentMethodResponse])
+async def get_payment_methods(
+    user: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    return await payment_helpers.list_payment_methods(session, user)
 
 
 @payments.post("/webhook", response_class=Response)

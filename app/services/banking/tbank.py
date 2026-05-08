@@ -9,6 +9,10 @@ class TBankService:
         self.password = settings.TBANK_PASSWORD
         self.base_url = settings.TBANK_API_URL
 
+    @staticmethod
+    def _is_success_payload(payload) -> bool:
+        return isinstance(payload, dict) and payload.get("Success", False)
+
     def _generate_token(self, params: dict) -> str:
         """
         Generates the TBank signature (Token).
@@ -57,7 +61,18 @@ class TBankService:
         calculated_token = self._generate_token(data)
         return received_token == calculated_token
 
-    async def init_payment(self, order_id: str, amount_cents: int, description: str, user_id: str, recurrent: bool = False, receipt: dict = None, data: dict = None) -> tuple[str, str]:
+    async def init_payment(
+        self,
+        order_id: str,
+        amount_cents: int,
+        description: str,
+        user_id: str,
+        recurrent: bool = False,
+        receipt: dict = None,
+        data: dict = None,
+        operation_initiator_type: str | None = None,
+        customer_key: str | None = None,
+    ) -> tuple[str, str]:
         """
         Initializes payment and returns (PaymentURL, PaymentId)
         """
@@ -69,12 +84,16 @@ class TBankService:
             "DATA": {"user_id": user_id}
         }
 
-        if data:
-            payload["DATA"].update(data)
+        # if data:
+        #     payload["DATA"].update(data)
 
-        if recurrent:
+        is_recurrent = recurrent is True or str(recurrent).upper() == "Y"
+        if is_recurrent:
             payload["Recurrent"] = "Y"
-            payload["CustomerKey"] = user_id
+            payload["CustomerKey"] = customer_key or user_id
+
+        if operation_initiator_type:
+            payload["OperationInitiatorType"] = operation_initiator_type
 
         if receipt:
             payload["Receipt"] = receipt
@@ -111,7 +130,7 @@ class TBankService:
                 f"TBank Init Invalid JSON: status={resp.status_code}, body={body_preview}"
             ) from exc
 
-        if not data.get("Success", False):
+        if not self._is_success_payload(data):
             # TBank errors often come in 'Message' or 'Details'
             message = data.get("Message", "Unknown error")
             details = data.get("Details", "")
@@ -120,6 +139,77 @@ class TBankService:
             )
 
         return data.get("PaymentURL"), str(data.get("PaymentId"))
+
+    async def add_account_qr(
+        self,
+        description: str,
+        data_type: str = "PAYLOAD",
+        bank_id: str | None = None,
+        data: dict | None = None,
+        redirect_due_date: str | None = None,
+    ) -> dict:
+        payload = {
+            "TerminalKey": self.terminal_key,
+            "Description": description,
+            "DataType": data_type,
+        }
+        if bank_id:
+            payload["BankId"] = bank_id
+        if data:
+            payload["Data"] = data
+        if redirect_due_date:
+            payload["RedirectDueDate"] = redirect_due_date
+
+        payload["Token"] = self._generate_token(payload)
+
+        timeout = httpx.Timeout(timeout=settings.TBANK_TIMEOUT_SECONDS)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{self.base_url}/AddAccountQr", json=payload)
+            result = resp.json()
+
+        if not self._is_success_payload(result):
+            message = result.get("Message", "Unknown error") if isinstance(result, dict) else "Invalid response"
+            details = result.get("Details", "") if isinstance(result, dict) else ""
+            raise Exception(f"TBank AddAccountQr Failed: {message} {details}")
+
+        return result
+
+    async def get_add_account_qr_state(self, request_key: str) -> dict:
+        payload = {
+            "TerminalKey": self.terminal_key,
+            "RequestKey": request_key,
+        }
+        payload["Token"] = self._generate_token(payload)
+
+        timeout = httpx.Timeout(timeout=settings.TBANK_TIMEOUT_SECONDS)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{self.base_url}/GetAddAccountQrState", json=payload)
+            result = resp.json()
+
+        if not self._is_success_payload(result):
+            message = result.get("Message", "Unknown error") if isinstance(result, dict) else "Invalid response"
+            details = result.get("Details", "") if isinstance(result, dict) else ""
+            raise Exception(f"TBank GetAddAccountQrState Failed: {message} {details}")
+
+        return result
+
+    async def get_account_qr_list(self) -> dict:
+        payload = {
+            "TerminalKey": self.terminal_key,
+        }
+        payload["Token"] = self._generate_token(payload)
+
+        timeout = httpx.Timeout(timeout=settings.TBANK_TIMEOUT_SECONDS)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{self.base_url}/GetAccountQrList", json=payload)
+            result = resp.json()
+
+        if not self._is_success_payload(result):
+            message = result.get("Message", "Unknown error") if isinstance(result, dict) else "Invalid response"
+            details = result.get("Details", "") if isinstance(result, dict) else ""
+            raise Exception(f"TBank GetAccountQrList Failed: {message} {details}")
+
+        return result
 
     async def get_card_list(self, user_id: str) -> list[dict]:
         """
@@ -181,7 +271,7 @@ class TBankService:
             resp = await client.post(f"{self.base_url}/ChargeQr", json=payload)
             data = resp.json()
 
-        if not data.get("Success", False):
+        if not self._is_success_payload(data):
             raise Exception(f"TBank ChargeQr Failed: {data.get('Message')} {data.get('Details', '')}")
 
         return True
@@ -206,7 +296,7 @@ class TBankService:
 
         # If Success=True, the payment is processing (or done).
         # Webhook will confirm final status.
-        if not data.get("Success", False):
+        if not self._is_success_payload(data):
             raise Exception(f"TBank Charge Failed: {data.get('Message')} {data.get('Details', '')}")
 
         return True

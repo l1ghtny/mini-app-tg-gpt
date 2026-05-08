@@ -60,12 +60,14 @@ async def execute_recurring_charge(session: AsyncSession, user_id: uuid.UUID, am
         # PaymentId comes from Init.
         # So yes, we Init first.
 
+        operation_initiator_type = "R" if payment_method.type == PaymentMethodType.card.value else None
         payment_url, tbank_payment_id = await tbank_service.init_payment(
             order_id=str(payment.id),
             amount_cents=amount_cents,
             description=description,
             user_id=str(user_id),
-            recurrent=False
+            recurrent=False,
+            operation_initiator_type=operation_initiator_type,
         )
 
         payment.tbank_payment_id = tbank_payment_id
