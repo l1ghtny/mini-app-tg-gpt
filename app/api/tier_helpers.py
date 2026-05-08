@@ -121,12 +121,9 @@ def _build_tier_response(
     image_limit_override = -1 if daily_energy > 0 else None
     allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
     allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
-    allowed_quality_set = set(allowed_qualities)
     image_pricing: list[ImageQualityPricingResponse] = []
     for image_model in allowed_models:
         for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: p.quality):
-            if allowed_quality_set and pricing.quality not in allowed_quality_set:
-                continue
             image_pricing.append(ImageQualityPricingResponse(
                 image_model=pricing.image_model,
                 quality=pricing.quality,

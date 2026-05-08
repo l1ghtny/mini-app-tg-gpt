@@ -130,29 +130,9 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
         entitlements = breakdown["entitlements"]
         total_remaining_credits = breakdown["total_remaining_credits"]
 
-        # Check if this model is enabled by any pack
-        is_in_packs = False
-        for pack in packs:
-            for limit in pack.pack.pack_image_model_limits:
-                if limit.image_model == image_model:
-                    is_in_packs = True
-                    break
-            if is_in_packs:
-                break
-
-        allowed_qualities = set()
-        if is_in_packs:
-            allowed_qualities = {'low', 'medium', 'high'}
-        else:
-            for ent in entitlements:
-                if ent["kind"] == "tier":
-                    allowed_qualities.update(ent.get("allowed_image_qualities", []))
-
+        # All image qualities are universally available; energy is the sole limiter.
         qualities = []
         for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: p.quality):
-            if pricing.quality not in allowed_qualities:
-                continue
-
             cost = pricing.credit_cost or 1.0
             if total_remaining_credits == -1:
                 remaining = -1
@@ -246,12 +226,9 @@ async def get_image_energy_usage(session: AsyncSession, user) -> UserImageEnergy
             tier_id=tier.id,
         )
         allowed_models = {limit.image_model for limit in tier.tier_image_model_limits}
-        allowed_qualities = {limit.quality for limit in tier.tier_image_quality_limits}
         min_cost = None
         for model_name in allowed_models:
             for pricing in pricing_by_model.get(model_name, []):
-                if allowed_qualities and pricing.quality not in allowed_qualities:
-                    continue
                 cost = float(pricing.credit_cost or 0.0)
                 if cost <= 0:
                     continue

@@ -1,4 +1,4 @@
-﻿import uuid
+import uuid
 from datetime import datetime, timedelta, UTC
 from typing import Optional
 
@@ -922,7 +922,6 @@ async def select_image_entitlement(
 
     throttled_waits: list[timedelta] = []
     model_allowed = bool(pack_entries)
-    quality_allowed = bool(pack_entries)
 
     eligible_tier_entries = []
     for ent in tier_entries:
@@ -930,11 +929,6 @@ async def select_image_entitlement(
         if image_model not in allowed_models:
             continue
         model_allowed = True
-
-        allowed_qualities = ent.get("allowed_image_qualities") or []
-        if quality and quality not in allowed_qualities:
-            continue
-        quality_allowed = True
         eligible_tier_entries.append(ent)
 
     def _daily_energy_for_entitlement(ent: dict) -> int:
@@ -1002,20 +996,7 @@ async def select_image_entitlement(
             "wait_time": None,
         }
 
-    if model_allowed and not quality_allowed:
-        return {
-            "kind": "none",
-            "source": "none",
-            "tier_id": None,
-            "usage_pack_id": None,
-            "cap": 0,
-            "used": 0,
-            "remaining_credits": 0,
-            "cost": cost,
-            "allowed": False,
-            "throttle_reason": "quality_restricted",
-            "wait_time": None,
-        }
+
 
     if throttled_waits:
         wait_time = min(throttled_waits)
