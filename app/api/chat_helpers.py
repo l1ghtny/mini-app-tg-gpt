@@ -271,7 +271,23 @@ async def handle_edit_message(
 
     await _replace_message_content(session, target_message, request)
 
-    for message in messages[target_index + 1:]:
+    # Delete every message that comes after the edited one, regardless of role.
+    # Use timestamp boundary instead of slice order so user+assistant messages
+    # are consistently truncated even when ordering ties appear.
+    messages_to_delete = (await session.exec(
+        select(Message).where(
+            Message.conversation_id == conversation_id,
+            (
+                (Message.created_at > target_message.created_at)
+                | (
+                    (Message.created_at == target_message.created_at)
+                    & (Message.id != target_message.id)
+                )
+            ),
+        )
+    )).all()
+
+    for message in messages_to_delete:
         await session.delete(message)
 
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -280,7 +296,7 @@ async def handle_edit_message(
 
     return MessageUpdated(
         message_id=target_message.id,
-        deleted_after=max(0, len(messages) - target_index - 1),
+        deleted_after=len(messages_to_delete),
     )
 
 
