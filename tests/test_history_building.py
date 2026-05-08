@@ -177,3 +177,17 @@ async def test_history_small_dialogue_has_no_summary(monkeypatch):
         {"role": "assistant", "content": [{"type": "output_text", "text": "hi there"}]},
     ]
     assert conversation.history_summary is None
+
+
+def test_resolve_system_prompt_includes_main_and_folder_prompts():
+    user = m.AppUser(telegram_id=721000203, default_prompt="Use concise and practical wording.")
+    conversation = m.Conversation(user_id=user.id, title="conv-test")
+    folder = m.ChatFolder(user_id=user.id, name="Work", prompt="Focus on backend architecture details.")
+    conversation.folder = folder
+
+    resolved = chat_helpers._resolve_system_prompt(conversation, user)
+
+    assert "Main user prompt:" in resolved
+    assert "Use concise and practical wording." in resolved
+    assert "Folder prompt for this chat:" in resolved
+    assert "Focus on backend architecture details." in resolved

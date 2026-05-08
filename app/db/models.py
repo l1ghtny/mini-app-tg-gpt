@@ -82,6 +82,16 @@ class UserWhatsNewState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
 
 
+class UserPersonalization(SQLModel, table=True):
+    __tablename__ = "user_personalization"
+
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", primary_key=True)
+    answers: Optional[dict] = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
+    dismissed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
+    updated_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
+
+
 class ChatFolder(SQLModel, table=True):
     __tablename__ = "chat_folder"
 

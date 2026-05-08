@@ -940,9 +940,21 @@ def _apply_image_quota_notice(
 
 
 def _resolve_system_prompt(conversation: Conversation, user: AppUser) -> str:
+    parts: list[str] = []
+
+    main_user_prompt = (user.default_prompt or "").strip()
+    if main_user_prompt:
+        parts.append("Main user prompt:\n\n" + main_user_prompt)
+
     if conversation.folder and conversation.folder.prompt:
-        return "User prompt for this chat:\n\n" + conversation.folder.prompt + "\n\n"
-    return user.default_prompt
+        folder_prompt = conversation.folder.prompt.strip()
+        if folder_prompt:
+            parts.append("Folder prompt for this chat:\n\n" + folder_prompt)
+
+    if not parts:
+        return ""
+
+    return "\n\n".join(parts) + "\n\n"
 
 
 async def _create_user_message(
