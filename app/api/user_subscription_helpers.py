@@ -51,6 +51,14 @@ def _tier_slug(name: str) -> str:
 
 
 async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscriptionsResponse:
+    default_payment_method = await session.exec(
+        select(PaymentMethod.id).where(
+            PaymentMethod.user_id == user.id,
+            PaymentMethod.is_default == True,
+        )
+    )
+    has_default_payment_method = default_payment_method.first() is not None
+
     query = (
         select(UserSubscription)
         .where(
@@ -68,7 +76,11 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
     active_subscriptions: list[SubscriptionResponse] = []
     for sub in ordered:
         expires_at = sub.expires_at
-        if getattr(sub.tier, "is_recurring", True) and expires_at is None:
+        is_recurring_tier = bool(getattr(sub.tier, "is_recurring", True))
+        is_paid_tier = sub.tier.price_cents > 0
+        auto_renew = is_recurring_tier and is_paid_tier and has_default_payment_method
+
+        if is_recurring_tier and expires_at is None:
             expires_at = _add_one_calendar_month(sub.started_at)
 
         active_subscriptions.append(
@@ -77,6 +89,10 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
                 status=sub.status,
                 started_at=_format_ts(sub.started_at),
                 expires_at=_format_ts(expires_at),
+                is_recurring=is_recurring_tier,
+                auto_renew=auto_renew,
+                can_cancel=auto_renew,
+                cancel_at_period_end=is_recurring_tier and is_paid_tier and not auto_renew,
                 tier_name=sub.tier.name,
                 tier_slug=_tier_slug(sub.tier.name),
                 tier_rank=sub.tier.index or 0,

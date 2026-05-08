@@ -9,6 +9,10 @@ class SubscriptionResponse(BaseModel):
     status: str
     started_at: str
     expires_at: Optional[str]
+    is_recurring: bool = False
+    auto_renew: bool = False
+    can_cancel: bool = False
+    cancel_at_period_end: bool = False
     tier_name: str
     tier_slug: str
     tier_rank: int
