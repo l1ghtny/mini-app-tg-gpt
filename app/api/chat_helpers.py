@@ -887,6 +887,11 @@ def _format_wait_time(wait_time: timedelta) -> str:
         return f"{hours} hours"
     return f"{minutes} minutes"
 
+def _is_effectively_no_refill_wait(wait_time: timedelta | None) -> bool:
+    if not wait_time:
+        return False
+    return wait_time.total_seconds() >= 30 * 24 * 60 * 60
+
 
 def _apply_image_quota_notice(
     system_prompt: str | None,
@@ -901,6 +906,13 @@ def _apply_image_quota_notice(
         return prompt
 
     if throttle_reason == "pacing":
+        if _is_effectively_no_refill_wait(wait_time):
+            return (
+                prompt
+                + "\n\nSYSTEM NOTICE: The user has exhausted a one-time image energy pool that does not auto-refill. "
+                "The image generation tool is disabled until they upgrade or buy additional usage. "
+                "If the user asks for an image, explain they need to upgrade to continue image generation.\n\n"
+            )
         time_str = _format_wait_time(wait_time) if wait_time else "a short while"
         return (
             prompt

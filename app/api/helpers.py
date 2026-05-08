@@ -368,6 +368,10 @@ async def _clear_active_stream_pointer(
     conversation_id: uuid.UUID,
     assistant_message_id: str,
 ) -> None:
+    # Some tests use a minimal fake bus without redis backing.
+    if not hasattr(bus, "r") or bus.r is None:
+        return
+
     key = f"conv:{conversation_id}:current"
     current = await bus.r.get(key)
     if current is None:

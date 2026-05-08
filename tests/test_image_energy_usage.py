@@ -67,7 +67,7 @@ async def test_image_energy_usage_reports_saved_and_used():
 
 
 @pytest.mark.asyncio
-async def test_image_energy_usage_none_for_monthly_only_tiers():
+async def test_image_energy_usage_none_for_recurring_tiers_without_daily_energy():
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url
     engine = create_async_engine(test_db_url, future=True, echo=False)
@@ -80,6 +80,7 @@ async def test_image_energy_usage_none_for_monthly_only_tiers():
         tier = (await session.exec(select(SubscriptionTier).where(SubscriptionTier.name == "free"))).first()
         assert tier is not None
         tier.daily_image_energy = 0
+        tier.is_recurring = True
         session.add(tier)
 
         session.add(TierImageModelLimit(tier_id=tier.id, image_model="gpt-image-1.5", monthly_requests=20))

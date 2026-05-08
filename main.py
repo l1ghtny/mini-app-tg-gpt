@@ -32,7 +32,7 @@ logger = settings.custom_logger
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="1.1.2",
+    version="1.2.0",
     docs_url=None
 )
 

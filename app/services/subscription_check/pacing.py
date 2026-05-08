@@ -31,9 +31,19 @@ async def get_image_energy_snapshot(
     max_burst_days: int = 5,
     cost: float = 0.0,
     tier_id: uuid.UUID | None = None,
+    is_recurring: bool = True,
+    total_pool: float = 0.0,
 ) -> ImageEnergySnapshot:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    if daily_target <= 0:
+
+    if is_recurring:
+        refill_rate_per_sec = daily_target / 86400.0
+        capacity = daily_target * max_burst_days
+    else:
+        refill_rate_per_sec = daily_target / 86400.0
+        capacity = total_pool
+
+    if capacity <= 0 and refill_rate_per_sec <= 0:
         return ImageEnergySnapshot(
             daily_target=0.0,
             max_burst_days=max_burst_days,
@@ -47,9 +57,11 @@ async def get_image_energy_snapshot(
             as_of=now,
         )
 
-    refill_rate_per_sec = daily_target / 86400.0
-    capacity = daily_target * max_burst_days
     start_window = now - timedelta(days=30)
+    if not is_recurring:
+        # For non-recurring pools, we look back as far as needed to count all usage since sub start
+        # but 90 days is a safe practical limit for the "lifetime" check if we don't have sub start here
+        start_window = now - timedelta(days=90)
 
     query = (
         select(RequestLedger)
@@ -83,7 +95,7 @@ async def get_image_energy_snapshot(
     current_tokens = min(capacity, current_tokens + (elapsed_since_last * refill_rate_per_sec))
 
     available_energy = max(0.0, current_tokens)
-    saved_energy = max(0.0, min(capacity, available_energy) - daily_target)
+    saved_energy = max(0.0, min(capacity, available_energy) - daily_target) if is_recurring else 0.0
     used_energy = max(0.0, capacity - min(capacity, available_energy))
 
     if cost <= 0 or available_energy >= cost:
@@ -91,8 +103,12 @@ async def get_image_energy_snapshot(
         wait_time = timedelta(seconds=0)
     else:
         missing = cost - available_energy
-        is_throttled = True
-        wait_time = timedelta(seconds=(missing / refill_rate_per_sec))
+        if refill_rate_per_sec > 0:
+            is_throttled = True
+            wait_time = timedelta(seconds=(missing / refill_rate_per_sec))
+        else:
+            is_throttled = True
+            wait_time = timedelta(days=365)  # Effectively infinite if no refill
 
     return ImageEnergySnapshot(
         daily_target=daily_target,
@@ -115,6 +131,8 @@ async def check_image_pacing(
     max_burst_days: int = 5,
     cost: float = 1.0,
     tier_id: uuid.UUID | None = None,
+    is_recurring: bool = True,
+    total_pool: float = 0.0,
 ) -> tuple[bool, timedelta]:
     snapshot = await get_image_energy_snapshot(
         session=session,
@@ -123,6 +141,8 @@ async def check_image_pacing(
         max_burst_days=max_burst_days,
         cost=cost,
         tier_id=tier_id,
+        is_recurring=is_recurring,
+        total_pool=total_pool,
     )
     return snapshot.is_throttled, snapshot.wait_time
 

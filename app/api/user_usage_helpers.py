@@ -151,12 +151,19 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                     daily_target = _daily_energy_from_entitlement(ent)
                     tier_id = uuid.UUID(ent["tier_id"]) if ent.get("tier_id") else None
                     if tier_id:
+                        # Find the actual tier to get is_recurring and monthly_images
+                        tier = next((s.tier for s in subscriptions if str(s.tier_id) == str(tier_id)), None)
+                        is_recurring = getattr(tier, "is_recurring", True) if tier else True
+                        total_pool = float(getattr(tier, "monthly_images", 0) or 0) if tier else 0.0
+                        
                         is_throttled, wait_time = await check_image_pacing(
                             session,
                             user.id,
                             daily_target=daily_target,
                             cost=cost,
                             tier_id=tier_id,
+                            is_recurring=is_recurring,
+                            total_pool=total_pool,
                         )
                         pacing = {
                             "is_throttled": is_throttled,
@@ -211,8 +218,11 @@ async def get_image_energy_usage(session: AsyncSession, user) -> UserImageEnergy
     for sub in subscriptions:
         tier = sub.tier
         daily_energy = _daily_energy_from_tier(tier)
-        if daily_energy <= 0:
+        is_recurring = getattr(tier, "is_recurring", True)
+        monthly_images = tier.monthly_images or 0
+        if daily_energy <= 0 and (is_recurring or monthly_images <= 0):
             continue
+            
         tier_id_str = str(tier.id)
         if tier_id_str in seen_tiers:
             continue
@@ -224,6 +234,8 @@ async def get_image_energy_usage(session: AsyncSession, user) -> UserImageEnergy
             daily_target=daily_energy,
             cost=0.0,
             tier_id=tier.id,
+            is_recurring=is_recurring,
+            total_pool=float(monthly_images),
         )
         allowed_models = {limit.image_model for limit in tier.tier_image_model_limits}
         min_cost = None
@@ -241,6 +253,8 @@ async def get_image_energy_usage(session: AsyncSession, user) -> UserImageEnergy
             daily_target=daily_energy,
             cost=check_cost,
             tier_id=tier.id,
+            is_recurring=is_recurring,
+            total_pool=float(monthly_images),
         )
         max_energy = int(snapshot.capacity)
         available_energy = int(snapshot.available_energy)

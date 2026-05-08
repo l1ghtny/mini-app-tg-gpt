@@ -79,7 +79,7 @@ async def test_image_credits_are_shared_across_models_for_tier():
 
 
 @pytest.mark.asyncio
-async def test_daily_limited_tier_reports_infinite_image_remaining():
+async def test_daily_limited_tier_reports_finite_energy_remaining():
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url
     engine = create_async_engine(test_db_url, future=True, echo=False)
@@ -96,7 +96,7 @@ async def test_daily_limited_tier_reports_infinite_image_remaining():
         ).first()
         assert tier is not None
 
-        # Any positive daily energy should show this tier as infinite in remaining display.
+        # Energy tiers should expose a finite available-energy snapshot, not "-1 unlimited".
         tier.daily_image_energy = 5
         session.add(tier)
 
@@ -115,4 +115,8 @@ async def test_daily_limited_tier_reports_infinite_image_remaining():
 
     await engine.dispose()
 
-    assert breakdown["total_remaining_credits"] == -1
+    assert breakdown["total_remaining_credits"] >= 0
+    entry = next((e for e in breakdown["entitlements"] if e["kind"] == "tier"), None)
+    assert entry is not None
+    assert entry.get("is_energy_tier") is True
+    assert entry["remaining_credits"] >= 0
