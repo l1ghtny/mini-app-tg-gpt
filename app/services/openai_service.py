@@ -585,20 +585,29 @@ async def stream_normalized_openai_response(
 
 async def generate_conversation_title(first_message: str) -> str:
     try:
-        response = await client.chat.completions.create(
+        response = await client.responses.create(
             model="gpt-5.4-nano",
-            messages=[
+            input=[
                 {
-                    "role": "system",
-                    "content": "You are an expert at creating short, concise titles. Summarize the user's message in 5 words or less. Do not use quotation marks or punctuation.",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You are an expert at creating short, concise titles. "
+                                "Summarize the user's message in 5 words or less. "
+                                "Do not use quotation marks or punctuation."
+                            ),
+                        }
+                    ],
                 },
-                {"role": "user", "content": first_message},
+                {"role": "user", "content": [{"type": "input_text", "text": first_message}]},
             ],
-            temperature=0,
-            max_tokens=20,
+            max_output_tokens=20,
+            text={"format": {"type": "text"}},
         )
         logger.info("Generated conversation title")
-        title = response.choices[0].message.content.strip().strip('"').strip(".")
+        title = (getattr(response, "output_text", None) or "").strip().strip('"').strip(".")
         return title if title else "New Chat"
     except Exception as e:
         print(f"Error generating title: {e}")
@@ -642,7 +651,7 @@ async def summarize_history_chunk(
                     ],
                 },
             ],
-            max_completion_tokens=max_output_tokens,
+            max_output_tokens=max_output_tokens,
             text={"format": {"type": "text"}},
         )
     except Exception as exc:

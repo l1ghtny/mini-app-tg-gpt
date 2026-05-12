@@ -4,8 +4,7 @@ import uuid
 from typing import Any, Optional, Iterable
 
 from fastapi import HTTPException
-from openai.types.beta import FileSearchToolParam
-from openai.types.responses import WebSearchToolParam
+from openai.types.responses import FileSearchToolParam, WebSearchToolParam
 from openai.types.responses.tool import CodeInterpreter, ImageGeneration
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
