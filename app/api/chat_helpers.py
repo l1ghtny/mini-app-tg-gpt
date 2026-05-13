@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 
 from app.api.dependencies import get_available_models
 from app.api.helpers import generate_and_publish, load_conversation
+from app.core.config import settings as app_settings
 from app.core.metrics import track_event
 from app.db import models
 from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder, TextModelCatalog
@@ -152,6 +153,14 @@ async def handle_create_message(
         conversation_id,
         model_name=request.model,
     )
+    previous_response_id = _resolve_previous_response_id_for_chain(conversation)
+    if previous_response_id:
+        background_tasks.add_task(
+            track_event,
+            "openai.chain.attempted",
+            str(current_user.id),
+            {"model": request.model},
+        )
     await bus.set(
         _conversation_current_stream_key(conversation_id),
         str(assistant_msg.id),
@@ -171,6 +180,7 @@ async def handle_create_message(
         tool_choice=request_tool_choice,
         tools=tools,
         request_id=idempotency_key,
+        previous_response_id=previous_response_id,
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
     )
@@ -1252,6 +1262,7 @@ def _queue_generation(
     tool_choice: str | dict[str, Any] | None,
     tools: list,
     request_id: str,
+    previous_response_id: Optional[str],
     image_entitlement_tier_id: Optional[uuid.UUID],
     image_entitlement_pack_id: Optional[uuid.UUID],
 ) -> None:
@@ -1267,9 +1278,30 @@ def _queue_generation(
         tool_choice=tool_choice,
         tools=tools,
         request_id=request_id,
+        previous_response_id=previous_response_id,
         image_entitlement_tier_id=image_entitlement_tier_id,
         image_entitlement_pack_id=image_entitlement_pack_id,
     )
+
+
+def _resolve_previous_response_id_for_chain(conversation: Conversation) -> str | None:
+    if not app_settings.OPENAI_CHAINING_ENABLED:
+        return None
+
+    response_id = (conversation.last_openai_response_id or "").strip()
+    if not response_id:
+        return None
+
+    updated_at = conversation.openai_chain_updated_at
+    if updated_at is None:
+        return None
+
+    max_age = timedelta(days=max(1, app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS))
+    age = datetime.now(timezone.utc).replace(tzinfo=None) - updated_at
+    if age > max_age:
+        return None
+
+    return response_id
 
 
 async def _track_message_metrics(
