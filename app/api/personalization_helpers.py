@@ -17,7 +17,7 @@ from app.schemas.personalization import (
     WizardQuestionResponse,
 )
 
-PERSONALIZATION_WIZARD_VERSION = "2026-05-08"
+PERSONALIZATION_WIZARD_VERSION = "2026-05-13"
 PERSONALIZATION_DISMISS_COOLDOWN_DAYS = 3
 
 
@@ -29,40 +29,40 @@ WIZARD_CONFIG: dict[str, Any] = {
     "version": PERSONALIZATION_WIZARD_VERSION,
     "title": {
         "en": "Personalize your AI experience",
-        "ru": "Персонализируйте ваш AI-опыт",
+        "ru": "ÐŸÐµÑ€ÑÐ¾Ð½Ð°Ð»Ð¸Ð·Ð¸Ñ€ÑƒÐ¹Ñ‚Ðµ Ð²Ð°Ñˆ AI-Ð¾Ð¿Ñ‹Ñ‚",
     },
     "description": {
         "en": "Answer a few questions and we will prepare your main user prompt.",
-        "ru": "Ответьте на несколько вопросов, и мы подготовим ваш основной пользовательский промпт.",
+        "ru": "ÐžÑ‚Ð²ÐµÑ‚ÑŒÑ‚Ðµ Ð½Ð° Ð½ÐµÑÐºÐ¾Ð»ÑŒÐºÐ¾ Ð²Ð¾Ð¿Ñ€Ð¾ÑÐ¾Ð², Ð¸ Ð¼Ñ‹ Ð¿Ð¾Ð´Ð³Ð¾Ñ‚Ð¾Ð²Ð¸Ð¼ Ð²Ð°Ñˆ Ð¾ÑÐ½Ð¾Ð²Ð½Ð¾Ð¹ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÑŒÑÐºÐ¸Ð¹ Ð¿Ñ€Ð¾Ð¼Ð¿Ñ‚.",
     },
     "questions": [
         {
             "id": "answer_depth",
             "title": {
                 "en": "Do you want detailed explanations right away?",
-                "ru": "Нужны подробные объяснения сразу?",
+                "ru": "ÐÑƒÐ¶Ð½Ñ‹ Ð¿Ð¾Ð´Ñ€Ð¾Ð±Ð½Ñ‹Ðµ Ð¾Ð±ÑŠÑÑÐ½ÐµÐ½Ð¸Ñ ÑÑ€Ð°Ð·Ñƒ?",
             },
             "options": [
                 {
                     "id": "detailed_first",
                     "label": {
                         "en": "Yes, detailed first",
-                        "ru": "Да, сразу подробно",
+                        "ru": "Ð”Ð°, ÑÑ€Ð°Ð·Ñƒ Ð¿Ð¾Ð´Ñ€Ð¾Ð±Ð½Ð¾",
                     },
                     "fragment": {
                         "en": "Give detailed explanations right away. Ask clarifying questions only when critical context is missing.",
-                        "ru": "Давай подробные объяснения сразу. Уточняющие вопросы задавай только если не хватает критичного контекста.",
+                        "ru": "Ð”Ð°Ð²Ð°Ð¹ Ð¿Ð¾Ð´Ñ€Ð¾Ð±Ð½Ñ‹Ðµ Ð¾Ð±ÑŠÑÑÐ½ÐµÐ½Ð¸Ñ ÑÑ€Ð°Ð·Ñƒ. Ð£Ñ‚Ð¾Ñ‡Ð½ÑÑŽÑ‰Ð¸Ðµ Ð²Ð¾Ð¿Ñ€Ð¾ÑÑ‹ Ð·Ð°Ð´Ð°Ð²Ð°Ð¹ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐµÑÐ»Ð¸ Ð½Ðµ Ñ…Ð²Ð°Ñ‚Ð°ÐµÑ‚ ÐºÑ€Ð¸Ñ‚Ð¸Ñ‡Ð½Ð¾Ð³Ð¾ ÐºÐ¾Ð½Ñ‚ÐµÐºÑÑ‚Ð°.",
                     },
                 },
                 {
                     "id": "clarify_first",
                     "label": {
                         "en": "Ask clarifying questions first",
-                        "ru": "Сначала уточняющие вопросы",
+                        "ru": "Ð¡Ð½Ð°Ñ‡Ð°Ð»Ð° ÑƒÑ‚Ð¾Ñ‡Ð½ÑÑŽÑ‰Ð¸Ðµ Ð²Ð¾Ð¿Ñ€Ð¾ÑÑ‹",
                     },
                     "fragment": {
                         "en": "Before giving a full answer, ask concise clarifying questions when the request is ambiguous.",
-                        "ru": "Перед полным ответом задавай краткие уточняющие вопросы, если запрос неоднозначный.",
+                        "ru": "ÐŸÐµÑ€ÐµÐ´ Ð¿Ð¾Ð»Ð½Ñ‹Ð¼ Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð¼ Ð·Ð°Ð´Ð°Ð²Ð°Ð¹ ÐºÑ€Ð°Ñ‚ÐºÐ¸Ðµ ÑƒÑ‚Ð¾Ñ‡Ð½ÑÑŽÑ‰Ð¸Ðµ Ð²Ð¾Ð¿Ñ€Ð¾ÑÑ‹, ÐµÑÐ»Ð¸ Ð·Ð°Ð¿Ñ€Ð¾Ñ Ð½ÐµÐ¾Ð´Ð½Ð¾Ð·Ð½Ð°Ñ‡Ð½Ñ‹Ð¹.",
                     },
                 },
             ],
@@ -71,29 +71,29 @@ WIZARD_CONFIG: dict[str, Any] = {
             "id": "follow_up",
             "title": {
                 "en": "Should AI end replies with a follow-up question about next actions?",
-                "ru": "Нужно ли заканчивать ответы вопросом о следующих действиях?",
+                "ru": "ÐÑƒÐ¶Ð½Ð¾ Ð»Ð¸ Ð·Ð°ÐºÐ°Ð½Ñ‡Ð¸Ð²Ð°Ñ‚ÑŒ Ð¾Ñ‚Ð²ÐµÑ‚Ñ‹ Ð²Ð¾Ð¿Ñ€Ð¾ÑÐ¾Ð¼ Ð¾ ÑÐ»ÐµÐ´ÑƒÑŽÑ‰Ð¸Ñ… Ð´ÐµÐ¹ÑÑ‚Ð²Ð¸ÑÑ…?",
             },
             "options": [
                 {
                     "id": "ask_follow_up",
                     "label": {
                         "en": "Yes, ask follow-up questions",
-                        "ru": "Да, задавать вопрос в конце",
+                        "ru": "Ð”Ð°, Ð·Ð°Ð´Ð°Ð²Ð°Ñ‚ÑŒ Ð²Ð¾Ð¿Ñ€Ð¾Ñ Ð² ÐºÐ¾Ð½Ñ†Ðµ",
                     },
                     "fragment": {
                         "en": "At the end of each response, ask one short follow-up question about the next useful action.",
-                        "ru": "В конце каждого ответа задавай один короткий вопрос о следующем полезном действии.",
+                        "ru": "Ð’ ÐºÐ¾Ð½Ñ†Ðµ ÐºÐ°Ð¶Ð´Ð¾Ð³Ð¾ Ð¾Ñ‚Ð²ÐµÑ‚Ð° Ð·Ð°Ð´Ð°Ð²Ð°Ð¹ Ð¾Ð´Ð¸Ð½ ÐºÐ¾Ñ€Ð¾Ñ‚ÐºÐ¸Ð¹ Ð²Ð¾Ð¿Ñ€Ð¾Ñ Ð¾ ÑÐ»ÐµÐ´ÑƒÑŽÑ‰ÐµÐ¼ Ð¿Ð¾Ð»ÐµÐ·Ð½Ð¾Ð¼ Ð´ÐµÐ¹ÑÑ‚Ð²Ð¸Ð¸.",
                     },
                 },
                 {
                     "id": "no_follow_up",
                     "label": {
                         "en": "No follow-up questions",
-                        "ru": "Нет, без вопросов в конце",
+                        "ru": "ÐÐµÑ‚, Ð±ÐµÐ· Ð²Ð¾Ð¿Ñ€Ð¾ÑÐ¾Ð² Ð² ÐºÐ¾Ð½Ñ†Ðµ",
                     },
                     "fragment": {
                         "en": "Do not end responses with a follow-up question unless the user explicitly asks for suggestions.",
-                        "ru": "Не завершай ответы вопросом, если пользователь явно не просит подсказки по дальнейшим шагам.",
+                        "ru": "ÐÐµ Ð·Ð°Ð²ÐµÑ€ÑˆÐ°Ð¹ Ð¾Ñ‚Ð²ÐµÑ‚Ñ‹ Ð²Ð¾Ð¿Ñ€Ð¾ÑÐ¾Ð¼, ÐµÑÐ»Ð¸ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÑŒ ÑÐ²Ð½Ð¾ Ð½Ðµ Ð¿Ñ€Ð¾ÑÐ¸Ñ‚ Ð¿Ð¾Ð´ÑÐºÐ°Ð·ÐºÐ¸ Ð¿Ð¾ Ð´Ð°Ð»ÑŒÐ½ÐµÐ¹ÑˆÐ¸Ð¼ ÑˆÐ°Ð³Ð°Ð¼.",
                     },
                 },
             ],
@@ -102,29 +102,29 @@ WIZARD_CONFIG: dict[str, Any] = {
             "id": "tone",
             "title": {
                 "en": "Which tone should AI use?",
-                "ru": "Какой тон должен использовать AI?",
+                "ru": "ÐšÐ°ÐºÐ¾Ð¹ Ñ‚Ð¾Ð½ Ð´Ð¾Ð»Ð¶ÐµÐ½ Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÑŒ AI?",
             },
             "options": [
                 {
                     "id": "direct_professional",
                     "label": {
                         "en": "Direct and professional",
-                        "ru": "Прямой и профессиональный",
+                        "ru": "ÐŸÑ€ÑÐ¼Ð¾Ð¹ Ð¸ Ð¿Ñ€Ð¾Ñ„ÐµÑÑÐ¸Ð¾Ð½Ð°Ð»ÑŒÐ½Ñ‹Ð¹",
                     },
                     "fragment": {
                         "en": "Use a direct, pragmatic, and professional tone. Avoid fluff.",
-                        "ru": "Используй прямой, прагматичный и профессиональный тон. Избегай воды.",
+                        "ru": "Ð˜ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐ¹ Ð¿Ñ€ÑÐ¼Ð¾Ð¹, Ð¿Ñ€Ð°Ð³Ð¼Ð°Ñ‚Ð¸Ñ‡Ð½Ñ‹Ð¹ Ð¸ Ð¿Ñ€Ð¾Ñ„ÐµÑÑÐ¸Ð¾Ð½Ð°Ð»ÑŒÐ½Ñ‹Ð¹ Ñ‚Ð¾Ð½. Ð˜Ð·Ð±ÐµÐ³Ð°Ð¹ Ð²Ð¾Ð´Ñ‹.",
                     },
                 },
                 {
                     "id": "friendly_calm",
                     "label": {
                         "en": "Friendly and calm",
-                        "ru": "Дружелюбный и спокойный",
+                        "ru": "Ð”Ñ€ÑƒÐ¶ÐµÐ»ÑŽÐ±Ð½Ñ‹Ð¹ Ð¸ ÑÐ¿Ð¾ÐºÐ¾Ð¹Ð½Ñ‹Ð¹",
                     },
                     "fragment": {
                         "en": "Use a friendly, calm tone while staying concise and practical.",
-                        "ru": "Используй дружелюбный и спокойный тон, оставаясь кратким и практичным.",
+                        "ru": "Ð˜ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐ¹ Ð´Ñ€ÑƒÐ¶ÐµÐ»ÑŽÐ±Ð½Ñ‹Ð¹ Ð¸ ÑÐ¿Ð¾ÐºÐ¾Ð¹Ð½Ñ‹Ð¹ Ñ‚Ð¾Ð½, Ð¾ÑÑ‚Ð°Ð²Ð°ÑÑÑŒ ÐºÑ€Ð°Ñ‚ÐºÐ¸Ð¼ Ð¸ Ð¿Ñ€Ð°ÐºÑ‚Ð¸Ñ‡Ð½Ñ‹Ð¼.",
                     },
                 },
             ],
@@ -133,29 +133,29 @@ WIZARD_CONFIG: dict[str, Any] = {
             "id": "formatting",
             "title": {
                 "en": "How should AI structure responses?",
-                "ru": "Как структурировать ответы?",
+                "ru": "ÐšÐ°Ðº ÑÑ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ð¸Ñ€Ð¾Ð²Ð°Ñ‚ÑŒ Ð¾Ñ‚Ð²ÐµÑ‚Ñ‹?",
             },
             "options": [
                 {
                     "id": "structured",
                     "label": {
                         "en": "Structured with bullets",
-                        "ru": "Структурно, с пунктами",
+                        "ru": "Ð¡Ñ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ð½Ð¾, Ñ Ð¿ÑƒÐ½ÐºÑ‚Ð°Ð¼Ð¸",
                     },
                     "fragment": {
                         "en": "Prefer structured responses with short sections and bullet points when it improves clarity.",
-                        "ru": "Предпочитай структурные ответы с короткими секциями и списками, когда это повышает ясность.",
+                        "ru": "ÐŸÑ€ÐµÐ´Ð¿Ð¾Ñ‡Ð¸Ñ‚Ð°Ð¹ ÑÑ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ð½Ñ‹Ðµ Ð¾Ñ‚Ð²ÐµÑ‚Ñ‹ Ñ ÐºÐ¾Ñ€Ð¾Ñ‚ÐºÐ¸Ð¼Ð¸ ÑÐµÐºÑ†Ð¸ÑÐ¼Ð¸ Ð¸ ÑÐ¿Ð¸ÑÐºÐ°Ð¼Ð¸, ÐºÐ¾Ð³Ð´Ð° ÑÑ‚Ð¾ Ð¿Ð¾Ð²Ñ‹ÑˆÐ°ÐµÑ‚ ÑÑÐ½Ð¾ÑÑ‚ÑŒ.",
                     },
                 },
                 {
                     "id": "compact_prose",
                     "label": {
                         "en": "Compact prose",
-                        "ru": "Короткий связный текст",
+                        "ru": "ÐšÐ¾Ñ€Ð¾Ñ‚ÐºÐ¸Ð¹ ÑÐ²ÑÐ·Ð½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚",
                     },
                     "fragment": {
                         "en": "Prefer compact prose by default. Use lists only when they are clearly necessary.",
-                        "ru": "По умолчанию отвечай коротким связным текстом. Списки используй только когда это действительно нужно.",
+                        "ru": "ÐŸÐ¾ ÑƒÐ¼Ð¾Ð»Ñ‡Ð°Ð½Ð¸ÑŽ Ð¾Ñ‚Ð²ÐµÑ‡Ð°Ð¹ ÐºÐ¾Ñ€Ð¾Ñ‚ÐºÐ¸Ð¼ ÑÐ²ÑÐ·Ð½Ñ‹Ð¼ Ñ‚ÐµÐºÑÑ‚Ð¾Ð¼. Ð¡Ð¿Ð¸ÑÐºÐ¸ Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐ¹ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐºÐ¾Ð³Ð´Ð° ÑÑ‚Ð¾ Ð´ÐµÐ¹ÑÑ‚Ð²Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð¾ Ð½ÑƒÐ¶Ð½Ð¾.",
                     },
                 },
             ],
@@ -164,60 +164,29 @@ WIZARD_CONFIG: dict[str, Any] = {
             "id": "proactivity",
             "title": {
                 "en": "How proactive should AI be?",
-                "ru": "Насколько проактивным должен быть AI?",
+                "ru": "ÐÐ°ÑÐºÐ¾Ð»ÑŒÐºÐ¾ Ð¿Ñ€Ð¾Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ð¼ Ð´Ð¾Ð»Ð¶ÐµÐ½ Ð±Ñ‹Ñ‚ÑŒ AI?",
             },
             "options": [
                 {
                     "id": "proactive",
                     "label": {
                         "en": "Proactive with next steps",
-                        "ru": "Проактивный, с next steps",
+                        "ru": "ÐŸÑ€Ð¾Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ð¹, Ñ next steps",
                     },
                     "fragment": {
                         "en": "When relevant, propose concrete next steps and include implementation-ready details.",
-                        "ru": "Когда уместно, предлагай конкретные следующие шаги и давай детали, готовые к применению.",
+                        "ru": "ÐšÐ¾Ð³Ð´Ð° ÑƒÐ¼ÐµÑÑ‚Ð½Ð¾, Ð¿Ñ€ÐµÐ´Ð»Ð°Ð³Ð°Ð¹ ÐºÐ¾Ð½ÐºÑ€ÐµÑ‚Ð½Ñ‹Ðµ ÑÐ»ÐµÐ´ÑƒÑŽÑ‰Ð¸Ðµ ÑˆÐ°Ð³Ð¸ Ð¸ Ð´Ð°Ð²Ð°Ð¹ Ð´ÐµÑ‚Ð°Ð»Ð¸, Ð³Ð¾Ñ‚Ð¾Ð²Ñ‹Ðµ Ðº Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÐµÐ½Ð¸ÑŽ.",
                     },
                 },
                 {
                     "id": "on_request",
                     "label": {
                         "en": "Only on explicit request",
-                        "ru": "Только по явному запросу",
+                        "ru": "Ð¢Ð¾Ð»ÑŒÐºÐ¾ Ð¿Ð¾ ÑÐ²Ð½Ð¾Ð¼Ñƒ Ð·Ð°Ð¿Ñ€Ð¾ÑÑƒ",
                     },
                     "fragment": {
                         "en": "Do not suggest extra next steps unless the user explicitly asks for them.",
-                        "ru": "Не предлагай дополнительные шаги, если пользователь прямо об этом не просит.",
-                    },
-                },
-            ],
-        },
-        {
-            "id": "test_marker",
-            "title": {
-                "en": "Testing mode (for live QA)",
-                "ru": "Режим тестирования (для live QA)",
-            },
-            "options": [
-                {
-                    "id": "test_off",
-                    "label": {
-                        "en": "Off",
-                        "ru": "Выкл",
-                    },
-                    "fragment": {
-                        "en": "Do not add any testing markers to responses.",
-                        "ru": "Не добавляй тестовые маркеры в ответы.",
-                    },
-                },
-                {
-                    "id": "test_on",
-                    "label": {
-                        "en": "On: include response marker",
-                        "ru": "Вкл: добавлять маркер ответа",
-                    },
-                    "fragment": {
-                        "en": "For testing only: prepend each answer with '[TEST_MARKER_ACTIVE]'.",
-                        "ru": "Только для тестирования: начинай каждый ответ с '[TEST_MARKER_ACTIVE]'.",
+                        "ru": "ÐÐµ Ð¿Ñ€ÐµÐ´Ð»Ð°Ð³Ð°Ð¹ Ð´Ð¾Ð¿Ð¾Ð»Ð½Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ðµ ÑˆÐ°Ð³Ð¸, ÐµÑÐ»Ð¸ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÑŒ Ð¿Ñ€ÑÐ¼Ð¾ Ð¾Ð± ÑÑ‚Ð¾Ð¼ Ð½Ðµ Ð¿Ñ€Ð¾ÑÐ¸Ñ‚.",
                     },
                 },
             ],
@@ -285,7 +254,7 @@ def _compose_prompt(language: str, selected: dict[str, str]) -> str:
         raise HTTPException(status_code=400, detail="No valid prompt fragments were selected")
 
     if lang == "ru":
-        prefix = "Главный пользовательский промпт:\n"
+        prefix = "Ð“Ð»Ð°Ð²Ð½Ñ‹Ð¹ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÑŒÑÐºÐ¸Ð¹ Ð¿Ñ€Ð¾Ð¼Ð¿Ñ‚:\n"
     else:
         prefix = "Main user prompt:\n"
 
