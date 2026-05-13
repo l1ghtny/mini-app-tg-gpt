@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import logging
 import os
 import sys
@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.db.database import engine
 from app.db.models import AppUser
 from app.core.metrics import track_event
-from main import app, before_send
+from main import app
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,9 +36,8 @@ if settings.SENTRY_DSN:
         environment=settings.ENVIRONMENT,
         release=app.version,
         # Capture only 10% of transactions for performance monitoring
-        traces_sample_rate=0.1 if settings.ENVIRONMENT == "production" or "production_main_server" else 1.0,
+        traces_sample_rate=0.1 if settings.ENVIRONMENT in ("production", "production_main_server") else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
-        before_send=before_send,  # filter non-500 http errors
         send_default_pii=True,  # send info about http calls (includes AI, currently using for openAI costs)
         enable_logs=True,
         _experiments={
@@ -100,29 +99,37 @@ async def cmd_start(message: types.Message):
     # 5. Localization Logic
     if language_code == 'ru':
         welcome_text = (
-            f"👋 **Привет, {message.from_user.first_name}!**\n\n"
-            "Я твой ИИ-ассистент. Я помогу тебе писать тексты, анализировать изображения и решать сложные задачи с помощью GPT-5.\n\n"
-            "👇 **Нажми на кнопку ниже, чтобы запустить приложение:**"
+            f"👋 Добро пожаловать, {message.from_user.first_name}!\n\n"
+            "Я — ваш доступ к мощнейшим нейросетям: GPT-5.5 и инструментам для генерации изображений.\n\n"
+            "Никаких сложных текстовых команд. Вся работа происходит в красивом и удобном приложении прямо внутри Telegram.\n\n"
+            "🎁 Вам уже начислены бесплатные запросы к нашим флагманским моделям, чтобы вы могли оценить их интеллект.\n\n"
+            "Нажмите на кнопку «Открыть приложение» ниже (или на иконку меню слева от поля ввода), чтобы начать!"
         )
         welcome_text_no_name = (
-            "👋 **Привет!**\n\n"
-            "Я твой ИИ-ассистент. Я помогу тебе писать тексты, анализировать изображения и решать сложные задачи с помощью GPT-5.\n\n"
-            "👇 **Нажми на кнопку ниже, чтобы запустить приложение:**"
+            "👋 Добро пожаловать!\n\n"
+            "Я — ваш доступ к мощнейшим нейросетям: GPT-5.5 и инструментам для генерации изображений.\n\n"
+            "Никаких сложных текстовых команд. Вся работа происходит в красивом и удобном приложении прямо внутри Telegram.\n\n"
+            "🎁 Вам уже начислены бесплатные запросы к нашим флагманским моделям, чтобы вы могли оценить их интеллект.\n\n"
+            "Нажмите на кнопку «Открыть приложение» ниже (или на иконку меню слева от поля ввода), чтобы начать!"
         )
-        button_text = "🚀 Запустить AI"
+        button_text = "🚀 Запустить приложение"
     else:
         # Default to English for 'en' or any other unknown language
         welcome_text = (
-            f"👋 **Hi {message.from_user.first_name}!**\n\n"
-            "I am your AI Assistant. I can help you write text, analyze images, and solve problems using GPT-5.\n\n"
-            "👇 **Tap the button below to launch the app:**"
+            f"👋 Welcome, {message.from_user.first_name}!\n\n"
+            "I’m your gateway to powerful AI models: GPT-5.5 and image generation tools.\n\n"
+            "No complicated text commands. Everything works inside a beautiful and convenient app right in Telegram.\n\n"
+            "🎁 You already have free requests to our flagship models, so you can evaluate their intelligence.\n\n"
+            "Tap the “Open app” button below (or the menu icon to the left of the input field) to get started!"
         )
         welcome_text_no_name = (
-            "👋 **Hi!**\n\n"
-            "I am your AI Assistant. I can help you write text, analyze images, and solve problems using GPT-5.\n\n"
-            "👇 **Tap the button below to launch the app:**"
+            "👋 Welcome!\n\n"
+            "I’m your gateway to powerful AI models: GPT-5.5 and image generation tools.\n\n"
+            "No complicated text commands. Everything works inside a beautiful and convenient app right in Telegram.\n\n"
+            "🎁 You already have free requests to our flagship models, so you can evaluate their intelligence.\n\n"
+            "Tap the “Open app” button below (or the menu icon to the left of the input field) to get started!"
         )
-        button_text = "🚀 Launch AI App"
+        button_text = "🚀 Open app"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -138,6 +145,44 @@ async def cmd_start(message: types.Message):
 
     if track_event_send:
         track_event("user_registered", str(user.id), {"campaign": campaign_param or "organic"})
+
+
+@dp.message()
+async def nudge_to_app(message: types.Message):
+    """
+    Catch-all handler to nudge users to use the Mini App instead of direct chat.
+    """
+    language_code = message.from_user.language_code
+    webapp_url = settings.WEBAPP_URL
+
+    if language_code == 'ru':
+        text = (
+            "🤖 **Я переехал в приложение!**\n\n"
+            "Теперь я работаю только через наше удобное мини-приложение прямо внутри Telegram.\n\n"
+            "Там тебя ждет история чатов, выбор моделей (GPT-5.5!) и мощная генерация изображений. "
+            "Это гораздо удобнее и быстрее!\n\n"
+            "Нажми кнопку ниже, чтобы продолжить общение там 👇"
+        )
+        button_text = "🚀 Открыть приложение"
+    else:
+        text = (
+            "🤖 **I've moved to the App!**\n\n"
+            "I'm now exclusively available through our convenient Mini App right inside Telegram.\n\n"
+            "There you'll find chat history, model selection (GPT-5.5!), and powerful image generation. "
+            "It's much smoother and more feature-rich!\n\n"
+            "Tap the button below to continue our conversation there 👇"
+        )
+        button_text = "🚀 Open App"
+
+    is_private_chat = message.chat and message.chat.type == "private"
+    open_app_button = InlineKeyboardButton(
+        text=button_text,
+        web_app=WebAppInfo(url=webapp_url) if is_private_chat else None,
+        url=webapp_url if not is_private_chat else None,
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[open_app_button]])
+
+    await message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
 
 
 async def main():

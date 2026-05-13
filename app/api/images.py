@@ -18,7 +18,7 @@ from app.r2.settings import Settings
 from app.schemas.images import ImageUploaded
 
 images = APIRouter(tags=["images"], prefix="/images")
-_PROXY_ALLOWED_HOSTS_ENV = "https://gpt-mini-app-ru.lightny.pro"
+_PROXY_ALLOWED_HOSTS_ENV = "IMAGE_FETCH_PROXY_ALLOWED_HOSTS"
 _PROXY_ACCEPT = "image/*,application/octet-stream;q=0.9,*/*;q=0.1"
 _PROXY_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=10.0)
 _PROXY_MAX_REDIRECTS = int(os.getenv("IMAGE_FETCH_PROXY_MAX_REDIRECTS", "3"))

@@ -1,4 +1,5 @@
 import uuid
+import re
 
 from fastapi import HTTPException
 from sqlalchemy.orm import selectinload
@@ -15,6 +16,15 @@ from app.schemas.subscriptions import (
     TierSubscribeResponse,
 )
 from app.services.subscription_check.realtime_check import check_tier
+
+
+def _tier_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return slug or "tier"
+
+
+def _daily_image_energy(tier: SubscriptionTier) -> int:
+    return int(getattr(tier, "daily_image_energy", 0) or 0)
 
 
 async def list_public_tiers(session: AsyncSession, user) -> list[SubscriptionTierResponse]:
@@ -107,24 +117,26 @@ def _build_tier_response(
     tier: SubscriptionTier,
     pricing_by_model: dict[str, list[ImageQualityPricing]],
 ) -> SubscriptionTierResponse:
+    daily_energy = _daily_image_energy(tier)
+    image_limit_override = -1 if daily_energy > 0 else None
     allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
     allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
-    allowed_quality_set = set(allowed_qualities)
     image_pricing: list[ImageQualityPricingResponse] = []
     for image_model in allowed_models:
         for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: p.quality):
-            if allowed_quality_set and pricing.quality not in allowed_quality_set:
-                continue
             image_pricing.append(ImageQualityPricingResponse(
                 image_model=pricing.image_model,
                 quality=pricing.quality,
                 credit_cost=pricing.credit_cost,
+                energy_cost=pricing.credit_cost,
                 description=pricing.description,
             ))
 
     return SubscriptionTierResponse(
         name=tier.name,
         name_ru=tier.name_ru,
+        slug=_tier_slug(tier.name),
+        rank=tier.index or 0,
         description=tier.description,
         description_ru=tier.description_ru,
         price_cents=tier.price_cents,
@@ -134,12 +146,16 @@ def _build_tier_response(
             for l in tier.tier_model_limits
         ],
         tier_image_model_limits=[
-            TierImageModelLimits(image_model=l.image_model, requests_limit=l.monthly_requests)
+            TierImageModelLimits(
+                image_model=l.image_model,
+                requests_limit=image_limit_override if image_limit_override is not None else l.monthly_requests,
+            )
             for l in tier.tier_image_model_limits
         ],
         image_quality_pricing=image_pricing,
         is_recurring=tier.is_recurring,
-        daily_image_limit=tier.daily_image_limit,
+        daily_image_energy=daily_energy,
+        image_energy_max=daily_energy * 5,
         allowed_image_qualities=allowed_qualities,
         allowed_image_models=allowed_models,
         tier_id=str(tier.id),

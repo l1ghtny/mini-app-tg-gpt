@@ -118,8 +118,6 @@ class Conversation(SQLModel, table=True):
     history_summary: Optional[str] = Field(default=None, nullable=True)
     history_summary_up_to_message_id: Optional[uuid.UUID] = Field(default=None, nullable=True)
     history_summary_updated_at: Optional[datetime] = Field(default=None, nullable=True)
-    last_openai_response_id: Optional[str] = Field(default=None, nullable=True, index=True)
-    openai_chain_updated_at: Optional[datetime] = Field(default=None, nullable=True)
 
     updated_at: datetime = Field(
         default_factory=utcnow_naive,

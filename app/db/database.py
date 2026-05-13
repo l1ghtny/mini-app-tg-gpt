@@ -7,7 +7,14 @@ from app.core.config import settings
 
 # DATABASE_URL should be async driver, e.g.:
 # postgresql+asyncpg://user:pass@host:port/dbname
-engine = create_async_engine(settings.DATABASE_URL, echo=False)
+engine = create_async_engine(
+    settings.DATABASE_URL, echo=False,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
+)
 
 
 

@@ -81,13 +81,43 @@ class TBankService:
 
         payload["Token"] = self._generate_token(payload)
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{self.base_url}/Init", json=payload)
+        timeout = httpx.Timeout(
+            timeout=settings.TBANK_TIMEOUT_SECONDS,
+            connect=settings.TBANK_TIMEOUT_SECONDS,
+            read=settings.TBANK_TIMEOUT_SECONDS,
+            write=settings.TBANK_TIMEOUT_SECONDS,
+            pool=settings.TBANK_TIMEOUT_SECONDS,
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(f"{self.base_url}/Init", json=payload)
+        except httpx.TimeoutException as exc:
+            raise Exception(
+                f"TBank Init Timeout: {exc.__class__.__name__} "
+                f"(order_id={order_id}, timeout={settings.TBANK_TIMEOUT_SECONDS}s)"
+            ) from exc
+        except httpx.RequestError as exc:
+            detail = str(exc).strip() or exc.__class__.__name__
+            raise Exception(
+                f"TBank Init Request Error: {detail} (order_id={order_id})"
+            ) from exc
+
+        try:
             data = resp.json()
+        except Exception as exc:
+            body_preview = (resp.text or "")[:400]
+            raise Exception(
+                f"TBank Init Invalid JSON: status={resp.status_code}, body={body_preview}"
+            ) from exc
 
         if not data.get("Success", False):
             # TBank errors often come in 'Message' or 'Details'
-            raise Exception(f"TBank Init Failed: {data.get('Message', 'Unknown error')} ({data.get('Details', '')})")
+            message = data.get("Message", "Unknown error")
+            details = data.get("Details", "")
+            raise Exception(
+                f"TBank Init Failed: status={resp.status_code}, message={message}, details={details}"
+            )
 
         return data.get("PaymentURL"), str(data.get("PaymentId"))
 

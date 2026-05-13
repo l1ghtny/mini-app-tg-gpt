@@ -1,4 +1,4 @@
-﻿import os, base64, pytest
+import os, base64, pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import SQLModel, select
@@ -21,7 +21,7 @@ async def test_generate_and_publish_with_b64_image_real_r2(monkeypatch):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         user = m.AppUser(telegram_id=10_000_000_001)
         session.add(user); await session.commit(); await session.refresh(user)
-        convo = m.Conversation(user_id=user.id, title="Test", model="gpt-5-nano")
+        convo = m.Conversation(user_id=user.id, title="Test", model="gpt-5.4-nano")
         session.add(convo); await session.commit(); await session.refresh(convo)
         msg = m.Message(conversation_id=convo.id, role="assistant")
         session.add(msg); await session.commit(); await session.refresh(msg)
@@ -31,7 +31,7 @@ async def test_generate_and_publish_with_b64_image_real_r2(monkeypatch):
     with open(png_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("ascii")
 
-    # Fake the OpenAI stream → emits base64 image
+    # Fake the OpenAI stream ? emits base64 image
     async def fake_stream(*a, **kw):
         yield {"type": "part.start", "index": 1, "content_type": "image"}
         yield {"type": "image.ready", "index": 1, "format": "b64", "data": b64}
@@ -50,7 +50,7 @@ async def test_generate_and_publish_with_b64_image_real_r2(monkeypatch):
         history_for_openai=[{"role":"user","content":[{"type":"input_text","text":"create an image of a cat"}]}],
         bus=Bus(),
         instructions="You are helpful.",
-        model="gpt-5-nano",
+        model="gpt-5.4-nano",
         tool_choice="auto",
         tools=[],
     )
@@ -65,4 +65,4 @@ async def test_generate_and_publish_with_b64_image_real_r2(monkeypatch):
         )
         row = res.first()
         assert row is not None
-        print(f"\nR2 URL (stream→upload→db): {row.value}")  # <— full URL printed
+        print(f"\nR2 URL (stream?upload?db): {row.value}")  # <� full URL printed

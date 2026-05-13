@@ -1,4 +1,4 @@
-ï»¿import os
+import os
 import uuid
 import base64
 import pytest
@@ -28,7 +28,7 @@ async def test_r2_upload_and_db_persist_roundtrip(tmp_path):
         user = m.AppUser(telegram_id=10_000_000_000)
         session.add(user); await session.commit(); await session.refresh(user)
 
-        convo = m.Conversation(user_id=user.id, title="Test", model="gpt-5-nano")
+        convo = m.Conversation(user_id=user.id, title="Test", model="gpt-5.4-nano")
         session.add(convo); await session.commit(); await session.refresh(convo)
 
         msg = m.Message(conversation_id=convo.id, role="assistant")
@@ -39,7 +39,7 @@ async def test_r2_upload_and_db_persist_roundtrip(tmp_path):
             b64 = base64.b64encode(f.read()).decode("ascii")
 
         url = await helpers.upload_openai_image_to_r2(b64, prefix="gen")
-        print(f"\nR2 URL (upload): {url}")  # <â€” full URL printed
+        print(f"\nR2 URL (upload): {url}")  # <— full URL printed
 
         ordinal = 1
         await helpers.save_image_url_to_db(url, ordinal, msg.id)
@@ -54,4 +54,4 @@ async def test_r2_upload_and_db_persist_roundtrip(tmp_path):
         row = res.first()
         assert row is not None
         assert row.value == url
-        print(f"R2 URL (db row): {row.value}")  # <â€” full URL printed
+        print(f"R2 URL (db row): {row.value}")  # <— full URL printed

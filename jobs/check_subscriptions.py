@@ -113,11 +113,11 @@ async def main():
 
         query = (
             select(UserSubscription, SubscriptionTier)
-            .join(SubscriptionTier, UserSubscription.tier_id == SubscriptionTier.id)
+            .join(SubscriptionTier, UserSubscription.tier_id == SubscriptionTier.id)  # ty:ignore[invalid-argument-type]
             .where(
                 UserSubscription.status == SubscriptionStatus.active,
                 UserSubscription.expires_at is not None,
-                UserSubscription.expires_at < now
+                UserSubscription.expires_at < now  # ty:ignore[unsupported-operator]
             )
         )
 

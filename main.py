@@ -6,29 +6,23 @@ from sentry_sdk.integrations.openai import OpenAIIntegration
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.access_codes import access_codes
+from app.api.admin_broadcast import admin_broadcast
 from app.api.auth import auth
 from app.api.chat_folders import router as chat_folders_router
 from app.api.images import images
 from app.api.metrics import metrics
+from app.api.models_catalog import models_catalog
+from app.api.personalization import personalization
 from app.api.payments import payments
 from app.api.routes import router as chat_router
 from app.api.tiers import tiers
 from app.api.usage_packs import usage_packs
 from app.api.user_subscription import user_subscription
 from app.api.user_usage import user_usage
+from app.api.whats_new import whats_new
 from app.core.config import settings
 
 logger = settings.custom_logger
-
-
-def before_send(event, hint):
-    # If the error is a known HTTP exception (like 401, 403, 404), ignore it
-    if "exc_info" in hint:
-        exc_type, exc_value, tb = hint["exc_info"]
-        if isinstance(exc_value, HTTPException):
-            if exc_value.status_code < 500:
-                return None  # Don't send to Sentry
-    return event
 
 
 
@@ -38,7 +32,7 @@ def before_send(event, hint):
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="0.9.4",
+    version="1.2.0",
     docs_url=None
 )
 
@@ -52,7 +46,6 @@ if settings.SENTRY_DSN:
         # Capture only 10% of transactions for performance monitoring
         traces_sample_rate=0.1 if settings.ENVIRONMENT in ("production", "production_main_server") else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
-        before_send=before_send, # filter non-500 http errors
         send_default_pii=True, # send info about http calls (includes AI, currently using for openAI costs)
         integrations=[
             OpenAIIntegration(
@@ -76,6 +69,7 @@ origins = [
     "http://192.168.1.137:4173",
     "https://gpt-mini-app-ru.lightny.pro",
     "https://gpt-mini-app-dev.lightny.pro",
+    "https://preview--chat-bot-telegram.lovable.app"
 ]
 
 app.add_middleware(
@@ -109,3 +103,7 @@ app.include_router(tiers, prefix="/api/v1")
 app.include_router(usage_packs, prefix="/api/v1")
 app.include_router(payments, prefix="/api/v1")
 app.include_router(metrics, prefix="/api/v1")
+app.include_router(models_catalog, prefix="/api/v1")
+app.include_router(whats_new, prefix="/api/v1")
+app.include_router(admin_broadcast, prefix="/api/v1")
+app.include_router(personalization, prefix="/api/v1")

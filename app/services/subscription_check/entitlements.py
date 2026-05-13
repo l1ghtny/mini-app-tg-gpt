@@ -1,4 +1,4 @@
-﻿import uuid
+import uuid
 from datetime import datetime, timedelta, UTC
 from typing import Optional
 
@@ -20,7 +20,11 @@ from app.db.subscription_tiers import (
     UsagePackSource,
     UsagePackStatus,
 )
-from app.services.subscription_check.pacing import check_image_pacing, get_image_quality_pricing
+from app.services.subscription_check.pacing import (
+    check_image_pacing,
+    get_image_energy_snapshot,
+    get_image_quality_pricing,
+)
 
 
 async def month_start_expr():
@@ -367,6 +371,10 @@ def _tier_usage_source(tier: SubscriptionTier) -> str:
     return "free"
 
 
+def _tier_daily_image_energy(tier: SubscriptionTier) -> int:
+    return int(getattr(tier, "daily_image_energy", 0) or 0)
+
+
 def _sort_subscriptions(subs: list[UserSubscription]) -> list[UserSubscription]:
     def sort_key(sub: UserSubscription) -> tuple[int, int, int, datetime]:
         tier = sub.tier
@@ -502,6 +510,52 @@ async def get_pack_image_usage_sums(
 
     results = (await session.exec(statement)).all()
     return {(r[0], r[1]): r[2] for r in results}
+
+
+async def get_tier_image_usage_total(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    tier: SubscriptionTier,
+    image_models: list[str],
+) -> float:
+    if not image_models:
+        return 0.0
+
+    start_dt = await usage_window_start_dt(session, user_id, tier)
+    used_total = (await session.exec(
+        select(func.coalesce(func.sum(RequestLedger.cost), 0))
+        .where(
+            RequestLedger.user_id == user_id,
+            _tier_usage_filter(tier.id),
+            RequestLedger.feature == "image",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.created_at >= start_dt,
+            RequestLedger.model_name.in_(image_models),
+        )
+    )).one()
+    return used_total or 0.0
+
+
+async def get_pack_image_usage_total(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    pack_id: uuid.UUID,
+    image_models: list[str],
+) -> float:
+    if not image_models:
+        return 0.0
+
+    used_total = (await session.exec(
+        select(func.coalesce(func.sum(RequestLedger.cost), 0))
+        .where(
+            RequestLedger.user_id == user_id,
+            RequestLedger.usage_pack_id == pack_id,
+            RequestLedger.feature == "image",
+            RequestLedger.state.in_(("reserved", "consumed")),
+            RequestLedger.model_name.in_(image_models),
+        )
+    )).one()
+    return used_total or 0.0
 
 
 async def list_text_entitlements_bulk(
@@ -662,13 +716,56 @@ async def list_image_entitlements_bulk(
     if not image_models:
         return {}
 
-    # 3. Fetch usage sums
+    # 3. Fetch shared usage sums (across allowed image models per source)
     tier_usages = {}
+    tier_allowed_models: dict[uuid.UUID, list[str]] = {}
+    tier_energy_snapshots: dict[uuid.UUID, dict] = {}
     for sub in subs:
-        tier_usages[sub.tier.id] = await get_tier_image_usage_sums(session, user_id, sub.tier, image_models)
+        allowed = sorted({l.image_model for l in sub.tier.tier_image_model_limits})
+        tier_allowed_models[sub.tier.id] = allowed
+        tier_usages[sub.tier.id] = await get_tier_image_usage_total(
+            session,
+            user_id,
+            sub.tier,
+            allowed,
+        )
+        daily_energy = _tier_daily_image_energy(sub.tier)
+        is_recurring = getattr(sub.tier, "is_recurring", True)
+        monthly_images = sub.tier.monthly_images or 0
+        
+        if daily_energy > 0 or (not is_recurring and monthly_images > 0):
+            snapshot = await get_image_energy_snapshot(
+                session=session,
+                user_id=user_id,
+                daily_target=daily_energy,
+                tier_id=sub.tier.id,
+                is_recurring=is_recurring,
+                total_pool=float(monthly_images),
+            )
+            max_energy = int(snapshot.capacity)
+            available_energy = int(snapshot.available_energy)
+            saved_energy = max(0, available_energy - daily_energy) if is_recurring else 0
+            used_energy = max(0, max_energy - available_energy)
+            tier_energy_snapshots[sub.tier.id] = {
+                "daily_energy": daily_energy,
+                "max_energy": max_energy,
+                "available_energy": available_energy,
+                "saved_energy": saved_energy,
+                "used_energy": used_energy,
+                "saved_days": saved_energy // daily_energy if (is_recurring and daily_energy > 0) else 0,
+            }
 
-    pack_ids = [p.id for p in packs]
-    pack_usage_map = await get_pack_image_usage_sums(session, user_id, pack_ids, image_models)
+    pack_usages: dict[uuid.UUID, float] = {}
+    pack_allowed_models: dict[uuid.UUID, list[str]] = {}
+    for pack in packs:
+        allowed = sorted({l.image_model for l in pack.pack.pack_image_model_limits})
+        pack_allowed_models[pack.id] = allowed
+        pack_usages[pack.id] = await get_pack_image_usage_total(
+            session,
+            user_id,
+            pack.id,
+            allowed,
+        )
 
     # 4. Build result
     result = {}
@@ -683,10 +780,18 @@ async def list_image_entitlements_bulk(
             if not limit:
                 continue
 
-            used = tier_usages.get(tier.id, {}).get(image_model, 0.0)
+            used = float(tier_usages.get(tier.id, 0.0))
             cap = limit.monthly_requests or 0
+            daily_image_energy = _tier_daily_image_energy(tier)
+            is_recurring = getattr(tier, "is_recurring", True)
+            monthly_images = tier.monthly_images or 0
+            is_energy_tier = daily_image_energy > 0 or (not is_recurring and monthly_images > 0)
 
-            if cap == -1:
+            if is_energy_tier:
+                snapshot = tier_energy_snapshots.get(tier.id) or {}
+                cap = int(snapshot.get("max_energy", 0) or 0)
+                remaining = int(snapshot.get("available_energy", 0) or 0)
+            elif cap == -1:
                 remaining = -1
             elif cap == 0:
                 remaining = 0
@@ -695,6 +800,7 @@ async def list_image_entitlements_bulk(
 
             source = _tier_usage_source(tier)
             pacing = None
+            energy_balance = tier_energy_snapshots.get(tier.id)
             allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
             allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
 
@@ -709,7 +815,11 @@ async def list_image_entitlements_bulk(
                 "used": used,
                 "remaining_credits": remaining,
                 "pacing": pacing,
-                "daily_image_limit": tier.daily_image_limit,
+                "daily_image_energy": daily_image_energy,
+                "is_recurring": is_recurring,
+                "monthly_images": monthly_images,
+                "is_energy_tier": is_energy_tier,
+                "energy_balance": energy_balance,
                 "allowed_image_qualities": allowed_qualities,
                 "allowed_image_models": allowed_models,
                 "expires_at": None,
@@ -722,7 +832,7 @@ async def list_image_entitlements_bulk(
             if not limit:
                 continue
 
-            used = pack_usage_map.get((pack.id, image_model), 0.0)
+            used = float(pack_usages.get(pack.id, 0.0))
             cap = limit.credit_amount or 0
 
             if cap == -1:
@@ -744,11 +854,15 @@ async def list_image_entitlements_bulk(
                 "remaining_credits": remaining,
                 "expires_at": pack.expires_at,
                 "purchased_at": pack.purchased_at,
-                "daily_image_limit": None,
+                "daily_image_energy": None,
+                "energy_balance": None,
             })
 
         entitlements = tier_entries + pack_entries
-        total_remaining_credits = sum(e["remaining_credits"] for e in entitlements if e["remaining_credits"] != -1)
+        if any(e["remaining_credits"] == -1 for e in entitlements):
+            total_remaining_credits = -1
+        else:
+            total_remaining_credits = sum(e["remaining_credits"] for e in entitlements)
 
         result[image_model] = {
             "entitlements": entitlements,
@@ -819,40 +933,23 @@ async def select_image_entitlement(
     pack_entries = [e for e in entitlements if e["kind"] == "pack"]
 
     throttled_waits: list[timedelta] = []
-    model_allowed = False
-    quality_allowed = False
-    if pack_entries:
-        model_allowed = True
-        quality_allowed = True
+    model_allowed = bool(pack_entries)
 
+    eligible_tier_entries = []
     for ent in tier_entries:
         allowed_models = ent.get("allowed_image_models") or []
-        if quality and image_model not in allowed_models:
+        if image_model not in allowed_models:
             continue
         model_allowed = True
+        eligible_tier_entries.append(ent)
 
-        allowed_qualities = ent.get("allowed_image_qualities") or []
-        if quality and quality not in allowed_qualities:
-            continue
-        quality_allowed = True
+    def _daily_energy_for_entitlement(ent: dict) -> int:
+        return int(ent.get("daily_image_energy") or 0)
 
-        if ent["remaining_credits"] < cost:
-            continue
-        if ent.get("source") == "subscription":
-            tier_id = uuid.UUID(ent["tier_id"]) if ent.get("tier_id") else None
-            if tier_id:
-                daily_credits = ent.get("daily_image_limit") or 0
-                daily_target = daily_credits if daily_credits > 0 else 4.0
-                is_throttled, wait_time = await check_image_pacing(
-                    session,
-                    user_id,
-                    daily_target=daily_target,
-                    cost=cost,
-                    tier_id=tier_id,
-                )
-                if is_throttled:
-                    throttled_waits.append(wait_time)
-                    continue
+    energy_tier_entries = [e for e in eligible_tier_entries if bool(e.get("is_energy_tier"))]
+    monthly_tier_entries = [e for e in eligible_tier_entries if not bool(e.get("is_energy_tier"))]
+
+    def _allow(ent: dict) -> dict:
         selected = ent.copy()
         selected["cost"] = cost
         selected["allowed"] = True
@@ -860,15 +957,60 @@ async def select_image_entitlement(
         selected["wait_time"] = None
         return selected
 
+    def _has_sufficient_credits(ent: dict) -> bool:
+        remaining = ent.get("remaining_credits", 0)
+        return remaining == -1 or remaining >= cost
+
+    # Energy tiers (recurring + one-time pools) are pacing-governed.
+    for ent in energy_tier_entries:
+        tier_id = uuid.UUID(ent["tier_id"]) if ent.get("tier_id") else None
+        if not tier_id:
+            continue
+        daily_target = _daily_energy_for_entitlement(ent)
+        is_recurring = bool(ent.get("is_recurring", True))
+        total_pool = float(ent.get("monthly_images") or 0.0)
+
+        # Even when visible remaining is below cost, keep energy tiers on the
+        # pacing path so callers receive a deterministic wait reason.
+        if not _has_sufficient_credits(ent):
+            is_throttled, wait_time = await check_image_pacing(
+                session,
+                user_id,
+                daily_target=daily_target,
+                cost=cost,
+                tier_id=tier_id,
+                is_recurring=is_recurring,
+                total_pool=total_pool,
+            )
+            if is_throttled:
+                throttled_waits.append(wait_time)
+            continue
+
+        is_throttled, wait_time = await check_image_pacing(
+            session,
+            user_id,
+            daily_target=daily_target,
+            cost=cost,
+            tier_id=tier_id,
+            is_recurring=is_recurring,
+            total_pool=total_pool,
+        )
+        if is_throttled:
+            throttled_waits.append(wait_time)
+            continue
+        return _allow(ent)
+
+    # Monthly-only tiers use the old monthly window flow.
+    for ent in monthly_tier_entries:
+        if not _has_sufficient_credits(ent):
+            continue
+        return _allow(ent)
+
+    # Packs are always monthly credit pools and are checked after tiers.
     for ent in pack_entries:
-        if ent["remaining_credits"] < cost:
+        if not _has_sufficient_credits(ent):
             continue
-        selected = ent.copy()
-        selected["cost"] = cost
-        selected["allowed"] = True
-        selected["throttle_reason"] = None
-        selected["wait_time"] = None
-        return selected
+        return _allow(ent)
 
     if not model_allowed:
         return {
@@ -885,20 +1027,7 @@ async def select_image_entitlement(
             "wait_time": None,
         }
 
-    if model_allowed and not quality_allowed:
-        return {
-            "kind": "none",
-            "source": "none",
-            "tier_id": None,
-            "usage_pack_id": None,
-            "cap": 0,
-            "used": 0,
-            "remaining_credits": 0,
-            "cost": cost,
-            "allowed": False,
-            "throttle_reason": "quality_restricted",
-            "wait_time": None,
-        }
+
 
     if throttled_waits:
         wait_time = min(throttled_waits)

@@ -9,7 +9,13 @@ class SubscriptionResponse(BaseModel):
     status: str
     started_at: str
     expires_at: Optional[str]
+    is_recurring: bool = False
+    auto_renew: bool = False
+    can_cancel: bool = False
+    cancel_at_period_end: bool = False
     tier_name: str
+    tier_slug: str
+    tier_rank: int
     tier_name_ru: str
     tier_description: str
     tier_description_ru: str
@@ -36,12 +42,15 @@ class ImageQualityPricingResponse(BaseModel):
     image_model: str
     quality: str
     credit_cost: float
+    energy_cost: float
     description: Optional[str] = None
 
 
 class SubscriptionTierResponse(BaseModel):
     name: str
     name_ru: str
+    slug: str
+    rank: int
     description: str
     description_ru: str
     price_cents: int
@@ -50,7 +59,8 @@ class SubscriptionTierResponse(BaseModel):
     tier_image_model_limits: List[TierImageModelLimits] = []
     image_quality_pricing: List[ImageQualityPricingResponse] = []
     is_recurring: bool
-    daily_image_limit: int
+    daily_image_energy: int = 0
+    image_energy_max: int = 0
     allowed_image_qualities: List[str] = []
     allowed_image_models: List[str] = []
     tier_id: str

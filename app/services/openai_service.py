@@ -18,7 +18,6 @@ from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings as main_settings
-from app.core.metrics import track_event
 from app.db.database import engine
 from app.redis.settings import settings
 from app.schemas.chat import Message
@@ -82,65 +81,6 @@ def _is_retryable_openai_exception(exc: Exception) -> bool:
         "rate limit",
     )
     return any(marker in msg for marker in transient_markers)
-
-
-def _extract_openai_request_id(exc: Exception) -> str | None:
-    request_id = getattr(exc, "request_id", None)
-    if isinstance(request_id, str) and request_id:
-        return request_id
-
-    response = getattr(exc, "response", None)
-    headers = getattr(response, "headers", None)
-    if not headers:
-        return None
-
-    rid = headers.get("x-request-id") or headers.get("x-request_id")
-    if isinstance(rid, str) and rid:
-        return rid
-    return None
-
-
-def _build_responses_create_kwargs(
-    *,
-    model: str | None,
-    input_data: Any,
-    tools: Optional[Iterable[Any]] = None,
-    tool_choice: Any = None,
-    instructions: str | None = None,
-    stream: bool = False,
-    reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = None,
-    previous_response_id: str | None = None,
-    max_output_tokens: int | None = None,
-    text_format: dict[str, Any] | None = None,
-    metadata: dict[str, str] | None = None,
-) -> Dict[str, Any]:
-    kwargs: Dict[str, Any] = {
-        "model": model,
-        "input": input_data,
-        "store": False,
-    }
-
-    if tools is not None:
-        kwargs["tools"] = tools
-    if tool_choice is not None:
-        kwargs["tool_choice"] = tool_choice
-    if instructions is not None:
-        kwargs["instructions"] = instructions
-    if stream:
-        kwargs["stream"] = True
-        kwargs["service_tier"] = "default"
-    if reasoning_summary:
-        kwargs["reasoning"] = {"summary": reasoning_summary}
-    if previous_response_id:
-        kwargs["previous_response_id"] = previous_response_id
-    if max_output_tokens is not None:
-        kwargs["max_output_tokens"] = max_output_tokens
-    if text_format is not None:
-        kwargs["text"] = text_format
-    if metadata:
-        kwargs["metadata"] = metadata
-
-    return kwargs
 
 
 async def _retry_delay_s(attempt: int, base: float = 0.8, cap: float = 8.0) -> float:
@@ -429,7 +369,6 @@ async def _map_openai_event(
 
     if et in ("response.completed", "response.completed.successfully"):
         usage.apply_completed_event(event)
-        response_id = getattr(getattr(event, "response", None), "id", None)
         for content_index, buf in list(state.text_buf.items()):
             if buf:
                 out.append({"type": "text.delta", "index": content_index, "text": buf})
@@ -444,8 +383,6 @@ async def _map_openai_event(
                 event=event,
             )
         )
-        if response_id:
-            out.append({"type": "response.meta", "response_id": response_id})
         out.append({"type": "done"})
         return out
 
@@ -476,22 +413,13 @@ async def stream_normalized_openai_response(
     conversation_id: Optional[uuid.UUID] = None,
     request_id: Optional[str] = None,
     reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "concise",
-    previous_response_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     if tools is None:
         tools = default_tools
 
     corr_id = request_id or str(uuid.uuid4())
-    request_metadata = {
-        "request_id": corr_id,
-        "conversation_id": str(conversation_id) if conversation_id else "",
-        "user_id": str(user_id) if user_id else "",
-    }
     usage = UsageTracker()
     state = StreamState()
-    active_previous_response_id = previous_response_id
-    chain_attempted = bool(previous_response_id)
-    chain_succeeded = False
 
     try:
         response = None
@@ -500,55 +428,36 @@ async def stream_normalized_openai_response(
         # Retry response creation
         for attempt in range(max_openai_retries):
             try:
-                create_kwargs = _build_responses_create_kwargs(
-                    model=model,
-                    input_data=messages,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    instructions=(instructions or "") + STYLE_GUIDE,
-                    stream=True,
-                    reasoning_summary=reasoning_summary,
-                    metadata=request_metadata,
-                    previous_response_id=active_previous_response_id,
-                )
+                create_kwargs: Dict[str, Any] = {
+                    "model": model,
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "instructions": (instructions or "") + STYLE_GUIDE,
+                    "input": messages,
+                    "stream": True,
+                    "service_tier": "default",
+                }
+                if reasoning_summary:
+                    create_kwargs["reasoning"] = {"summary": reasoning_summary}
                 response = await client.responses.create(**create_kwargs)
-                if active_previous_response_id:
-                    chain_succeeded = True
                 break
             except Exception as exc:
-                # If server rejects previous_response_id, immediately fall back to non-chained create.
-                err_text = str(exc).lower()
-                if active_previous_response_id and "previous_response_id" in err_text:
-                    logger.warning(
-                        "OpenAI chaining fallback. request_id=%s previous_response_id=%s error=%s",
-                        corr_id,
-                        active_previous_response_id,
-                        exc,
-                    )
-                    active_previous_response_id = None
-                    continue
                 retryable = _is_retryable_openai_exception(exc)
-                upstream_request_id = _extract_openai_request_id(exc)
                 is_last_attempt = attempt >= max_openai_retries - 1
                 if retryable and not is_last_attempt:
                     delay = await _retry_delay_s(attempt)
                     logger.warning(
-                        "OpenAI create failed (attempt %s/%s), retrying in %.2fs. request_id=%s upstream_request_id=%s error=%s",
+                        "OpenAI create failed (attempt %s/%s), retrying in %.2fs. request_id=%s error=%s",
                         attempt + 1,
                         max_openai_retries,
                         delay,
                         corr_id,
-                        upstream_request_id,
                         exc,
                     )
                     await asyncio.sleep(delay)
                     continue
 
-                logger.exception(
-                    "OpenAI create failed permanently. request_id=%s upstream_request_id=%s",
-                    corr_id,
-                    upstream_request_id,
-                )
+                logger.exception("OpenAI create failed permanently. request_id=%s", corr_id)
                 yield {
                     "type": "error",
                     "code": OPENAI_UPSTREAM_ERROR_CODE,
@@ -566,40 +475,34 @@ async def stream_normalized_openai_response(
                 break
             except Exception as exc:
                 retryable = _is_retryable_openai_exception(exc)
-                upstream_request_id = _extract_openai_request_id(exc)
                 is_last_attempt = attempt >= max_openai_retries - 1
                 if retryable and not is_last_attempt:
                     delay = await _retry_delay_s(attempt)
                     logger.warning(
-                        "OpenAI stream failed (attempt %s/%s), recreating stream in %.2fs. request_id=%s upstream_request_id=%s error=%s",
+                        "OpenAI stream failed (attempt %s/%s), recreating stream in %.2fs. request_id=%s error=%s",
                         attempt + 1,
                         max_openai_retries,
                         delay,
                         corr_id,
-                        upstream_request_id,
                         exc,
                     )
                     await asyncio.sleep(delay)
 
-                    create_kwargs = _build_responses_create_kwargs(
-                        model=model,
-                        input_data=messages,
-                        tools=tools,
-                        tool_choice=tool_choice,
-                        instructions=(instructions or "") + STYLE_GUIDE,
-                        stream=True,
-                        reasoning_summary=reasoning_summary,
-                        metadata=request_metadata,
-                        previous_response_id=active_previous_response_id,
-                    )
+                    create_kwargs = {
+                        "model": model,
+                        "tools": tools,
+                        "tool_choice": tool_choice,
+                        "instructions": (instructions or "") + STYLE_GUIDE,
+                        "input": messages,
+                        "stream": True,
+                        "service_tier": "default",
+                    }
+                    if reasoning_summary:
+                        create_kwargs["reasoning"] = {"summary": reasoning_summary}
                     response = await client.responses.create(**create_kwargs)
                     continue
 
-                logger.exception(
-                    "OpenAI stream failed permanently. request_id=%s upstream_request_id=%s",
-                    corr_id,
-                    upstream_request_id,
-                )
+                logger.exception("OpenAI stream failed permanently. request_id=%s", corr_id)
                 yield {
                     "type": "error",
                     "code": OPENAI_UPSTREAM_ERROR_CODE,
@@ -623,11 +526,6 @@ async def stream_normalized_openai_response(
                 web_search_calls=usage.web_search_calls,
                 images_generated=usage.images_generated,
             )
-        if chain_attempted and user_id:
-            if chain_succeeded:
-                track_event("openai.chain.succeeded", str(user_id), {"model": model})
-            else:
-                track_event("openai.chain.fallback", str(user_id), {"model": model, "reason": "create_rejected"})
 
     except AuthenticationError:
         yield {"type": "error", "data": "OpenAI authentication failed. Check API key."}
@@ -666,8 +564,6 @@ async def stream_normalized_openai_response(
                 images_generated=0,
             )
     except Exception as exc:
-        if chain_attempted and user_id:
-            track_event("openai.chain.fallback", str(user_id), {"model": model, "reason": "exception"})
         async with AsyncSession(engine, expire_on_commit=False) as session:
             await log_usage(
                 session,
@@ -690,27 +586,25 @@ async def stream_normalized_openai_response(
 async def generate_conversation_title(first_message: str) -> str:
     try:
         response = await client.responses.create(
-            **_build_responses_create_kwargs(
-                model="gpt-5.4-nano",
-                input_data=[
-                    {
-                        "role": "developer",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": (
-                                    "You are an expert at creating short, concise titles. "
-                                    "Summarize the user's message in 5 words or less. "
-                                    "Do not use quotation marks or punctuation."
-                                ),
-                            }
-                        ],
-                    },
-                    {"role": "user", "content": [{"type": "input_text", "text": first_message}]},
-                ],
-                max_output_tokens=20,
-                text_format={"format": {"type": "text"}},
-            )
+            model="gpt-5.4-nano",
+            input=[
+                {
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You are an expert at creating short, concise titles. "
+                                "Summarize the user's message in 5 words or less. "
+                                "Do not use quotation marks or punctuation."
+                            ),
+                        }
+                    ],
+                },
+                {"role": "user", "content": [{"type": "input_text", "text": first_message}]},
+            ],
+            max_output_tokens=20,
+            text={"format": {"type": "text"}},
         )
         logger.info("Generated conversation title")
         title = (getattr(response, "output_text", None) or "").strip().strip('"').strip(".")
@@ -737,30 +631,28 @@ async def summarize_history_chunk(
 
     try:
         response = await client.responses.create(
-            **_build_responses_create_kwargs(
-                model=model,
-                input_data=[
-                    {
-                        "role": "developer",
-                        "content": [{"type": "input_text", "text": SUMMARY_PROMPT}],
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": (
-                                    "Update the conversation summary using this JSON payload. "
-                                    "Keep important details and remove redundancy.\n\n"
-                                    f"{json.dumps(payload, ensure_ascii=False)}"
-                                ),
-                            }
-                        ],
-                    },
-                ],
-                max_output_tokens=max_output_tokens,
-                text_format={"format": {"type": "text"}},
-            )
+            model=model,
+            input=[
+                {
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": SUMMARY_PROMPT}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Update the conversation summary using this JSON payload. "
+                                "Keep important details and remove redundancy.\n\n"
+                                f"{json.dumps(payload, ensure_ascii=False)}"
+                            ),
+                        }
+                    ],
+                },
+            ],
+            max_output_tokens=max_output_tokens,
+            text={"format": {"type": "text"}},
         )
     except Exception as exc:
         logger.warning("Failed to summarize conversation history: %s", exc)

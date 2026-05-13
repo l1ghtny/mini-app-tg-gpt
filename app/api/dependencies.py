@@ -23,7 +23,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/debug-login", scheme
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-) -> AppUser | None:
+) -> AppUser:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -100,7 +100,7 @@ async def get_available_models(current_user: AppUser, session: AsyncSession) -> 
     available_models = []
     for model_name in sorted(model_names):
         ent = await select_text_entitlement(session, current_user.id, model_name)
-        if ent["remaining"] > 0:
+        if ent["remaining"] == -1 or ent["remaining"] > 0:
             available_models.append(model_name)
 
     return available_models

@@ -12,8 +12,12 @@ from app.db.models import AppUser, Conversation
 from app.db.database import get_session
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import (
+    ConversationStreamRedirect,
+    CreateConversationRequest,
     ConversationAPI,
     ConversationWithMessages,
+    EditMessageRequest,
+    MessageUpdated,
     MessageCreated,
     NewMessageRequest,
     RenameRequest,
@@ -48,6 +52,46 @@ async def create_message(
     )
 
 
+@router.delete(
+    "/conversations/{conversation_id}/messages/{message_id}",
+    status_code=204,
+    response_class=Response,
+)
+async def delete_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    await chat_helpers.handle_delete_message(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        session=session,
+        current_user=current_user,
+    )
+    return Response(status_code=204)
+
+
+@router.put(
+    "/conversations/{conversation_id}/messages/{message_id}",
+    response_model=MessageUpdated,
+)
+async def edit_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    request: EditMessageRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await chat_helpers.handle_edit_message(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        request=request,
+        session=session,
+        current_user=current_user,
+    )
+
+
 @router.get(
     "/conversations/{conversation_id}/messages/{message_id}/stream",
     response_class=EventSourceResponse,
@@ -74,12 +118,14 @@ async def stream_message(
 
 @router.post("/conversations", response_model=ConversationAPI)
 async def create_conversation(
+    request: CreateConversationRequest | None = None,
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
     return await chat_helpers.handle_create_conversation(
         session=session,
         current_user=current_user,
+        folder_id=request.folder_id if request else None,
     )
 
 
@@ -107,7 +153,26 @@ async def get_conversation_messages(
     )
 
 
-@router.get("/conversations/{cid}/stream", response_class=Response)
+@router.get(
+    "/conversations/{cid}/stream",
+    response_class=Response,
+    status_code=307,
+    responses={
+        307: {
+            "model": ConversationStreamRedirect,
+            "description": "Active stream found for this conversation.",
+            "headers": {
+                "Location": {
+                    "description": "SSE endpoint for the current assistant message stream.",
+                    "schema": {"type": "string"},
+                }
+            },
+        },
+        204: {
+            "description": "No active stream for this conversation.",
+        },
+    },
+)
 async def sse_conversation(
     cid: uuid.UUID,
     request: Request,

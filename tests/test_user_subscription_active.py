@@ -24,7 +24,7 @@ async def test_active_subscription_prefers_paid_over_free():
         await session.refresh(user)
 
         free_name = f"free-{uuid.uuid4()}"
-        paid_name = f"pro-{uuid.uuid4()}"
+        paid_name = f"advanced-{uuid.uuid4()}"
 
         free_tier = SubscriptionTier(
             name=free_name,
@@ -38,8 +38,8 @@ async def test_active_subscription_prefers_paid_over_free():
         paid_tier = SubscriptionTier(
             name=paid_name,
             name_ru=paid_name,
-            description="pro",
-            description_ru="pro",
+            description="advanced",
+            description_ru="advanced",
             price_cents=1000,
             index=10,
             is_recurring=True,
@@ -74,7 +74,12 @@ async def test_active_subscription_prefers_paid_over_free():
     assert len(result.active_subscriptions) == 2
     assert result.primary_subscription_id is not None
     assert result.active_subscriptions[0].tier_name == paid_name
+    assert result.active_subscriptions[0].tier_slug == paid_name
+    assert result.active_subscriptions[0].tier_rank == 10
     assert result.active_subscriptions[0].tier_price == 1000
+    assert "T" in result.active_subscriptions[0].started_at
+    assert datetime.fromisoformat(result.active_subscriptions[0].started_at)
+    assert datetime.fromisoformat(result.active_subscriptions[0].expires_at)
     assert {sub.tier_name for sub in result.active_subscriptions} == {free_name, paid_name}
 
 
@@ -90,12 +95,12 @@ async def test_active_subscription_recurring_without_expiry_gets_fallback_expiry
         await session.commit()
         await session.refresh(user)
 
-        paid_name = f"pro-{uuid.uuid4()}"
+        paid_name = f"advanced-{uuid.uuid4()}"
         paid_tier = SubscriptionTier(
             name=paid_name,
             name_ru=paid_name,
-            description="pro",
-            description_ru="pro",
+            description="advanced",
+            description_ru="advanced",
             price_cents=1000,
             index=10,
             is_recurring=True,
@@ -120,4 +125,7 @@ async def test_active_subscription_recurring_without_expiry_gets_fallback_expiry
 
     assert len(result.active_subscriptions) == 1
     assert result.active_subscriptions[0].tier_name == paid_name
+    assert result.active_subscriptions[0].tier_slug == paid_name
+    assert result.active_subscriptions[0].tier_rank == 10
     assert result.active_subscriptions[0].expires_at is not None
+    assert datetime.fromisoformat(result.active_subscriptions[0].expires_at)

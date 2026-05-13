@@ -99,7 +99,14 @@ async def init_subscription_payment(
         payment.tbank_status = "ERROR"
         session.add(payment)
         await session.commit()
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception(
+            "TBank init subscription failed: payment_id=%s user_id=%s tier=%s",
+            payment.id,
+            user.id,
+            tier_name,
+        )
+        detail = str(exc).strip() or exc.__class__.__name__
+        raise HTTPException(status_code=500, detail=detail)
 
 
 async def init_usage_pack_payment(
@@ -184,7 +191,14 @@ async def init_usage_pack_payment(
         payment.tbank_status = "ERROR"
         session.add(payment)
         await session.commit()
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception(
+            "TBank init usage-pack failed: payment_id=%s user_id=%s pack_id=%s",
+            payment.id,
+            user.id,
+            payload.pack_id,
+        )
+        detail = str(exc).strip() or exc.__class__.__name__
+        raise HTTPException(status_code=500, detail=detail)
 
 
 async def get_payment_status(

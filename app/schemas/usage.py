@@ -48,6 +48,15 @@ class ImagePacing(BaseModel):
     wait_seconds: int
 
 
+class ImageEnergyBalance(BaseModel):
+    daily_energy: int
+    max_energy: int
+    available_energy: int
+    saved_energy: int
+    used_energy: int
+    saved_days: int
+
+
 class ImageEntitlementEntry(BaseModel):
     kind: Literal["tier", "pack"]
     source: Literal["subscription", "paid", "free"]
@@ -58,7 +67,8 @@ class ImageEntitlementEntry(BaseModel):
     cap: float
     used: float
     remaining_credits: float
-    daily_image_limit: Optional[int] = None
+    daily_image_energy: Optional[int] = None
+    energy_balance: Optional[ImageEnergyBalance] = None
     expires_at: Optional[datetime] = None
     purchased_at: Optional[datetime] = None
     pacing: Optional[ImagePacing] = None
@@ -95,6 +105,31 @@ class ImageModelUsage(BaseModel):
 class UserImageUsageResponse(BaseModel):
     status: Literal["none", "active"]
     models: list[ImageModelUsage]
+
+
+class ImageEnergySourceUsage(BaseModel):
+    kind: Literal["tier"]
+    source: Literal["subscription", "paid", "free"]
+    tier_id: str
+    tier_name: str
+    daily_energy: int
+    max_energy: int
+    available_energy: int
+    saved_energy: int
+    used_energy: int
+    saved_days: int
+    is_throttled: bool
+    wait_seconds: int
+
+
+class UserImageEnergyResponse(BaseModel):
+    status: Literal["none", "active"]
+    total_daily_energy: int = 0
+    total_max_energy: int = 0
+    total_available_energy: int = 0
+    total_saved_energy: int = 0
+    total_used_energy: int = 0
+    sources: list[ImageEnergySourceUsage] = []
 
 
 class UsagePackBalanceInfo(BaseModel):
