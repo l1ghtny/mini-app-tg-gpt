@@ -25,6 +25,7 @@ class Settings:
     TBANK_TERMINAL_KEY: str = os.getenv("TBANK_TERMINAL_KEY", "DEMO")
     TBANK_PASSWORD: str = os.getenv("TBANK_PASSWORD", "password")
     TBANK_API_URL: str = "https://securepay.tinkoff.ru/v2"
+    TBANK_TIMEOUT_SECONDS: float = float(os.getenv("TBANK_TIMEOUT_SECONDS", "15"))
     custom_logger = logging.getLogger("uvicorn")
     # Add Sentry Config
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
@@ -33,5 +34,8 @@ class Settings:
     STARTER_BUNDLE_NAME: str = os.getenv("STARTER_BUNDLE")
     WEBAPP_URL: str = os.getenv("WEBAPP_URL")
     BOT_TOKEN_TEST_BOT: str = os.getenv("BOT_TOKEN_TEST_BOT")
+    BROADCAST_ADMIN_TOKEN: str = os.getenv("BROADCAST_ADMIN_TOKEN", "")
+    OPENAI_CHAINING_ENABLED: bool = os.getenv("OPENAI_CHAINING_ENABLED", "False").lower() in ("true", "1")
+    OPENAI_CHAIN_MAX_INACTIVITY_DAYS: int = int(os.getenv("OPENAI_CHAIN_MAX_INACTIVITY_DAYS", "14"))
 
 settings = Settings()

@@ -11,15 +11,19 @@ from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
 from sqlmodel import select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
-from starlette.responses import RedirectResponse
+from starlette.responses import JSONResponse
 
 from app.api.dependencies import get_available_models
 from app.api.helpers import generate_and_publish, load_conversation
+from app.core.config import settings as app_settings
 from app.core.metrics import track_event
 from app.db import models
-from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder
+from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder, TextModelCatalog
 from app.redis.event_bus import RedisEventBus
+from app.redis.settings import settings as redis_settings
 from app.schemas.chat import (
+    EditMessageRequest,
+    MessageUpdated,
     MessageCreated,
     NewMessageRequest,
     RequestExists,
@@ -40,6 +44,7 @@ from app.services.subscription_check.entitlements import (
 from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
 from app.services.tasks import generate_and_save_title
+from app.services.openai_service import summarize_history_chunk
 
 _TOOL_TYPE_ALIASES = {
     "web_search_preview": "web_search",
@@ -47,6 +52,14 @@ _TOOL_TYPE_ALIASES = {
     "web_search_2025_08_26": "web_search",
 }
 _BASIC_TOOL_CHOICES = {"auto", "none", "required"}
+
+_DEFAULT_CONTEXT_WINDOW_TOKENS = 128000
+_DEFAULT_HISTORY_BUDGET_TOKENS = 12000
+_MIN_HISTORY_BUDGET_TOKENS = 2500
+_RESERVED_NON_HISTORY_TOKENS = 6000
+_SUMMARY_MAX_OUTPUT_TOKENS = 2000
+_SUMMARY_REFRESH_MIN_NEW_TOKENS = 600
+_SUMMARY_MODEL = "gpt-5.4-nano"
 
 
 @dataclass(frozen=True)
@@ -64,6 +77,13 @@ class ImageEntitlementSelection:
     cost: float
     throttle_reason: Optional[str]
     wait_time: Optional[timedelta]
+
+
+@dataclass(frozen=True)
+class _HistoryCandidate:
+    message_id: uuid.UUID
+    payload: dict[str, Any]
+    estimated_tokens: int
 
 
 async def handle_create_message(
@@ -111,7 +131,7 @@ async def handle_create_message(
         image_quality=image_quality,
     )
 
-    await _create_user_message(session, conversation, request, background_tasks)
+    user_msg = await _create_user_message(session, conversation, request, background_tasks)
     assistant_msg = await _create_assistant_message(session, conversation_id)
 
     await reserve_request(
@@ -122,13 +142,30 @@ async def handle_create_message(
         request_id=idempotency_key,
         model_name=request.model,
         feature="text",
-        cost=image_entitlement.cost,
+        cost=1.0,
         tool_choice=ledger_tool_choice,
         tier_id=text_entitlement.tier_id,
         usage_pack_id=text_entitlement.usage_pack_id,
     )
 
-    history_for_openai = await _build_history_for_openai(session, conversation_id)
+    history_for_openai = await _build_history_for_openai(
+        session,
+        conversation_id,
+        model_name=request.model,
+    )
+    previous_response_id = _resolve_previous_response_id_for_chain(conversation)
+    if previous_response_id:
+        background_tasks.add_task(
+            track_event,
+            "openai.chain.attempted",
+            str(current_user.id),
+            {"model": request.model},
+        )
+    await bus.set(
+        _conversation_current_stream_key(conversation_id),
+        str(assistant_msg.id),
+        ex=redis_settings.STREAM_TTL_SECONDS,
+    )
     redis_bus = RedisEventBus(bus)
 
     _queue_generation(
@@ -143,6 +180,7 @@ async def handle_create_message(
         tool_choice=request_tool_choice,
         tools=tools,
         request_id=idempotency_key,
+        previous_response_id=previous_response_id,
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
     )
@@ -150,6 +188,8 @@ async def handle_create_message(
     await _track_message_metrics(session, background_tasks, current_user, request.model)
 
     return MessageCreated(
+        user_message_id=user_msg.id,
+        assistant_message_id=assistant_msg.id,
         message_id=assistant_msg.id,
         stream_url=f"/api/v1/conversations/{conversation_id}/messages/{assistant_msg.id}/stream",
     )
@@ -190,10 +230,91 @@ async def handle_stream_message(
     return EventSourceResponse(gen(), headers=headers)
 
 
+async def handle_delete_message(
+    *,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    session: AsyncSession,
+    current_user: AppUser,
+) -> None:
+    conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
+    messages = await _load_messages_for_conversation(
+        session,
+        conversation_id,
+        include_content=False,
+    )
+
+    target_index = _find_message_index(messages, message_id)
+    if target_index is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    for message in messages[target_index:]:
+        await session.delete(message)
+
+    conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    session.add(conversation)
+    await session.commit()
+
+
+async def handle_edit_message(
+    *,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    request: EditMessageRequest,
+    session: AsyncSession,
+    current_user: AppUser,
+) -> MessageUpdated:
+    conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
+    messages = await _load_messages_for_conversation(
+        session,
+        conversation_id,
+        include_content=True,
+    )
+
+    target_index = _find_message_index(messages, message_id)
+    if target_index is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    target_message = messages[target_index]
+    if target_message.role != "user":
+        raise HTTPException(status_code=409, detail="Only user messages can be edited")
+
+    await _replace_message_content(session, target_message, request)
+
+    # Delete every message that comes after the edited one, regardless of role.
+    # Use timestamp boundary instead of slice order so user+assistant messages
+    # are consistently truncated even when ordering ties appear.
+    messages_to_delete = (await session.exec(
+        select(Message).where(
+            Message.conversation_id == conversation_id,
+            (
+                (Message.created_at > target_message.created_at)
+                | (
+                    (Message.created_at == target_message.created_at)
+                    & (Message.id != target_message.id)
+                )
+            ),
+        )
+    )).all()
+
+    for message in messages_to_delete:
+        await session.delete(message)
+
+    conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    session.add(conversation)
+    await session.commit()
+
+    return MessageUpdated(
+        message_id=target_message.id,
+        deleted_after=len(messages_to_delete),
+    )
+
+
 async def handle_create_conversation(
     *,
     session: AsyncSession,
     current_user: AppUser,
+    folder_id: uuid.UUID | None = None,
 ) -> Conversation:
     user = await session.get(models.AppUser, current_user.id)
     if not user:
@@ -202,7 +323,16 @@ async def handle_create_conversation(
         await session.commit()
         await session.refresh(user)
 
-    new_conversation = models.Conversation(title="New Chat", user_id=user.id)
+    if folder_id is not None:
+        folder = await session.get(models.ChatFolder, folder_id)
+        if not folder or folder.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+    new_conversation = models.Conversation(
+        title="New Chat",
+        user_id=user.id,
+        folder_id=folder_id,
+    )
     session.add(new_conversation)
     await session.commit()
     await session.refresh(new_conversation)
@@ -252,13 +382,19 @@ async def handle_sse_conversation(
 ) -> Response:
     await _load_conversation_for_user(session, conversation_id, current_user.id)
 
-    message_id = await redis.get(f"conv:{conversation_id}:current")
+    message_id = await redis.get(_conversation_current_stream_key(conversation_id))
     if not message_id:
         return Response(status_code=204)
-    return RedirectResponse(
-        url=f"/api/v1/conversations/{conversation_id}/messages/{message_id}/stream",
+    stream_url = f"/api/v1/conversations/{conversation_id}/messages/{message_id}/stream"
+    return JSONResponse(
+        content={"stream_url": stream_url},
         status_code=307,
+        headers={"Location": stream_url},
     )
+
+
+def _conversation_current_stream_key(conversation_id: uuid.UUID | str) -> str:
+    return f"conv:{conversation_id}:current"
 
 
 async def handle_rename_conversation(
@@ -346,6 +482,12 @@ async def _get_idempotency_response(
     if not ledger or not ledger.assistant_message_id:
         return None
 
+    user_message_id = await _find_related_user_message_id(
+        session,
+        conversation_id=conversation_id,
+        assistant_message_id=ledger.assistant_message_id,
+    )
+
     link = await _choose_link_for_message(
         session,
         bus,
@@ -355,12 +497,16 @@ async def _get_idempotency_response(
     )
     if link["stream_url"]:
         return RequestExists(
-            message_id=link["message_id"],
+            user_message_id=user_message_id,
+            assistant_message_id=ledger.assistant_message_id,
+            message_id=ledger.assistant_message_id,
             stream_url=link["stream_url"],
         )
 
     return RequestExists(
-        message_id=link["message_id"],
+        user_message_id=user_message_id,
+        assistant_message_id=ledger.assistant_message_id,
+        message_id=ledger.assistant_message_id,
         messages_url=link["messages_url"],
     )
 
@@ -540,7 +686,8 @@ async def _require_text_entitlement(
     model: str,
 ) -> TextEntitlementSelection:
     text_entitlement = await select_text_entitlement(session, user.id, model)
-    if text_entitlement["remaining"] <= 0:
+    remaining = text_entitlement["remaining"]
+    if remaining != -1 and remaining <= 0:
         available_models = await get_available_models(user, session)
         if not available_models:
             raise HTTPException(status_code=402, detail="No text usage available")
@@ -560,7 +707,7 @@ async def _require_text_entitlement(
         else None
     )
     return TextEntitlementSelection(
-        remaining=text_entitlement["remaining"],
+        remaining=remaining,
         tier_id=tier_id,
         usage_pack_id=usage_pack_id,
     )
@@ -611,6 +758,89 @@ async def _load_conversation_for_user(
             detail="Not authorized to send messages to this conversation",
         )
     return conversation
+
+
+async def _load_messages_for_conversation(
+    session: AsyncSession,
+    conversation_id: uuid.UUID,
+    *,
+    include_content: bool,
+) -> list[Message]:
+    query = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc(), Message.id.asc())
+    )
+    if include_content:
+        query = query.options(selectinload(Message.content))
+    return (await session.exec(query)).all()
+
+
+async def _find_related_user_message_id(
+    session: AsyncSession,
+    *,
+    conversation_id: uuid.UUID,
+    assistant_message_id: uuid.UUID,
+) -> uuid.UUID | None:
+    messages = await _load_messages_for_conversation(
+        session,
+        conversation_id,
+        include_content=False,
+    )
+    target_index = _find_message_index(messages, assistant_message_id)
+    if target_index is None:
+        return None
+
+    for idx in range(target_index - 1, -1, -1):
+        message = messages[idx]
+        if message.role == "user":
+            return message.id
+    return None
+
+
+def _find_message_index(messages: list[Message], message_id: uuid.UUID) -> int | None:
+    for idx, message in enumerate(messages):
+        if message.id == message_id:
+            return idx
+    return None
+
+
+async def _replace_message_content(
+    session: AsyncSession,
+    message: Message,
+    request: EditMessageRequest,
+) -> None:
+    text_value = request.content
+    has_text = bool(text_value and text_value.strip())
+    image_values = [image for image in (request.images or []) if image]
+    if not has_text and not image_values:
+        raise HTTPException(status_code=400, detail="Edited message must include text or images")
+
+    for part in list(message.content):
+        await session.delete(part)
+
+    ordinal = 0
+    if has_text:
+        session.add(
+            models.MessageContent(
+                message_id=message.id,
+                ordinal=ordinal,
+                type="text",
+                value=text_value,
+            )
+        )
+        ordinal += 1
+
+    for image_url in image_values:
+        session.add(
+            models.MessageContent(
+                message_id=message.id,
+                ordinal=ordinal,
+                type="image_url",
+                value=image_url,
+            )
+        )
+        ordinal += 1
 
 
 def _resolve_image_settings(request: NewMessageRequest, conversation: Conversation) -> tuple[str, str]:
@@ -683,6 +913,11 @@ def _format_wait_time(wait_time: timedelta) -> str:
         return f"{hours} hours"
     return f"{minutes} minutes"
 
+def _is_effectively_no_refill_wait(wait_time: timedelta | None) -> bool:
+    if not wait_time:
+        return False
+    return wait_time.total_seconds() >= 30 * 24 * 60 * 60
+
 
 def _apply_image_quota_notice(
     system_prompt: str | None,
@@ -697,6 +932,13 @@ def _apply_image_quota_notice(
         return prompt
 
     if throttle_reason == "pacing":
+        if _is_effectively_no_refill_wait(wait_time):
+            return (
+                prompt
+                + "\n\nSYSTEM NOTICE: The user has exhausted a one-time image energy pool that does not auto-refill. "
+                "The image generation tool is disabled until they upgrade or buy additional usage. "
+                "If the user asks for an image, explain they need to upgrade to continue image generation.\n\n"
+            )
         time_str = _format_wait_time(wait_time) if wait_time else "a short while"
         return (
             prompt
@@ -736,9 +978,21 @@ def _apply_image_quota_notice(
 
 
 def _resolve_system_prompt(conversation: Conversation, user: AppUser) -> str:
+    parts: list[str] = []
+
+    main_user_prompt = (user.default_prompt or "").strip()
+    if main_user_prompt:
+        parts.append("Main user prompt:\n\n" + main_user_prompt)
+
     if conversation.folder and conversation.folder.prompt:
-        return conversation.folder.prompt
-    return user.default_prompt
+        folder_prompt = conversation.folder.prompt.strip()
+        if folder_prompt:
+            parts.append("Folder prompt for this chat:\n\n" + folder_prompt)
+
+    if not parts:
+        return ""
+
+    return "\n\n".join(parts) + "\n\n"
 
 
 async def _create_user_message(
@@ -783,35 +1037,216 @@ async def _create_assistant_message(
 async def _build_history_for_openai(
     session: AsyncSession,
     conversation_id: uuid.UUID,
+    *,
+    model_name: str | None = None,
 ) -> list[dict]:
-    history = []
     result = await session.exec(
         select(Message)
         .where(Message.conversation_id == conversation_id)
         .options(selectinload(Message.content))
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.asc(), Message.id.asc())
     )
     msgs = result.all()
-    for msg in msgs:
-        parts = []
-        assistant_has_image = False
-        for c in msg.content:
-            if c.type == "text" and msg.role == "user":
-                parts.append({"type": "input_text", "text": c.value})
-            elif c.type == "text" and msg.role == "assistant":
-                parts.append({"type": "output_text", "text": c.value})
-            elif (c.type in ("image_url", "image")) and msg.role == "user":
-                compatible_url = await ensure_openai_compatible_image_url(session, c.value, max_size=2048)
-                parts.append({"type": "input_image", "image_url": compatible_url})
-                if compatible_url != c.value:
-                    await rewrite_message_image_url(session, c.value, compatible_url, message_id=msg.id)
-            elif (c.type in ("image_url", "image")) and msg.role == "assistant":
-                assistant_has_image = True
-        if assistant_has_image and not any(part.get("type") == "output_text" for part in parts):
-            parts.append({"type": "output_text", "text": "[Generated an image.]"})
-        if parts:
-            history.append({"role": msg.role, "content": parts})
+    candidates = [_build_history_candidate(msg) for msg in msgs]
+    candidates = [candidate for candidate in candidates if candidate is not None]
+    if not candidates:
+        return []
+
+    context_window = await _resolve_context_window_tokens(session, model_name)
+    history_budget = _compute_history_budget_tokens(context_window)
+
+    selected_reversed: list[_HistoryCandidate] = []
+    selected_tokens = 0
+    for candidate in reversed(candidates):
+        would_overflow = selected_tokens + candidate.estimated_tokens > history_budget
+        if would_overflow and selected_reversed:
+            break
+        selected_reversed.append(candidate)
+        selected_tokens += candidate.estimated_tokens
+        if would_overflow:
+            break
+
+    selected = list(reversed(selected_reversed))
+    dropped_count = len(candidates) - len(selected)
+    dropped = candidates[:dropped_count] if dropped_count > 0 else []
+
+    summary_item = await _maybe_refresh_and_build_summary_item(
+        session=session,
+        conversation_id=conversation_id,
+        dropped_candidates=dropped,
+    )
+
+    history: list[dict[str, Any]] = []
+    if summary_item:
+        history.append(summary_item)
+
+    for candidate in selected:
+        finalized = await _finalize_history_payload(session, candidate)
+        if finalized:
+            history.append(finalized)
+
     return history
+
+
+def _estimate_tokens_from_text(value: str) -> int:
+    return max(1, (len(value) + 3) // 4)
+
+
+def _estimate_part_tokens(part: dict[str, Any]) -> int:
+    part_type = part.get("type")
+    if part_type in {"input_text", "output_text"}:
+        return _estimate_tokens_from_text(part.get("text", "")) + 4
+    if part_type == "input_image":
+        # Image references are expensive in practice; use a conservative estimate.
+        return 300
+    return 8
+
+
+def _estimate_message_tokens(payload: dict[str, Any]) -> int:
+    content = payload.get("content", [])
+    return 8 + sum(_estimate_part_tokens(part) for part in content if isinstance(part, dict))
+
+
+def _build_history_candidate(msg: Message) -> _HistoryCandidate | None:
+    parts: list[dict[str, Any]] = []
+    assistant_has_image = False
+
+    ordered_content = sorted(msg.content, key=lambda c: (c.ordinal, c.id))
+    for c in ordered_content:
+        if c.type == "text" and msg.role == "user":
+            parts.append({"type": "input_text", "text": c.value})
+        elif c.type == "text" and msg.role == "assistant":
+            parts.append({"type": "output_text", "text": c.value})
+        elif (c.type in {"image_url", "image"}) and msg.role == "user":
+            parts.append({"type": "input_image", "image_url": c.value})
+        elif (c.type in {"image_url", "image"}) and msg.role == "assistant":
+            assistant_has_image = True
+
+    if assistant_has_image and not any(part.get("type") == "output_text" for part in parts):
+        parts.append({"type": "output_text", "text": "[Generated an image.]"})
+
+    if not parts:
+        return None
+
+    payload = {"role": msg.role, "content": parts}
+    return _HistoryCandidate(
+        message_id=msg.id,
+        payload=payload,
+        estimated_tokens=_estimate_message_tokens(payload),
+    )
+
+
+async def _finalize_history_payload(
+    session: AsyncSession,
+    candidate: _HistoryCandidate,
+) -> dict[str, Any]:
+    payload = {"role": candidate.payload["role"], "content": []}
+    for part in candidate.payload.get("content", []):
+        if part.get("type") != "input_image":
+            payload["content"].append(part)
+            continue
+
+        source_url = part.get("image_url")
+        if not source_url:
+            continue
+        compatible_url = await ensure_openai_compatible_image_url(session, source_url, max_size=2048)
+        payload["content"].append({"type": "input_image", "image_url": compatible_url})
+        if compatible_url != source_url:
+            await rewrite_message_image_url(session, source_url, compatible_url, message_id=candidate.message_id)
+
+    return payload
+
+
+async def _resolve_context_window_tokens(session: AsyncSession, model_name: str | None) -> int:
+    if not model_name:
+        return _DEFAULT_CONTEXT_WINDOW_TOKENS
+
+    row = (
+        await session.exec(
+            select(TextModelCatalog)
+            .where(
+                TextModelCatalog.model_name == model_name,
+                TextModelCatalog.is_active == True,
+            )
+        )
+    ).first()
+    if row and row.context_window:
+        return row.context_window
+    return _DEFAULT_CONTEXT_WINDOW_TOKENS
+
+
+def _compute_history_budget_tokens(context_window: int) -> int:
+    budget_after_reserve = max(_MIN_HISTORY_BUDGET_TOKENS, context_window - _RESERVED_NON_HISTORY_TOKENS)
+    return min(_DEFAULT_HISTORY_BUDGET_TOKENS, budget_after_reserve)
+
+
+async def _maybe_refresh_and_build_summary_item(
+    *,
+    session: AsyncSession,
+    conversation_id: uuid.UUID,
+    dropped_candidates: list[_HistoryCandidate],
+) -> dict[str, Any] | None:
+    if not dropped_candidates:
+        return None
+
+    conversation = await session.get(Conversation, conversation_id)
+    if not conversation:
+        return None
+
+    summary_text = (conversation.history_summary or "").strip()
+    current_up_to = conversation.history_summary_up_to_message_id
+    dropped_token_total = sum(c.estimated_tokens for c in dropped_candidates)
+
+    start_index = 0
+    if current_up_to is not None:
+        for idx, candidate in enumerate(dropped_candidates):
+            if candidate.message_id == current_up_to:
+                start_index = idx + 1
+                break
+
+    unsummarized_candidates = dropped_candidates[start_index:]
+    unsummarized_tokens = sum(c.estimated_tokens for c in unsummarized_candidates)
+    newest_dropped_id = dropped_candidates[-1].message_id
+
+    should_refresh = (
+        bool(unsummarized_candidates)
+        and (not summary_text or unsummarized_tokens >= _SUMMARY_REFRESH_MIN_NEW_TOKENS)
+    )
+    if should_refresh:
+        refreshed = await summarize_history_chunk(
+            previous_summary=summary_text,
+            history_chunk=[candidate.payload for candidate in unsummarized_candidates],
+            model=_SUMMARY_MODEL,
+            max_output_tokens=_SUMMARY_MAX_OUTPUT_TOKENS,
+        )
+        refreshed = (refreshed or "").strip()
+        if refreshed and (refreshed != summary_text or current_up_to != newest_dropped_id):
+            conversation.history_summary = refreshed
+            conversation.history_summary_up_to_message_id = newest_dropped_id
+            conversation.history_summary_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            session.add(conversation)
+            await session.commit()
+            summary_text = refreshed
+            current_up_to = newest_dropped_id
+
+    if not summary_text:
+        return None
+
+    approx_summary_tokens = _estimate_tokens_from_text(summary_text)
+    if approx_summary_tokens > _SUMMARY_MAX_OUTPUT_TOKENS * 2 and dropped_token_total < _SUMMARY_REFRESH_MIN_NEW_TOKENS:
+        # If the existing summary is too long but there is not enough fresh history to justify
+        # another summarization call, skip injecting it to avoid overspending.
+        return None
+
+    return {
+        "role": "system",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Conversation summary (older context):\n" + summary_text,
+            }
+        ],
+    }
 
 
 def _queue_generation(
@@ -827,6 +1262,7 @@ def _queue_generation(
     tool_choice: str | dict[str, Any] | None,
     tools: list,
     request_id: str,
+    previous_response_id: Optional[str],
     image_entitlement_tier_id: Optional[uuid.UUID],
     image_entitlement_pack_id: Optional[uuid.UUID],
 ) -> None:
@@ -842,9 +1278,30 @@ def _queue_generation(
         tool_choice=tool_choice,
         tools=tools,
         request_id=request_id,
+        previous_response_id=previous_response_id,
         image_entitlement_tier_id=image_entitlement_tier_id,
         image_entitlement_pack_id=image_entitlement_pack_id,
     )
+
+
+def _resolve_previous_response_id_for_chain(conversation: Conversation) -> str | None:
+    if not app_settings.OPENAI_CHAINING_ENABLED:
+        return None
+
+    response_id = (conversation.last_openai_response_id or "").strip()
+    if not response_id:
+        return None
+
+    updated_at = conversation.openai_chain_updated_at
+    if updated_at is None:
+        return None
+
+    max_age = timedelta(days=max(1, app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS))
+    age = datetime.now(timezone.utc).replace(tzinfo=None) - updated_at
+    if age > max_age:
+        return None
+
+    return response_id
 
 
 async def _track_message_metrics(

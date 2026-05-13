@@ -1,18 +1,17 @@
 ﻿import base64
 import hashlib
 import uuid
-from pprint import pprint
+from datetime import datetime, timezone
 from typing import Any, Optional, Iterable
 
 from fastapi import HTTPException
-from openai.types.beta import FileSearchToolParam
-from openai.types.responses import WebSearchToolParam
+from openai.types.responses import FileSearchToolParam, WebSearchToolParam
 from openai.types.responses.tool import CodeInterpreter, ImageGeneration
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import Conversation, MessageContent
-from app.r2.methods import put_bytes
+from app.r2.methods import delete_object, put_bytes
 from app.r2.settings import Settings
 from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
@@ -38,9 +37,10 @@ async def generate_and_publish(
         bus: RedisEventBus,
         tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
         instructions: Optional[str] = None,
-        model: Optional[str] = "gpt-5-nano",
+        model: Optional[str] = "gpt-5.4-nano",
         tool_choice: Optional[str | dict[str, Any]] = "auto",
         request_id: Optional[str] = None,
+        previous_response_id: Optional[str] = None,
         image_entitlement_tier_id: Optional[uuid.UUID] = None,
         image_entitlement_pack_id: Optional[uuid.UUID] = None,
 ):
@@ -48,6 +48,12 @@ async def generate_and_publish(
         buffers: dict[int, str] = {}
         last_ckpt: dict[int, int] = {}
         content_cache: dict[int, MessageContent] = {}
+        partial_image_keys: dict[int, list[str]] = {}
+        lifecycle: dict[str, Any] = {
+            "text_request_finalized": False,
+            "stream_failed": False,
+            "last_error_message": None,
+        }
         assistant_message_id_str = str(assistant_message_id)
 
         try:
@@ -62,8 +68,10 @@ async def generate_and_publish(
                     user_id=user_id,
                     conversation_id=conversation_id,
                     request_id=request_id,
+                    previous_response_id=previous_response_id,
             ):
-                await bus.publish(assistant_message_id_str, ev)
+                if ev.get("type") not in {"image.partial", "image.ready", "response.meta"}:
+                    await bus.publish(assistant_message_id_str, ev)
 
                 await _handle_stream_event(
                     ev=ev,
@@ -79,14 +87,38 @@ async def generate_and_publish(
                     buffers=buffers,
                     last_ckpt=last_ckpt,
                     content_cache=content_cache,
+                    partial_image_keys=partial_image_keys,
+                    lifecycle=lifecycle,
                 )
 
         except Exception as e:
-            await bus.publish(assistant_message_id_str, {"type": "error", "error": str(e)})
-            await bus.mark_done(assistant_message_id_str, ok=False, error=str(e))
+            await _cleanup_partial_images(partial_image_keys)
+            await bus.publish(assistant_message_id_str, {
+                "type": "error",
+                "error": lifecycle.get("last_error_message") or str(e),
+            })
+            await bus.mark_done(
+                assistant_message_id_str,
+                ok=False,
+                error=lifecycle.get("last_error_message") or str(e),
+            )
             raise
         else:
-            await bus.mark_done(assistant_message_id_str, ok=True)
+            if lifecycle.get("stream_failed"):
+                await bus.mark_done(
+                    assistant_message_id_str,
+                    ok=False,
+                    error=lifecycle.get("last_error_message") or "stream_failed",
+                )
+            else:
+                await bus.mark_done(assistant_message_id_str, ok=True)
+        finally:
+            await _clear_active_stream_pointer(
+                bus=bus,
+                conversation_id=conversation_id,
+                assistant_message_id=assistant_message_id_str,
+            )
+
 
 
 async def _handle_stream_event(
@@ -104,6 +136,8 @@ async def _handle_stream_event(
         buffers: dict[int, str],
         last_ckpt: dict[int, int],
         content_cache: dict[int, MessageContent],
+        partial_image_keys: dict[int, list[str]],
+        lifecycle: dict[str, Any],
 ) -> None:
     event_type = ev.get("type")
 
@@ -125,13 +159,14 @@ async def _handle_stream_event(
         if i in buffers:
             await _upsert_text(assistant_message_id, i, buffers[i], session=session, content_cache=content_cache)
 
-        await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
-        print("UPDATED REQUEST LEDGER")
+        if not lifecycle.get("text_request_finalized"):
+            await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
+            lifecycle["text_request_finalized"] = True
         return
 
     if event_type == "image.ready":
         ordinal = ev.get("index", 0)
-        url = await upload_openai_image_to_r2(ev["data"], prefix="gen")
+        url, _ = await upload_openai_image_to_r2_with_key(ev["data"], prefix="gen")
         await save_image_url_to_db(url, ordinal, assistant_message_id, session=session)
         await bus.publish(str(assistant_message_id), {
             "type": "image.url",
@@ -154,16 +189,68 @@ async def _handle_stream_event(
             image_entitlement_tier_id,
             image_entitlement_pack_id,
         )
+        # Final image is ready; remove temporary partial images for this output index.
+        await _cleanup_partial_images({ordinal: partial_image_keys.pop(ordinal, [])})
         print("SAVED THE IMAGE")
+        return
+
+    if event_type == "image.partial":
+        ordinal = ev.get("index", 0)
+        partial_url, partial_key = await upload_openai_image_to_r2_with_key(
+            ev["data"],
+            prefix="gen-partial",
+            suffix=f"{ordinal}-{ev.get('partial_index', 0)}-{ev.get('sequence_number', 0)}",
+        )
+        partial_image_keys.setdefault(ordinal, []).append(partial_key)
+        await bus.publish(str(assistant_message_id), {
+            "type": "image.partial",
+            "index": ordinal,
+            "format": "url",
+            "url": partial_url,
+            "partial_index": ev.get("partial_index", 0),
+            "sequence_number": ev.get("sequence_number", 0),
+        })
+        await bus.publish(str(assistant_message_id), {
+            "type": "image.partial_url",
+            "index": ordinal,
+            "url": partial_url,
+            "partial_index": ev.get("partial_index", 0),
+            "sequence_number": ev.get("sequence_number", 0),
+        })
         return
 
     if event_type == "status":
         # not saving to DB
         return
 
+    if event_type == "response.meta":
+        response_id = ev.get("response_id")
+        if response_id:
+            conversation = await session.get(Conversation, conversation_id)
+            if conversation:
+                conversation.last_openai_response_id = str(response_id)
+                conversation.openai_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                session.add(conversation)
+                await session.commit()
+        return
+
+    if event_type in {"reasoning.summary.delta", "reasoning.summary.done"}:
+        # UI-only events for frontend stream
+        return
+
+    if event_type == "done":
+        # Some responses (for example image-only) may not emit text.done.
+        if not lifecycle.get("text_request_finalized"):
+            await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
+            lifecycle["text_request_finalized"] = True
+        return
+
     if event_type == "error":
-        await finalize_request(session, request_id=request_id, user_id=user_id, success=False)
-        # optional: mark message status in DB
+        lifecycle["stream_failed"] = True
+        lifecycle["last_error_message"] = ev.get("data") or ev.get("error") or "OpenAI stream error"
+        if not lifecycle.get("text_request_finalized"):
+            await finalize_request(session, request_id=request_id, user_id=user_id, success=False)
+            lifecycle["text_request_finalized"] = True
         return
 
 
@@ -261,11 +348,55 @@ async def fetch_assistant_text(session: AsyncSession, message_id: uuid.UUID) -> 
 
 
 async def upload_openai_image_to_r2(b64_png: str, prefix: str = "gen"):
+    url, _ = await upload_openai_image_to_r2_with_key(b64_png, prefix=prefix)
+    return url
+
+
+async def upload_openai_image_to_r2_with_key(
+        b64_png: str,
+        prefix: str = "gen",
+        suffix: str | None = None,
+) -> tuple[str, str]:
     data = base64.b64decode(b64_png)
     sha = hashlib.sha256(data).hexdigest()
-    key = f"{prefix}/{sha[:2]}/{sha}.png"
+    filename = f"{sha}-{suffix}.png" if suffix else f"{sha}.png"
+    key = f"{prefix}/{sha[:2]}/{filename}"
     bucket, key = await put_bytes(key, data, content_type="image/png", metadata={"source": "openai"})
-    return f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}"
+    return f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}", key
+
+
+async def _cleanup_partial_images(partial_keys_by_index: dict[int, list[str]]) -> None:
+    for keys in partial_keys_by_index.values():
+        for key in keys:
+            try:
+                await delete_object(key)
+            except Exception:
+                # Best-effort cleanup for temporary objects.
+                continue
+
+
+async def _clear_active_stream_pointer(
+    *,
+    bus: RedisEventBus,
+    conversation_id: uuid.UUID,
+    assistant_message_id: str,
+) -> None:
+    # Some tests use a minimal fake bus without redis backing.
+    if not hasattr(bus, "r") or bus.r is None:
+        return
+
+    key = f"conv:{conversation_id}:current"
+    current = await bus.r.get(key)
+    if current is None:
+        return
+
+    if isinstance(current, bytes):
+        current_value = current.decode("utf-8")
+    else:
+        current_value = str(current)
+
+    if current_value == assistant_message_id:
+        await bus.r.delete(key)
 
 
 # To use this function, we need to have a message created already

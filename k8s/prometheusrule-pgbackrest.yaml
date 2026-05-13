@@ -1,0 +1,30 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gpt-pgbackrest-alerts
+  namespace: gpt
+  labels:
+    release: kube-prom-stack
+    app.kubernetes.io/part-of: tg-mini-app
+spec:
+  groups:
+    - name: gpt.pgbackrest
+      rules:
+        - alert: PgBackRestBackupJobFailed
+          expr: increase(kube_job_status_failed{namespace="gpt",job_name=~"tg-mini-app-db-backup-.*"}[15m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: postgres
+          annotations:
+            summary: "pgBackRest backup job failed in gpt namespace"
+            description: "At least one tg-mini pgBackRest backup job failed in the last 15 minutes."
+        - alert: PgBackRestBackupStale
+          expr: time() - max(kube_job_status_completion_time{namespace="gpt",job_name=~"tg-mini-app-db-backup-.*"}) > 129600
+          for: 10m
+          labels:
+            severity: warning
+            service: postgres
+          annotations:
+            summary: "pgBackRest backups are stale"
+            description: "No completed tg-mini pgBackRest backup has been recorded for over 36 hours."

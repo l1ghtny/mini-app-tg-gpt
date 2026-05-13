@@ -1,0 +1,34 @@
+{
+  "spec": {
+    "backups": {
+      "pgbackrest": {
+        "configuration": [
+          {
+            "secret": {
+              "name": "tg-mini-app-db-pgbackrest-secrets"
+            }
+          }
+        ],
+        "global": {
+          "repo1-path": "/pgbackrest/gpt/tg-mini-app-db/repo1",
+          "repo1-retention-full": "4",
+          "repo1-retention-diff": "14"
+        },
+        "repos": [
+          {
+            "name": "repo1",
+            "s3": {
+              "bucket": "tg-mini-app-db-backups-prod",
+              "endpoint": "3976b304dd7e75b248d867d320740478.r2.cloudflarestorage.com",
+              "region": "auto"
+            },
+            "schedules": {
+              "full": "0 3 * * 0",
+              "differential": "0 3 * * 1-6"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
