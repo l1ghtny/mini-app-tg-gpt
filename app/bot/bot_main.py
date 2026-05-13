@@ -174,12 +174,13 @@ async def nudge_to_app(message: types.Message):
         )
         button_text = "🚀 Open App"
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=button_text,
-            web_app=WebAppInfo(url=webapp_url)
-        )]
-    ])
+    is_private_chat = message.chat and message.chat.type == "private"
+    open_app_button = InlineKeyboardButton(
+        text=button_text,
+        web_app=WebAppInfo(url=webapp_url) if is_private_chat else None,
+        url=webapp_url if not is_private_chat else None,
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[open_app_button]])
 
     await message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
 
