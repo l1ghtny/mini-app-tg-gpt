@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tg-mini-backend-canary
+  namespace: gpt
+spec:
+  type: ClusterIP
+  selector:
+    app: tg-mini-backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: tg-mini-backend
+  namespace: gpt
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: tg-mini-backend
+  workloadRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: tg-mini-backend
+    scaleDown: progressively
+  strategy:
+    canary:
+      maxSurge: 25%
+      maxUnavailable: 0
+      stableService: backend
+      canaryService: tg-mini-backend-canary
+      trafficRouting:
+        nginx:
+          stableIngress: tg-mini-backend
+      steps:
+        - setWeight: 5
+        - pause: {}
+        - setWeight: 20
+        - pause: {}
+        - setWeight: 50
+        - pause: {}
