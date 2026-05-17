@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tg-mini-backend-rollouts
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gpt
+  source:
+    repoURL: https://github.com/l1ghtny/mini-app-tg-gpt
+    targetRevision: development
+    path: k8s/argo-rollouts
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
