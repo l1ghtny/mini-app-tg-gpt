@@ -18,7 +18,7 @@ from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings as main_settings
-from app.core.metrics import track_event
+from app.core.metrics import track_event, track_internal_event
 from app.db.database import engine
 from app.redis.settings import settings
 from app.schemas.chat import Message
@@ -41,6 +41,27 @@ SUMMARY_PROMPT = (
     "Use plain text with short bullet lines when useful. "
     "Keep it concise."
 )
+
+TITLE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+    },
+    "required": ["title"],
+    "additionalProperties": False,
+}
+
+SUMMARY_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "open_tasks": {"type": "array", "items": {"type": "string"}},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "decisions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary"],
+    "additionalProperties": False,
+}
 
 client = AsyncOpenAI()
 logger = main_settings.custom_logger
@@ -141,6 +162,57 @@ def _build_responses_create_kwargs(
         kwargs["metadata"] = metadata
 
     return kwargs
+
+
+def _response_text(response: Any) -> str:
+    output_text = (getattr(response, "output_text", None) or "").strip()
+    if output_text:
+        return output_text
+
+    collected: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        for part in getattr(item, "content", []) or []:
+            text = getattr(part, "text", None)
+            if isinstance(text, str) and text.strip():
+                collected.append(text.strip())
+    return "\n".join(collected).strip()
+
+
+def _parse_response_json_object(response: Any) -> dict[str, Any] | None:
+    text = _response_text(response)
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _format_structured_summary(payload: dict[str, Any]) -> str:
+    summary_text = str(payload.get("summary") or "").strip()
+    if not summary_text:
+        return ""
+
+    lines: list[str] = [summary_text]
+
+    def _append_list_section(label: str, key: str) -> None:
+        raw_items = payload.get(key)
+        if not isinstance(raw_items, list):
+            return
+        items = [str(item).strip() for item in raw_items if str(item).strip()]
+        if not items:
+            return
+        lines.append(f"{label}:")
+        lines.extend(f"- {item}" for item in items)
+
+    _append_list_section("Open tasks", "open_tasks")
+    _append_list_section("Constraints", "constraints")
+    _append_list_section("Decisions", "decisions")
+
+    return "\n".join(lines).strip()
 
 
 async def _retry_delay_s(attempt: int, base: float = 0.8, cap: float = 8.0) -> float:
@@ -713,6 +785,45 @@ async def generate_conversation_title(first_message: str) -> str:
                             {
                                 "type": "input_text",
                                 "text": (
+                                    "Return JSON only. Create a concise title for the user's message in five words or less. "
+                                    "No punctuation and no quotation marks."
+                                ),
+                            }
+                        ],
+                    },
+                    {"role": "user", "content": [{"type": "input_text", "text": first_message}]},
+                ],
+                max_output_tokens=30,
+                text_format={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "conversation_title",
+                        "schema": TITLE_JSON_SCHEMA,
+                        "strict": True,
+                    }
+                },
+            )
+        )
+        structured = _parse_response_json_object(response) or {}
+        title = str(structured.get("title") or "").strip().strip('"').strip(".")
+        if title:
+            track_internal_event("openai.structured.title.success", {"model": "gpt-5.4-nano"})
+            return title
+        raise ValueError("Structured title payload missing title")
+    except Exception as structured_exc:
+        logger.warning("Structured title generation failed, falling back to text mode: %s", structured_exc)
+        track_internal_event("openai.structured.title.fallback", {"model": "gpt-5.4-nano"})
+    try:
+        response = await client.responses.create(
+            **_build_responses_create_kwargs(
+                model="gpt-5.4-nano",
+                input_data=[
+                    {
+                        "role": "developer",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": (
                                     "You are an expert at creating short, concise titles. "
                                     "Summarize the user's message in 5 words or less. "
                                     "Do not use quotation marks or punctuation."
@@ -727,10 +838,10 @@ async def generate_conversation_title(first_message: str) -> str:
             )
         )
         logger.info("Generated conversation title")
-        title = (getattr(response, "output_text", None) or "").strip().strip('"').strip(".")
+        title = _response_text(response).strip().strip('"').strip(".")
         return title if title else "New Chat"
     except Exception as e:
-        print(f"Error generating title: {e}")
+        logger.warning("Title generation failed: %s", e)
         return "New Chat"
 
 
@@ -749,6 +860,57 @@ async def summarize_history_chunk(
         "new_messages": history_chunk,
     }
 
+    try:
+        response = await client.responses.create(
+            **_build_responses_create_kwargs(
+                model=model,
+                input_data=[
+                    {
+                        "role": "developer",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    SUMMARY_PROMPT
+                                    + " Return JSON only following the provided schema."
+                                ),
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    "Update the conversation summary using this JSON payload. "
+                                    "Keep important details and remove redundancy.\n\n"
+                                    f"{json.dumps(payload, ensure_ascii=False)}"
+                                ),
+                            }
+                        ],
+                    },
+                ],
+                max_output_tokens=max_output_tokens,
+                text_format={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "history_summary",
+                        "schema": SUMMARY_JSON_SCHEMA,
+                        "strict": True,
+                    }
+                },
+            )
+        )
+        structured = _parse_response_json_object(response) or {}
+        formatted_summary = _format_structured_summary(structured)
+        if formatted_summary:
+            track_internal_event("openai.structured.summary.success", {"model": model})
+            return formatted_summary
+        raise ValueError("Structured summary payload missing summary text")
+    except Exception as structured_exc:
+        logger.warning("Structured summary failed, falling back to text mode: %s", structured_exc)
+        track_internal_event("openai.structured.summary.fallback", {"model": model})
     try:
         response = await client.responses.create(
             **_build_responses_create_kwargs(
@@ -780,17 +942,8 @@ async def summarize_history_chunk(
         logger.warning("Failed to summarize conversation history: %s", exc)
         return (previous_summary or "").strip()
 
-    output_text = (getattr(response, "output_text", None) or "").strip()
+    output_text = _response_text(response)
     if output_text:
         return output_text
 
-    collected: list[str] = []
-    for item in getattr(response, "output", []) or []:
-        if getattr(item, "type", None) != "message":
-            continue
-        for part in getattr(item, "content", []) or []:
-            text = getattr(part, "text", None)
-            if isinstance(text, str) and text.strip():
-                collected.append(text.strip())
-
-    return "\n".join(collected).strip() or (previous_summary or "").strip()
+    return (previous_summary or "").strip()

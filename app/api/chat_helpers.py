@@ -1363,6 +1363,12 @@ async def _track_message_metrics(
     user: AppUser,
     model: str,
 ) -> None:
+    message_tags = {
+        "model": model,
+        "telegram_username": user.telegram_username,
+        "telegram_name": _telegram_display_name(user),
+    }
+
     if not user.has_sent_first_message:
         user.has_sent_first_message = True
         session.add(user)
@@ -1373,15 +1379,27 @@ async def _track_message_metrics(
             track_event,
             "user_activated",
             str(user.id),
-            {"campaign": user.campaign or "organic", "model": model},
+            {
+                "campaign": user.campaign or "organic",
+                "model": model,
+                "telegram_username": user.telegram_username,
+                "telegram_name": _telegram_display_name(user),
+            },
         )
 
     background_tasks.add_task(
         track_event,
         "message_sent",
         str(user.id),
-        {"model": model},
+        message_tags,
     )
+
+
+def _telegram_display_name(user: AppUser) -> str | None:
+    first = (user.telegram_first_name or "").strip()
+    last = (user.telegram_last_name or "").strip()
+    full = f"{first} {last}".strip()
+    return full or None
 
 async def handle_get_conversation(
     *,

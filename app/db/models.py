@@ -20,6 +20,9 @@ class AppUser(SQLModel, table=True):
 
     id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True)
     telegram_id: int = Field(sa_column=Column(BigInteger, unique=True, index=True))
+    telegram_username: Optional[str] = Field(default=None, index=True)
+    telegram_first_name: Optional[str] = Field(default=None)
+    telegram_last_name: Optional[str] = Field(default=None)
     has_sent_first_message: bool = Field(default=False)
     campaign: Optional[str] = Field(default=None, index=True)
 

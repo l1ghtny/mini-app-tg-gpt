@@ -38,7 +38,11 @@ async def login_telegram(data: InitData, session: AsyncSession = Depends(get_ses
         except ValueError as e:
             raise HTTPException(status_code=403, detail=str(e))
 
-    access_token, bonus_granted = await process_login(session, user_id)
+    access_token, bonus_granted = await process_login(
+        session,
+        user_id,
+        telegram_profile=user_data,
+    )
 
     return {
         "access_token": access_token,

@@ -54,6 +54,16 @@ def track_event(key: str, user_id: str, tags: dict = None):
     _send_metric(key, 1.0, final_tags, metric_type="count")
 
 
+def track_internal_event(key: str, tags: dict = None):
+    """
+    Counter wrapper for non-user-scoped/internal events.
+    Usage: track_internal_event("openai.structured.title.success", {"model": "gpt-5.4-nano"})
+    """
+    final_tags = tags or {}
+    final_tags["scope"] = "internal"
+    _send_metric(key, 1.0, final_tags, metric_type="count")
+
+
 def track_value(key: str, value: float, user_id: str, tags: dict = None, unit: str = "none"):
     """
     Distribution wrapper (e.g. for payments amounts or latency).

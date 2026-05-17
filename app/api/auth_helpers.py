@@ -12,14 +12,42 @@ from app.services.subscription_check.entitlements import get_current_subscriptio
 logger = settings.custom_logger
 
 
-async def process_login(session: AsyncSession, telegram_id: int) -> tuple[str, bool]:
+async def process_login(
+    session: AsyncSession,
+    telegram_id: int,
+    *,
+    telegram_profile: dict | None = None,
+) -> tuple[str, bool]:
     result = await session.exec(select(models.AppUser).where(models.AppUser.telegram_id == telegram_id))
     user = result.first()
+    username = telegram_profile.get("username") if telegram_profile else None
+    first_name = telegram_profile.get("first_name") if telegram_profile else None
+    last_name = telegram_profile.get("last_name") if telegram_profile else None
+
     if not user:
-        user = models.AppUser(telegram_id=telegram_id)
+        user = models.AppUser(
+            telegram_id=telegram_id,
+            telegram_username=username,
+            telegram_first_name=first_name,
+            telegram_last_name=last_name,
+        )
         session.add(user)
         await session.commit()
         await session.refresh(user)
+    else:
+        changed = False
+        if username is not None and username != user.telegram_username:
+            user.telegram_username = username
+            changed = True
+        if first_name is not None and first_name != user.telegram_first_name:
+            user.telegram_first_name = first_name
+            changed = True
+        if last_name is not None and last_name != user.telegram_last_name:
+            user.telegram_last_name = last_name
+            changed = True
+        if changed:
+            session.add(user)
+            await session.commit()
 
     active_sub = await get_current_subscription(session, user.id)
     bonus_granted = False
