@@ -1,5 +1,4 @@
 import json
-import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -46,6 +45,12 @@ from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
 from app.services.tasks import generate_and_save_title
 from app.services.openai_service import summarize_history_chunk
+from app.services.openai_chain import (
+    INVALIDATING_CHAIN_REASONS,
+    build_chain_context_fingerprint,
+    invalidate_openai_chain_state,
+    resolve_previous_response_id_for_chain,
+)
 
 _TOOL_TYPE_ALIASES = {
     "web_search_preview": "web_search",
@@ -156,20 +161,23 @@ async def handle_create_message(
     )
     history_for_openai = full_history_for_openai
     fallback_history_for_openai: Optional[list[dict[str, Any]]] = None
-    chain_context_fingerprint = _build_chain_context_fingerprint(
+    chain_context_fingerprint = build_chain_context_fingerprint(
         model=request.model,
         system_prompt=system_prompt,
         ledger_tool_choice=ledger_tool_choice,
         image_model=image_model,
         image_quality=image_quality,
         tools=tools,
+        extract_tool_type=_extract_tool_type,
     )
-    previous_response_id, chain_reason = _resolve_previous_response_id_for_chain(
+    previous_response_id, chain_reason = resolve_previous_response_id_for_chain(
         conversation,
         current_fingerprint=chain_context_fingerprint,
+        chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
+        max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
     )
-    if chain_reason in {"context_fingerprint_mismatch", "no_context_fingerprint", "expired_inactivity_window", "no_chain_timestamp"}:
-        _invalidate_openai_chain_state(conversation)
+    if chain_reason in INVALIDATING_CHAIN_REASONS:
+        invalidate_openai_chain_state(conversation)
         session.add(conversation)
         await session.commit()
     if previous_response_id:
@@ -289,7 +297,7 @@ async def handle_delete_message(
     for message in messages[target_index:]:
         await session.delete(message)
 
-    _invalidate_openai_chain_state(conversation)
+    invalidate_openai_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -339,7 +347,7 @@ async def handle_edit_message(
     for message in messages_to_delete:
         await session.delete(message)
 
-    _invalidate_openai_chain_state(conversation)
+    invalidate_openai_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -1349,64 +1357,6 @@ def _queue_generation(
         image_entitlement_tier_id=image_entitlement_tier_id,
         image_entitlement_pack_id=image_entitlement_pack_id,
     )
-
-
-def _resolve_previous_response_id_for_chain(
-    conversation: Conversation,
-    *,
-    current_fingerprint: str,
-) -> tuple[str | None, str | None]:
-    if not app_settings.OPENAI_CHAINING_ENABLED:
-        return None, "disabled"
-
-    response_id = (conversation.last_openai_response_id or "").strip()
-    if not response_id:
-        return None, "no_response_id"
-
-    updated_at = conversation.openai_chain_updated_at
-    if updated_at is None:
-        return None, "no_chain_timestamp"
-
-    stored_fingerprint = (conversation.openai_chain_context_fingerprint or "").strip()
-    if not stored_fingerprint:
-        return None, "no_context_fingerprint"
-    if stored_fingerprint != current_fingerprint:
-        return None, "context_fingerprint_mismatch"
-
-    max_age = timedelta(days=max(1, app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS))
-    age = datetime.now(timezone.utc).replace(tzinfo=None) - updated_at
-    if age > max_age:
-        return None, "expired_inactivity_window"
-
-    return response_id, "eligible"
-
-
-def _invalidate_openai_chain_state(conversation: Conversation) -> None:
-    conversation.last_openai_response_id = None
-    conversation.openai_chain_updated_at = None
-    conversation.openai_chain_context_fingerprint = None
-
-
-def _build_chain_context_fingerprint(
-    *,
-    model: str,
-    system_prompt: str,
-    ledger_tool_choice: str,
-    image_model: str,
-    image_quality: str,
-    tools: list,
-) -> str:
-    tool_types = sorted({str(_extract_tool_type(tool) or "") for tool in tools if _extract_tool_type(tool)})
-    payload = {
-        "model": model,
-        "system_prompt": system_prompt or "",
-        "ledger_tool_choice": ledger_tool_choice or "auto",
-        "image_model": image_model or "",
-        "image_quality": image_quality or "",
-        "tool_types": tool_types,
-    }
-    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 async def _track_message_metrics(
