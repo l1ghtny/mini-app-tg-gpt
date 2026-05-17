@@ -41,6 +41,7 @@ async def generate_and_publish(
         tool_choice: Optional[str | dict[str, Any]] = "auto",
         request_id: Optional[str] = None,
         previous_response_id: Optional[str] = None,
+        chain_context_fingerprint: Optional[str] = None,
         image_entitlement_tier_id: Optional[uuid.UUID] = None,
         image_entitlement_pack_id: Optional[uuid.UUID] = None,
         fallback_history_for_openai: Optional[list] = None,
@@ -91,6 +92,7 @@ async def generate_and_publish(
                     content_cache=content_cache,
                     partial_image_keys=partial_image_keys,
                     lifecycle=lifecycle,
+                    chain_context_fingerprint=chain_context_fingerprint,
                 )
 
         except Exception as e:
@@ -140,6 +142,7 @@ async def _handle_stream_event(
         content_cache: dict[int, MessageContent],
         partial_image_keys: dict[int, list[str]],
         lifecycle: dict[str, Any],
+        chain_context_fingerprint: Optional[str],
 ) -> None:
     event_type = ev.get("type")
 
@@ -232,6 +235,7 @@ async def _handle_stream_event(
             if conversation:
                 conversation.last_openai_response_id = str(response_id)
                 conversation.openai_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                conversation.openai_chain_context_fingerprint = chain_context_fingerprint
                 session.add(conversation)
                 await session.commit()
         return

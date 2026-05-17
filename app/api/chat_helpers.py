@@ -1,4 +1,5 @@
 import json
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -155,7 +156,22 @@ async def handle_create_message(
     )
     history_for_openai = full_history_for_openai
     fallback_history_for_openai: Optional[list[dict[str, Any]]] = None
-    previous_response_id, chain_reason = _resolve_previous_response_id_for_chain(conversation)
+    chain_context_fingerprint = _build_chain_context_fingerprint(
+        model=request.model,
+        system_prompt=system_prompt,
+        ledger_tool_choice=ledger_tool_choice,
+        image_model=image_model,
+        image_quality=image_quality,
+        tools=tools,
+    )
+    previous_response_id, chain_reason = _resolve_previous_response_id_for_chain(
+        conversation,
+        current_fingerprint=chain_context_fingerprint,
+    )
+    if chain_reason in {"context_fingerprint_mismatch", "no_context_fingerprint", "expired_inactivity_window", "no_chain_timestamp"}:
+        _invalidate_openai_chain_state(conversation)
+        session.add(conversation)
+        await session.commit()
     if previous_response_id:
         current_turn_history = await _build_history_for_message(
             session,
@@ -202,6 +218,7 @@ async def handle_create_message(
         tools=tools,
         request_id=idempotency_key,
         previous_response_id=previous_response_id,
+        chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
     )
@@ -1310,6 +1327,7 @@ def _queue_generation(
     tools: list,
     request_id: str,
     previous_response_id: Optional[str],
+    chain_context_fingerprint: Optional[str],
     image_entitlement_tier_id: Optional[uuid.UUID],
     image_entitlement_pack_id: Optional[uuid.UUID],
 ) -> None:
@@ -1327,12 +1345,17 @@ def _queue_generation(
         tools=tools,
         request_id=request_id,
         previous_response_id=previous_response_id,
+        chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement_tier_id,
         image_entitlement_pack_id=image_entitlement_pack_id,
     )
 
 
-def _resolve_previous_response_id_for_chain(conversation: Conversation) -> tuple[str | None, str | None]:
+def _resolve_previous_response_id_for_chain(
+    conversation: Conversation,
+    *,
+    current_fingerprint: str,
+) -> tuple[str | None, str | None]:
     if not app_settings.OPENAI_CHAINING_ENABLED:
         return None, "disabled"
 
@@ -1343,6 +1366,12 @@ def _resolve_previous_response_id_for_chain(conversation: Conversation) -> tuple
     updated_at = conversation.openai_chain_updated_at
     if updated_at is None:
         return None, "no_chain_timestamp"
+
+    stored_fingerprint = (conversation.openai_chain_context_fingerprint or "").strip()
+    if not stored_fingerprint:
+        return None, "no_context_fingerprint"
+    if stored_fingerprint != current_fingerprint:
+        return None, "context_fingerprint_mismatch"
 
     max_age = timedelta(days=max(1, app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS))
     age = datetime.now(timezone.utc).replace(tzinfo=None) - updated_at
@@ -1355,6 +1384,29 @@ def _resolve_previous_response_id_for_chain(conversation: Conversation) -> tuple
 def _invalidate_openai_chain_state(conversation: Conversation) -> None:
     conversation.last_openai_response_id = None
     conversation.openai_chain_updated_at = None
+    conversation.openai_chain_context_fingerprint = None
+
+
+def _build_chain_context_fingerprint(
+    *,
+    model: str,
+    system_prompt: str,
+    ledger_tool_choice: str,
+    image_model: str,
+    image_quality: str,
+    tools: list,
+) -> str:
+    tool_types = sorted({str(_extract_tool_type(tool) or "") for tool in tools if _extract_tool_type(tool)})
+    payload = {
+        "model": model,
+        "system_prompt": system_prompt or "",
+        "ledger_tool_choice": ledger_tool_choice or "auto",
+        "image_model": image_model or "",
+        "image_quality": image_quality or "",
+        "tool_types": tool_types,
+    }
+    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 async def _track_message_metrics(

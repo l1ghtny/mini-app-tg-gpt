@@ -123,6 +123,7 @@ class Conversation(SQLModel, table=True):
     history_summary_updated_at: Optional[datetime] = Field(default=None, nullable=True)
     last_openai_response_id: Optional[str] = Field(default=None, nullable=True, index=True)
     openai_chain_updated_at: Optional[datetime] = Field(default=None, nullable=True)
+    openai_chain_context_fingerprint: Optional[str] = Field(default=None, nullable=True)
 
     updated_at: datetime = Field(
         default_factory=utcnow_naive,
