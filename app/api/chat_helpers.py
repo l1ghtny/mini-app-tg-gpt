@@ -148,18 +148,38 @@ async def handle_create_message(
         usage_pack_id=text_entitlement.usage_pack_id,
     )
 
-    history_for_openai = await _build_history_for_openai(
+    full_history_for_openai = await _build_history_for_openai(
         session,
         conversation_id,
         model_name=request.model,
     )
-    previous_response_id = _resolve_previous_response_id_for_chain(conversation)
+    history_for_openai = full_history_for_openai
+    fallback_history_for_openai: Optional[list[dict[str, Any]]] = None
+    previous_response_id, chain_reason = _resolve_previous_response_id_for_chain(conversation)
+    if previous_response_id:
+        current_turn_history = await _build_history_for_message(
+            session,
+            message_id=user_msg.id,
+        )
+        if current_turn_history:
+            history_for_openai = current_turn_history
+            fallback_history_for_openai = full_history_for_openai
+        else:
+            previous_response_id = None
+            chain_reason = "missing_current_turn_payload"
     if previous_response_id:
         background_tasks.add_task(
             track_event,
             "openai.chain.attempted",
             str(current_user.id),
             {"model": request.model},
+        )
+    elif app_settings.OPENAI_CHAINING_ENABLED:
+        background_tasks.add_task(
+            track_event,
+            "openai.chain.not_used",
+            str(current_user.id),
+            {"model": request.model, "reason": chain_reason or "unknown"},
         )
     await bus.set(
         _conversation_current_stream_key(conversation_id),
@@ -174,6 +194,7 @@ async def handle_create_message(
         assistant_message_id=assistant_msg.id,
         user_id=current_user.id,
         history_for_openai=history_for_openai,
+        fallback_history_for_openai=fallback_history_for_openai,
         bus=redis_bus,
         instructions=system_prompt,
         model=request.model,
@@ -251,6 +272,7 @@ async def handle_delete_message(
     for message in messages[target_index:]:
         await session.delete(message)
 
+    _invalidate_openai_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -300,6 +322,7 @@ async def handle_edit_message(
     for message in messages_to_delete:
         await session.delete(message)
 
+    _invalidate_openai_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -1088,6 +1111,29 @@ async def _build_history_for_openai(
     return history
 
 
+async def _build_history_for_message(
+    session: AsyncSession,
+    *,
+    message_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    message = (
+        await session.exec(
+            select(Message)
+            .where(Message.id == message_id)
+            .options(selectinload(Message.content))
+        )
+    ).first()
+    if not message:
+        return []
+
+    candidate = _build_history_candidate(message)
+    if candidate is None:
+        return []
+
+    payload = await _finalize_history_payload(session, candidate)
+    return [payload] if payload else []
+
+
 def _estimate_tokens_from_text(value: str) -> int:
     return max(1, (len(value) + 3) // 4)
 
@@ -1256,6 +1302,7 @@ def _queue_generation(
     assistant_message_id: uuid.UUID,
     user_id: uuid.UUID,
     history_for_openai: list[dict],
+    fallback_history_for_openai: Optional[list[dict[str, Any]]],
     bus: RedisEventBus,
     instructions: str | None,
     model: str,
@@ -1272,6 +1319,7 @@ def _queue_generation(
         assistant_message_id=assistant_message_id,
         user_id=user_id,
         history_for_openai=history_for_openai,
+        fallback_history_for_openai=fallback_history_for_openai,
         bus=bus,
         instructions=instructions,
         model=model,
@@ -1284,24 +1332,29 @@ def _queue_generation(
     )
 
 
-def _resolve_previous_response_id_for_chain(conversation: Conversation) -> str | None:
+def _resolve_previous_response_id_for_chain(conversation: Conversation) -> tuple[str | None, str | None]:
     if not app_settings.OPENAI_CHAINING_ENABLED:
-        return None
+        return None, "disabled"
 
     response_id = (conversation.last_openai_response_id or "").strip()
     if not response_id:
-        return None
+        return None, "no_response_id"
 
     updated_at = conversation.openai_chain_updated_at
     if updated_at is None:
-        return None
+        return None, "no_chain_timestamp"
 
     max_age = timedelta(days=max(1, app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS))
     age = datetime.now(timezone.utc).replace(tzinfo=None) - updated_at
     if age > max_age:
-        return None
+        return None, "expired_inactivity_window"
 
-    return response_id
+    return response_id, "eligible"
+
+
+def _invalidate_openai_chain_state(conversation: Conversation) -> None:
+    conversation.last_openai_response_id = None
+    conversation.openai_chain_updated_at = None
 
 
 async def _track_message_metrics(

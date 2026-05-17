@@ -43,6 +43,7 @@ async def generate_and_publish(
         previous_response_id: Optional[str] = None,
         image_entitlement_tier_id: Optional[uuid.UUID] = None,
         image_entitlement_pack_id: Optional[uuid.UUID] = None,
+        fallback_history_for_openai: Optional[list] = None,
 ):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         buffers: dict[int, str] = {}
@@ -69,6 +70,7 @@ async def generate_and_publish(
                     conversation_id=conversation_id,
                     request_id=request_id,
                     previous_response_id=previous_response_id,
+                    fallback_messages=fallback_history_for_openai,
             ):
                 if ev.get("type") not in {"image.partial", "image.ready", "response.meta"}:
                     await bus.publish(assistant_message_id_str, ev)

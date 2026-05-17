@@ -477,6 +477,7 @@ async def stream_normalized_openai_response(
     request_id: Optional[str] = None,
     reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "concise",
     previous_response_id: Optional[str] = None,
+    fallback_messages: Optional[List["Message"]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     if tools is None:
         tools = default_tools
@@ -490,8 +491,10 @@ async def stream_normalized_openai_response(
     usage = UsageTracker()
     state = StreamState()
     active_previous_response_id = previous_response_id
+    active_messages = messages
     chain_attempted = bool(previous_response_id)
     chain_succeeded = False
+    chain_fallback_reason: str | None = None
 
     try:
         response = None
@@ -502,7 +505,7 @@ async def stream_normalized_openai_response(
             try:
                 create_kwargs = _build_responses_create_kwargs(
                     model=model,
-                    input_data=messages,
+                    input_data=active_messages,
                     tools=tools,
                     tool_choice=tool_choice,
                     instructions=(instructions or "") + STYLE_GUIDE,
@@ -526,6 +529,9 @@ async def stream_normalized_openai_response(
                         exc,
                     )
                     active_previous_response_id = None
+                    if fallback_messages:
+                        active_messages = fallback_messages
+                    chain_fallback_reason = "create_rejected_previous_response_id"
                     continue
                 retryable = _is_retryable_openai_exception(exc)
                 upstream_request_id = _extract_openai_request_id(exc)
@@ -583,7 +589,7 @@ async def stream_normalized_openai_response(
 
                     create_kwargs = _build_responses_create_kwargs(
                         model=model,
-                        input_data=messages,
+                        input_data=active_messages,
                         tools=tools,
                         tool_choice=tool_choice,
                         instructions=(instructions or "") + STYLE_GUIDE,
@@ -627,7 +633,11 @@ async def stream_normalized_openai_response(
             if chain_succeeded:
                 track_event("openai.chain.succeeded", str(user_id), {"model": model})
             else:
-                track_event("openai.chain.fallback", str(user_id), {"model": model, "reason": "create_rejected"})
+                track_event(
+                    "openai.chain.fallback",
+                    str(user_id),
+                    {"model": model, "reason": chain_fallback_reason or "create_rejected_previous_response_id"},
+                )
 
     except AuthenticationError:
         yield {"type": "error", "data": "OpenAI authentication failed. Check API key."}
@@ -667,7 +677,11 @@ async def stream_normalized_openai_response(
             )
     except Exception as exc:
         if chain_attempted and user_id:
-            track_event("openai.chain.fallback", str(user_id), {"model": model, "reason": "exception"})
+            track_event(
+                "openai.chain.fallback",
+                str(user_id),
+                {"model": model, "reason": "exception_retry_exhausted"},
+            )
         async with AsyncSession(engine, expire_on_commit=False) as session:
             await log_usage(
                 session,
