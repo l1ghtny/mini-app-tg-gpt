@@ -252,6 +252,22 @@ async def replace_conversation_documents(
     )
 
 
+@router.get(
+    "/conversations/{conversation_id}/documents",
+    response_model=ConversationDocumentsUpdateResponse,
+)
+async def get_conversation_documents(
+    conversation_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await document_helpers.list_conversation_document_ids(
+        session=session,
+        user=current_user,
+        conversation_id=conversation_id,
+    )
+
+
 @router.get("/conversations/{conversation_id}", response_model=ConversationInfo)
 async def get_conversation(conversation_id: uuid.UUID, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
     return await chat_helpers.handle_get_conversation(

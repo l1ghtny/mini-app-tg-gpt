@@ -16,7 +16,6 @@ from starlette.responses import JSONResponse
 from app.api.dependencies import get_available_models
 from app.api.document_helpers import (
     list_conversation_ready_vector_store_ids,
-    touch_conversation_documents_last_used_in_search,
 )
 from app.api.helpers import generate_and_publish, load_conversation
 from app.core.config import settings as app_settings
@@ -234,9 +233,6 @@ async def handle_create_message(
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
     )
-    if _tools_include_file_search(tools):
-        await touch_conversation_documents_last_used_in_search(session, conversation_id)
-
     await _track_message_metrics(session, background_tasks, current_user, request.model)
 
     return MessageCreated(
@@ -618,10 +614,6 @@ def _extract_tool_type(tool: Any) -> str | None:
     else:
         tool_type = getattr(tool, "type", None)
     return tool_type if isinstance(tool_type, str) and tool_type else None
-
-
-def _tools_include_file_search(tools: Sequence[Any]) -> bool:
-    return any(_normalize_tool_name(_extract_tool_type(tool)) == "file_search" for tool in tools)
 
 
 def _serialize_tool_choice_for_ledger(tool_choice: Any) -> str:

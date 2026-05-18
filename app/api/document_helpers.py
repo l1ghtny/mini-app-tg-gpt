@@ -515,12 +515,42 @@ async def replace_conversation_documents(
         caps = await get_document_capabilities(session, user)
         docs = (await session.exec(select(UserDocument).where(UserDocument.id.in_(normalized_ids)))).all()
         for doc in docs:
-            doc.last_used_in_search = now
             _refresh_expiration(doc, caps.doc_retention_hours)
             session.add(doc)
 
     await session.commit()
     return ConversationDocumentsUpdateResponse(conversation_id=conversation_id, document_ids=normalized_ids)
+
+
+async def list_conversation_document_ids(
+    *,
+    session: AsyncSession,
+    user: AppUser,
+    conversation_id: uuid.UUID,
+) -> ConversationDocumentsUpdateResponse:
+    conversation = await session.get(Conversation, conversation_id)
+    if not conversation or conversation.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    links = (await session.exec(
+        select(ConversationDocument.document_id)
+        .join(UserDocument, UserDocument.id == ConversationDocument.document_id)
+        .where(
+            ConversationDocument.conversation_id == conversation_id,
+            UserDocument.deleted_at.is_(None),
+            UserDocument.status == DOCUMENT_STATUS_READY,
+        )
+    )).all()
+
+    unique_ids: list[uuid.UUID] = []
+    for doc_id in links:
+        if doc_id and doc_id not in unique_ids:
+            unique_ids.append(doc_id)
+
+    return ConversationDocumentsUpdateResponse(
+        conversation_id=conversation_id,
+        document_ids=unique_ids,
+    )
 
 
 async def list_conversation_ready_vector_store_ids(

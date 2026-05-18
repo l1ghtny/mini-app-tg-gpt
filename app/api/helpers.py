@@ -11,6 +11,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import Conversation, MessageContent
+from app.api.document_helpers import touch_conversation_documents_last_used_in_search
 from app.r2.methods import delete_object, put_bytes
 from app.r2.settings import Settings
 from app.redis.event_bus import RedisEventBus
@@ -242,6 +243,12 @@ async def _handle_stream_event(
 
     if event_type in {"reasoning.summary.delta", "reasoning.summary.done"}:
         # UI-only events for frontend stream
+        return
+
+    if event_type == "file_search.used":
+        if not lifecycle.get("file_search_touched"):
+            await touch_conversation_documents_last_used_in_search(session, conversation_id)
+            lifecycle["file_search_touched"] = True
         return
 
     if event_type == "done":
