@@ -31,6 +31,11 @@ DOCUMENT_STATUS_READY = "ready"
 DOCUMENT_STATUS_FAILED = "failed"
 DOCUMENT_STATUS_DELETE_QUEUED = "delete_queued"
 DOCUMENT_STATUS_DELETED = "deleted"
+_ATTACHABLE_STATUSES = {
+    DOCUMENT_STATUS_UPLOADING,
+    DOCUMENT_STATUS_PROCESSING,
+    DOCUMENT_STATUS_READY,
+}
 
 _OPENAI_FILE_LIMIT_BYTES = 512 * 1024 * 1024
 _DEFAULT_EXTENSION_ALLOWLIST = {
@@ -490,7 +495,7 @@ async def replace_conversation_documents(
                 UserDocument.id.in_(normalized_ids),
                 UserDocument.user_id == user.id,
                 UserDocument.deleted_at.is_(None),
-                UserDocument.status == DOCUMENT_STATUS_READY,
+                UserDocument.status.in_(tuple(_ATTACHABLE_STATUSES)),
             )
         )).all()
         found_ids = {doc.id for doc in docs}
@@ -538,7 +543,6 @@ async def list_conversation_document_ids(
         .where(
             ConversationDocument.conversation_id == conversation_id,
             UserDocument.deleted_at.is_(None),
-            UserDocument.status == DOCUMENT_STATUS_READY,
         )
     )).all()
 
