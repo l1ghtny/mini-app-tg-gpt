@@ -9,6 +9,7 @@ from app.api.access_codes import access_codes
 from app.api.admin_broadcast import admin_broadcast
 from app.api.auth import auth
 from app.api.chat_folders import router as chat_folders_router
+from app.api.documents import documents
 from app.api.images import images
 from app.api.metrics import metrics
 from app.api.models_catalog import models_catalog
@@ -96,6 +97,7 @@ app.include_router(chat_router, prefix="/api/v1", tags=['conversations'])
 app.include_router(chat_folders_router, prefix="/api/v1", tags=['chat-folders'])
 app.include_router(auth, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
+app.include_router(documents, prefix="/api/v1")
 app.include_router(user_usage, prefix="/api/v1")
 app.include_router(user_subscription, prefix="/api/v1")
 app.include_router(access_codes, prefix="/api/v1")

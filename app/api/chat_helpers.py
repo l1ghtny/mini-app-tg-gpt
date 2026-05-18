@@ -14,6 +14,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.responses import JSONResponse
 
 from app.api.dependencies import get_available_models
+from app.api.document_helpers import (
+    list_conversation_ready_vector_store_ids,
+    touch_conversation_documents_last_used_in_search,
+)
 from app.api.helpers import generate_and_publish, load_conversation
 from app.core.config import settings as app_settings
 from app.core.metrics import track_event
@@ -230,6 +234,8 @@ async def handle_create_message(
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
     )
+    if _tools_include_file_search(tools):
+        await touch_conversation_documents_last_used_in_search(session, conversation_id)
 
     await _track_message_metrics(session, background_tasks, current_user, request.model)
 
@@ -575,14 +581,24 @@ async def _check_entitlements(
         image_model,
         image_quality,
     )
+    vector_store_ids = await list_conversation_ready_vector_store_ids(session, conversation.id)
     tools = await _build_tools(
         image_entitlement.allowed,
         image_model,
         image_quality,
+        vector_store_ids=vector_store_ids,
     )
 
     if _is_image_generation_requested(request.tool_choice) and not image_entitlement.allowed:
         _raise_image_entitlement_error(image_entitlement, image_model, image_quality)
+    if _is_file_search_requested(request.tool_choice) and not vector_store_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "file_search_requires_documents",
+                "message": "Attach at least one ready document to use file search.",
+            },
+        )
 
     return text_entitlement, image_entitlement, tools, image_model, image_quality
 
@@ -602,6 +618,10 @@ def _extract_tool_type(tool: Any) -> str | None:
     else:
         tool_type = getattr(tool, "type", None)
     return tool_type if isinstance(tool_type, str) and tool_type else None
+
+
+def _tools_include_file_search(tools: Sequence[Any]) -> bool:
+    return any(_normalize_tool_name(_extract_tool_type(tool)) == "file_search" for tool in tools)
 
 
 def _serialize_tool_choice_for_ledger(tool_choice: Any) -> str:
@@ -624,6 +644,12 @@ def _is_image_generation_requested(tool_choice: Any) -> bool:
     if isinstance(tool_choice, list):
         return any(_normalize_tool_name(item) == "image_generation" for item in tool_choice)
     return _normalize_tool_name(tool_choice) == "image_generation"
+
+
+def _is_file_search_requested(tool_choice: Any) -> bool:
+    if isinstance(tool_choice, list):
+        return any(_normalize_tool_name(item) == "file_search" for item in tool_choice)
+    return _normalize_tool_name(tool_choice) == "file_search"
 
 
 def _resolve_openai_tooling(
@@ -942,11 +968,13 @@ async def _build_tools(
     image_allowed: bool,
     image_model: str,
     image_quality: str,
+    vector_store_ids: list[str] | None = None,
 ):
     return await create_tools_list(
         image_allowed,
         image_model=image_model,
         image_quality=image_quality,
+        vector_store_ids=vector_store_ids,
     )
 
 

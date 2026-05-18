@@ -55,6 +55,12 @@ class SubscriptionTierResponse(BaseModel):
     description_ru: str
     price_cents: int
     monthly_images: int
+    monthly_docs: int = 0
+    max_active_docs: int = 0
+    max_storage_bytes: int = 0
+    max_file_size_bytes: int = 0
+    max_pinned_docs: int = 0
+    doc_retention_hours: int = 24
     tier_model_limits: List[TierMonthlyLimits]
     tier_image_model_limits: List[TierImageModelLimits] = []
     image_quality_pricing: List[ImageQualityPricingResponse] = []

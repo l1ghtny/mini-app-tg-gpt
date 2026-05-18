@@ -32,6 +32,7 @@ class AppUser(SQLModel, table=True):
     folders: List["ChatFolder"] = Relationship(back_populates="user")
     requests: List["RequestLedger"] = Relationship(back_populates="user")
     payments: List["Payment"] = Relationship(back_populates="user")
+    documents: List["UserDocument"] = Relationship(back_populates="user")
 
 
 class WhatsNewItem(SQLModel, table=True):
@@ -136,6 +137,10 @@ class Conversation(SQLModel, table=True):
     messages: List["Message"] = Relationship(
         back_populates="conversation",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+    attached_documents: List["ConversationDocument"] = Relationship(
+        back_populates="conversation",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
 
 
@@ -374,6 +379,55 @@ class RequestLedger(SQLModel, table=True):
             "feature IN ('text','image','doc','deepsearch','web_search')",
             name="ck_request_feature",
         ),
+    )
+
+
+class UserDocument(SQLModel, table=True):
+    __tablename__ = "user_document"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    filename: str
+    mime_type: Optional[str] = Field(default=None)
+    size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))
+    usage_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))
+    sha256: Optional[str] = Field(default=None, index=True)
+
+    status: str = Field(default="uploading", index=True)
+    is_pinned: bool = Field(default=False, index=True)
+    last_used_in_search: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+
+    openai_file_id: Optional[str] = Field(default=None, index=True)
+    openai_vector_store_id: Optional[str] = Field(default=None, index=True)
+
+    error_code: Optional[str] = Field(default=None)
+    error_message: Optional[str] = Field(default=None)
+
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+    deleted_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+
+    user: AppUser = Relationship(back_populates="documents")
+    conversations: List["ConversationDocument"] = Relationship(
+        back_populates="document",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
+
+class ConversationDocument(SQLModel, table=True):
+    __tablename__ = "conversation_document"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    conversation_id: uuid.UUID = Field(foreign_key="conversation.id", index=True)
+    document_id: uuid.UUID = Field(foreign_key="user_document.id", index=True)
+    attached_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+
+    conversation: Conversation = Relationship(back_populates="attached_documents")
+    document: UserDocument = Relationship(back_populates="conversations")
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "document_id", name="uq_conversation_document"),
     )
 
 
