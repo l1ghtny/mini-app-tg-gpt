@@ -35,5 +35,7 @@ class Settings:
     WEBAPP_URL: str = os.getenv("WEBAPP_URL")
     BOT_TOKEN_TEST_BOT: str = os.getenv("BOT_TOKEN_TEST_BOT")
     BROADCAST_ADMIN_TOKEN: str = os.getenv("BROADCAST_ADMIN_TOKEN", "")
+    OPENAI_CHAINING_ENABLED: bool = os.getenv("OPENAI_CHAINING_ENABLED", "False").lower() in ("true", "1")
+    OPENAI_CHAIN_MAX_INACTIVITY_DAYS: int = int(os.getenv("OPENAI_CHAIN_MAX_INACTIVITY_DAYS", "14"))
 
 settings = Settings()

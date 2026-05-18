@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 
 from app.api.dependencies import get_available_models
 from app.api.helpers import generate_and_publish, load_conversation
+from app.core.config import settings as app_settings
 from app.core.metrics import track_event
 from app.db import models
 from app.db.models import AppUser, Conversation, Message, RequestLedger, ChatFolder, TextModelCatalog
@@ -44,6 +45,12 @@ from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
 from app.services.tasks import generate_and_save_title
 from app.services.openai_service import summarize_history_chunk
+from app.services.openai_chain import (
+    INVALIDATING_CHAIN_REASONS,
+    build_chain_context_fingerprint,
+    invalidate_openai_chain_state,
+    resolve_previous_response_id_for_chain,
+)
 
 _TOOL_TYPE_ALIASES = {
     "web_search_preview": "web_search",
@@ -147,11 +154,57 @@ async def handle_create_message(
         usage_pack_id=text_entitlement.usage_pack_id,
     )
 
-    history_for_openai = await _build_history_for_openai(
+    full_history_for_openai = await _build_history_for_openai(
         session,
         conversation_id,
         model_name=request.model,
     )
+    history_for_openai = full_history_for_openai
+    fallback_history_for_openai: Optional[list[dict[str, Any]]] = None
+    chain_context_fingerprint = build_chain_context_fingerprint(
+        model=request.model,
+        system_prompt=system_prompt,
+        ledger_tool_choice=ledger_tool_choice,
+        image_model=image_model,
+        image_quality=image_quality,
+        tools=tools,
+        extract_tool_type=_extract_tool_type,
+    )
+    previous_response_id, chain_reason = resolve_previous_response_id_for_chain(
+        conversation,
+        current_fingerprint=chain_context_fingerprint,
+        chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
+        max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
+    )
+    if chain_reason in INVALIDATING_CHAIN_REASONS:
+        invalidate_openai_chain_state(conversation)
+        session.add(conversation)
+        await session.commit()
+    if previous_response_id:
+        current_turn_history = await _build_history_for_message(
+            session,
+            message_id=user_msg.id,
+        )
+        if current_turn_history:
+            history_for_openai = current_turn_history
+            fallback_history_for_openai = full_history_for_openai
+        else:
+            previous_response_id = None
+            chain_reason = "missing_current_turn_payload"
+    if previous_response_id:
+        background_tasks.add_task(
+            track_event,
+            "openai.chain.attempted",
+            str(current_user.id),
+            {"model": request.model},
+        )
+    elif app_settings.OPENAI_CHAINING_ENABLED:
+        background_tasks.add_task(
+            track_event,
+            "openai.chain.not_used",
+            str(current_user.id),
+            {"model": request.model, "reason": chain_reason or "unknown"},
+        )
     await bus.set(
         _conversation_current_stream_key(conversation_id),
         str(assistant_msg.id),
@@ -165,12 +218,15 @@ async def handle_create_message(
         assistant_message_id=assistant_msg.id,
         user_id=current_user.id,
         history_for_openai=history_for_openai,
+        fallback_history_for_openai=fallback_history_for_openai,
         bus=redis_bus,
         instructions=system_prompt,
         model=request.model,
         tool_choice=request_tool_choice,
         tools=tools,
         request_id=idempotency_key,
+        previous_response_id=previous_response_id,
+        chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
     )
@@ -241,6 +297,7 @@ async def handle_delete_message(
     for message in messages[target_index:]:
         await session.delete(message)
 
+    invalidate_openai_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -290,6 +347,7 @@ async def handle_edit_message(
     for message in messages_to_delete:
         await session.delete(message)
 
+    invalidate_openai_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -1078,6 +1136,29 @@ async def _build_history_for_openai(
     return history
 
 
+async def _build_history_for_message(
+    session: AsyncSession,
+    *,
+    message_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    message = (
+        await session.exec(
+            select(Message)
+            .where(Message.id == message_id)
+            .options(selectinload(Message.content))
+        )
+    ).first()
+    if not message:
+        return []
+
+    candidate = _build_history_candidate(message)
+    if candidate is None:
+        return []
+
+    payload = await _finalize_history_payload(session, candidate)
+    return [payload] if payload else []
+
+
 def _estimate_tokens_from_text(value: str) -> int:
     return max(1, (len(value) + 3) // 4)
 
@@ -1246,12 +1327,15 @@ def _queue_generation(
     assistant_message_id: uuid.UUID,
     user_id: uuid.UUID,
     history_for_openai: list[dict],
+    fallback_history_for_openai: Optional[list[dict[str, Any]]],
     bus: RedisEventBus,
     instructions: str | None,
     model: str,
     tool_choice: str | dict[str, Any] | None,
     tools: list,
     request_id: str,
+    previous_response_id: Optional[str],
+    chain_context_fingerprint: Optional[str],
     image_entitlement_tier_id: Optional[uuid.UUID],
     image_entitlement_pack_id: Optional[uuid.UUID],
 ) -> None:
@@ -1261,12 +1345,15 @@ def _queue_generation(
         assistant_message_id=assistant_message_id,
         user_id=user_id,
         history_for_openai=history_for_openai,
+        fallback_history_for_openai=fallback_history_for_openai,
         bus=bus,
         instructions=instructions,
         model=model,
         tool_choice=tool_choice,
         tools=tools,
         request_id=request_id,
+        previous_response_id=previous_response_id,
+        chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement_tier_id,
         image_entitlement_pack_id=image_entitlement_pack_id,
     )
@@ -1278,6 +1365,12 @@ async def _track_message_metrics(
     user: AppUser,
     model: str,
 ) -> None:
+    message_tags = {
+        "model": model,
+        "telegram_username": user.telegram_username,
+        "telegram_name": _telegram_display_name(user),
+    }
+
     if not user.has_sent_first_message:
         user.has_sent_first_message = True
         session.add(user)
@@ -1288,15 +1381,27 @@ async def _track_message_metrics(
             track_event,
             "user_activated",
             str(user.id),
-            {"campaign": user.campaign or "organic", "model": model},
+            {
+                "campaign": user.campaign or "organic",
+                "model": model,
+                "telegram_username": user.telegram_username,
+                "telegram_name": _telegram_display_name(user),
+            },
         )
 
     background_tasks.add_task(
         track_event,
         "message_sent",
         str(user.id),
-        {"model": model},
+        message_tags,
     )
+
+
+def _telegram_display_name(user: AppUser) -> str | None:
+    first = (user.telegram_first_name or "").strip()
+    last = (user.telegram_last_name or "").strip()
+    full = f"{first} {last}".strip()
+    return full or None
 
 async def handle_get_conversation(
     *,

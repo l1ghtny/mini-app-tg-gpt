@@ -1,6 +1,7 @@
 ﻿import base64
 import hashlib
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional, Iterable
 
 from fastapi import HTTPException
@@ -39,8 +40,11 @@ async def generate_and_publish(
         model: Optional[str] = "gpt-5.4-nano",
         tool_choice: Optional[str | dict[str, Any]] = "auto",
         request_id: Optional[str] = None,
+        previous_response_id: Optional[str] = None,
+        chain_context_fingerprint: Optional[str] = None,
         image_entitlement_tier_id: Optional[uuid.UUID] = None,
         image_entitlement_pack_id: Optional[uuid.UUID] = None,
+        fallback_history_for_openai: Optional[list] = None,
 ):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         buffers: dict[int, str] = {}
@@ -66,8 +70,10 @@ async def generate_and_publish(
                     user_id=user_id,
                     conversation_id=conversation_id,
                     request_id=request_id,
+                    previous_response_id=previous_response_id,
+                    fallback_messages=fallback_history_for_openai,
             ):
-                if ev.get("type") not in {"image.partial", "image.ready"}:
+                if ev.get("type") not in {"image.partial", "image.ready", "response.meta"}:
                     await bus.publish(assistant_message_id_str, ev)
 
                 await _handle_stream_event(
@@ -86,6 +92,7 @@ async def generate_and_publish(
                     content_cache=content_cache,
                     partial_image_keys=partial_image_keys,
                     lifecycle=lifecycle,
+                    chain_context_fingerprint=chain_context_fingerprint,
                 )
 
         except Exception as e:
@@ -135,6 +142,7 @@ async def _handle_stream_event(
         content_cache: dict[int, MessageContent],
         partial_image_keys: dict[int, list[str]],
         lifecycle: dict[str, Any],
+        chain_context_fingerprint: Optional[str],
 ) -> None:
     event_type = ev.get("type")
 
@@ -218,6 +226,18 @@ async def _handle_stream_event(
 
     if event_type == "status":
         # not saving to DB
+        return
+
+    if event_type == "response.meta":
+        response_id = ev.get("response_id")
+        if response_id:
+            conversation = await session.get(Conversation, conversation_id)
+            if conversation:
+                conversation.last_openai_response_id = str(response_id)
+                conversation.openai_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                conversation.openai_chain_context_fingerprint = chain_context_fingerprint
+                session.add(conversation)
+                await session.commit()
         return
 
     if event_type in {"reasoning.summary.delta", "reasoning.summary.done"}:
