@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -65,6 +66,8 @@ _DEFAULT_EXTENSION_ALLOWLIST = {
     ".ts",
     ".txt",
 }
+_MAX_DISPLAY_FILENAME_LENGTH = 180
+_SAFE_FILENAME_CHARS_PATTERN = re.compile(r"[^\w.\- ]+", flags=re.UNICODE)
 
 
 @dataclass(frozen=True)
@@ -275,6 +278,29 @@ def _validate_extension(filename: str) -> None:
         )
 
 
+def _safe_filename_part(value: str, fallback: str) -> str:
+    cleaned = _SAFE_FILENAME_CHARS_PATTERN.sub("_", (value or "").strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._- ")
+    return cleaned or fallback
+
+
+def _build_display_filename(*, original_filename: str, user: AppUser, uploaded_at: datetime) -> str:
+    original_basename = Path(original_filename).name or "document"
+    ext = Path(original_basename).suffix.lower()
+    original_stem = Path(original_basename).stem
+
+    safe_stem = _safe_filename_part(original_stem, "document")
+    user_label = _safe_filename_part(user.telegram_username or str(user.telegram_id), "user")
+    timestamp = uploaded_at.strftime("%Y%m%d-%H%M%S")
+
+    suffix = f"-{user_label}-{timestamp}{ext}"
+    max_stem_len = max(1, _MAX_DISPLAY_FILENAME_LENGTH - len(suffix))
+    if len(safe_stem) > max_stem_len:
+        safe_stem = safe_stem[:max_stem_len].rstrip("._- ") or "document"
+
+    return f"{safe_stem}{suffix}"
+
+
 def _refresh_expiration(document: UserDocument, retention_hours: int) -> None:
     if document.is_pinned:
         document.expires_at = None
@@ -289,8 +315,13 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     upload: UploadFile,
 ) -> UserDocumentResponse:
-    filename = upload.filename or "document"
-    _validate_extension(filename)
+    original_filename = (upload.filename or "document").strip() or "document"
+    _validate_extension(original_filename)
+    filename = _build_display_filename(
+        original_filename=original_filename,
+        user=user,
+        uploaded_at=_utcnow_naive(),
+    )
 
     capabilities = await get_document_capabilities(session, user)
     if capabilities.active_doc_count >= capabilities.max_active_docs:
