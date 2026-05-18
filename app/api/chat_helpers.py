@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 
 from app.api.dependencies import get_available_models
 from app.api.document_helpers import (
+    count_conversation_pending_indexing_documents,
     list_conversation_ready_vector_store_ids,
 )
 from app.api.helpers import generate_and_publish, load_conversation
@@ -577,6 +578,17 @@ async def _check_entitlements(
         image_model,
         image_quality,
     )
+    pending_docs_count = await count_conversation_pending_indexing_documents(session, conversation.id)
+    if pending_docs_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "documents_indexing_in_progress",
+                "pending_count": pending_docs_count,
+                "message": "Wait until attached documents finish indexing before sending messages.",
+            },
+        )
+
     vector_store_ids = await list_conversation_ready_vector_store_ids(session, conversation.id)
     tools = await _build_tools(
         image_entitlement.allowed,

@@ -36,6 +36,10 @@ _ATTACHABLE_STATUSES = {
     DOCUMENT_STATUS_PROCESSING,
     DOCUMENT_STATUS_READY,
 }
+_PENDING_INDEXING_STATUSES = {
+    DOCUMENT_STATUS_UPLOADING,
+    DOCUMENT_STATUS_PROCESSING,
+}
 
 _OPENAI_FILE_LIMIT_BYTES = 512 * 1024 * 1024
 _DEFAULT_EXTENSION_ALLOWLIST = {
@@ -489,6 +493,9 @@ async def replace_conversation_documents(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     normalized_ids = list(dict.fromkeys(document_ids))
+    caps: DocumentCapabilitiesResponse | None = None
+    docs_to_refresh: list[UserDocument] = []
+
     if normalized_ids:
         docs = (await session.exec(
             select(UserDocument).where(
@@ -505,21 +512,26 @@ async def replace_conversation_documents(
                 status_code=400,
                 detail={"error": "documents_not_ready_or_not_owned", "document_ids": [str(x) for x in missing]},
             )
+        caps = await get_document_capabilities(session, user)
+        docs_to_refresh = (await session.exec(
+            select(UserDocument).where(UserDocument.id.in_(normalized_ids))
+        )).all()
 
     existing_links = (await session.exec(
         select(ConversationDocument).where(ConversationDocument.conversation_id == conversation_id)
     )).all()
     for link in existing_links:
         await session.delete(link)
+    # Flush deletions before inserting new rows so `(conversation_id, document_id)`
+    # unique constraint does not trip when users keep previously attached docs selected.
+    await session.flush()
 
     now = _utcnow_naive()
     for doc_id in normalized_ids:
         session.add(ConversationDocument(conversation_id=conversation_id, document_id=doc_id, attached_at=now))
 
-    if normalized_ids:
-        caps = await get_document_capabilities(session, user)
-        docs = (await session.exec(select(UserDocument).where(UserDocument.id.in_(normalized_ids)))).all()
-        for doc in docs:
+    if normalized_ids and caps is not None:
+        for doc in docs_to_refresh:
             _refresh_expiration(doc, caps.doc_retention_hours)
             session.add(doc)
 
@@ -577,6 +589,25 @@ async def list_conversation_ready_vector_store_ids(
         if row and row not in out:
             out.append(row)
     return out
+
+
+async def count_conversation_pending_indexing_documents(
+    session: AsyncSession,
+    conversation_id: uuid.UUID,
+) -> int:
+    count = (
+        await session.exec(
+            select(func.count())
+            .select_from(ConversationDocument)
+            .join(UserDocument, UserDocument.id == ConversationDocument.document_id)
+            .where(
+                ConversationDocument.conversation_id == conversation_id,
+                UserDocument.deleted_at.is_(None),
+                UserDocument.status.in_(tuple(_PENDING_INDEXING_STATUSES)),
+            )
+        )
+    ).one()
+    return int(count or 0)
 
 
 async def touch_conversation_documents_last_used_in_search(
