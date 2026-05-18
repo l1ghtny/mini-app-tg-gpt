@@ -244,10 +244,23 @@ async def list_documents(session: AsyncSession, user: AppUser) -> DocumentsListR
     return DocumentsListResponse(documents=[_document_to_response(doc) for doc in documents])
 
 
-async def _persist_upload_to_temp_file(upload: UploadFile) -> tuple[str, int, str]:
-    suffix = Path(upload.filename or "upload").suffix
-    fd, tmp_path = tempfile.mkstemp(prefix="doc-upload-", suffix=suffix)
-    os.close(fd)
+def _cleanup_temp_path(tmp_path: str) -> None:
+    try:
+        os.remove(tmp_path)
+    except OSError:
+        pass
+    try:
+        parent = os.path.dirname(tmp_path)
+        if parent:
+            os.rmdir(parent)
+    except OSError:
+        pass
+
+
+async def _persist_upload_to_temp_file(upload: UploadFile, target_filename: str) -> tuple[str, int, str]:
+    safe_name = Path(target_filename or "upload").name or "upload"
+    tmp_dir = tempfile.mkdtemp(prefix="doc-upload-")
+    tmp_path = os.path.join(tmp_dir, safe_name)
 
     total_bytes = 0
     hasher = hashlib.sha256()
@@ -333,19 +346,13 @@ async def upload_document(
             },
         )
 
-    tmp_path, size_bytes, sha256 = await _persist_upload_to_temp_file(upload)
+    tmp_path, size_bytes, sha256 = await _persist_upload_to_temp_file(upload, filename)
     if size_bytes <= 0:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        _cleanup_temp_path(tmp_path)
         raise HTTPException(status_code=400, detail={"error": "empty_document"})
 
     if size_bytes > capabilities.max_file_size_bytes:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        _cleanup_temp_path(tmp_path)
         raise HTTPException(
             status_code=409,
             detail={
@@ -356,10 +363,7 @@ async def upload_document(
         )
 
     if (capabilities.used_storage_bytes + size_bytes) > capabilities.max_storage_bytes:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        _cleanup_temp_path(tmp_path)
         raise HTTPException(
             status_code=409,
             detail={
@@ -424,10 +428,7 @@ async def _ingest_document_background(document_id: uuid.UUID, tmp_path: str) -> 
                 session.add(document)
                 await session.commit()
     finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        _cleanup_temp_path(tmp_path)
 
 
 async def delete_document(

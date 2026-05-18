@@ -140,7 +140,7 @@ def upgrade() -> None:
             max_file_size_bytes = 262144000,
             max_pinned_docs = 50,
             doc_retention_hours = 120
-        WHERE lower(name) = 'advanced';
+        WHERE lower(name) IN ('advanced', 'katush tier', 'close friends tier', 'smooth tier');
         """
     )
     op.execute(
@@ -186,4 +186,3 @@ def downgrade() -> None:
     op.drop_column("subscription_tier", "max_file_size_bytes")
     op.drop_column("subscription_tier", "max_storage_bytes")
     op.drop_column("subscription_tier", "max_active_docs")
-

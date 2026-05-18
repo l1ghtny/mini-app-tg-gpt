@@ -41,7 +41,7 @@ CANARY_ALLOWED_HEADER_VALUES = {f"tg-{telegram_id}" for telegram_id in CANARY_AL
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="1.3.0",
+    version="1.4.0",
     docs_url=None
 )
 if CANARY_ALLOWED_TG_IDS:
