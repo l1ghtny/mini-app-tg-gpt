@@ -1,9 +1,10 @@
 import fastapi_swagger_dark as fsd
 import sentry_sdk
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.openai import OpenAIIntegration
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+import os
 
 from app.api.access_codes import access_codes
 from app.api.admin_broadcast import admin_broadcast
@@ -24,6 +25,13 @@ from app.api.whats_new import whats_new
 from app.core.config import settings
 
 logger = settings.custom_logger
+CANARY_HEADER_NAME = os.getenv("CANARY_HEADER_NAME", "X-Canary-User").strip() or "X-Canary-User"
+CANARY_ALLOWED_TG_IDS = {
+    raw.strip()
+    for raw in os.getenv("CANARY_TG_IDS", "").split(",")
+    if raw.strip()
+}
+CANARY_ALLOWED_HEADER_VALUES = {f"tg-{telegram_id}" for telegram_id in CANARY_ALLOWED_TG_IDS}
 
 
 
@@ -36,6 +44,14 @@ app = FastAPI(
     version="1.3.0",
     docs_url=None
 )
+if CANARY_ALLOWED_TG_IDS:
+    logger.info(
+        "Canary routing header enabled: %s (%s user ids)",
+        CANARY_HEADER_NAME,
+        len(CANARY_ALLOWED_TG_IDS),
+    )
+else:
+    logger.info("Canary routing header configured but no CANARY_TG_IDS provided")
 
 
 if settings.SENTRY_DSN:
@@ -86,6 +102,20 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137", "*.kosh.games"],
 )
+
+
+@app.middleware("http")
+async def attach_canary_request_context(request: Request, call_next):
+    canary_header_value = request.headers.get(CANARY_HEADER_NAME)
+    if canary_header_value:
+        is_allowed = canary_header_value in CANARY_ALLOWED_HEADER_VALUES if CANARY_ALLOWED_HEADER_VALUES else False
+        with sentry_sdk.configure_scope() as scope:
+            scope.set_tag("canary_header_name", CANARY_HEADER_NAME)
+            scope.set_tag("canary_header_value", canary_header_value)
+            scope.set_tag("canary_header_allowed", str(is_allowed).lower())
+
+    response = await call_next(request)
+    return response
 
 
 # -------------------------
