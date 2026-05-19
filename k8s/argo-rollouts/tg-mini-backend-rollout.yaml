@@ -32,6 +32,7 @@ spec:
     canary:
       maxSurge: 25%
       maxUnavailable: 0
+      minPodsPerReplicaSet: 1
       stableService: backend
       canaryService: tg-mini-backend-canary
       trafficRouting:

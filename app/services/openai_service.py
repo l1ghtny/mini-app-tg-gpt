@@ -138,7 +138,8 @@ def _build_responses_create_kwargs(
     kwargs: Dict[str, Any] = {
         "model": model,
         "input": input_data,
-        "store": False,
+        # Must stay enabled for previous_response_id chaining across turns.
+        "store": True,
     }
 
     if tools is not None:

@@ -30,7 +30,7 @@ pillow-heif = "^1.1.1"
 fastapi-swagger-dark = "^0.0.8"
 python-jose = "^3.5.0"
 passlib = "^1.7.4"
-sentry-sdk = {extras = ["fastapi"], version = "^2.47.0"}
+sentry-sdk = ">=2.60.0"
 aiogram = "^3.23.0"
 uuid6 = "^2025.0.1"
 asyncpg = "^0.31.0"

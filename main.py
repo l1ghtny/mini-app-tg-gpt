@@ -41,7 +41,7 @@ CANARY_ALLOWED_HEADER_VALUES = {f"tg-{telegram_id}" for telegram_id in CANARY_AL
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="1.4.0",
+    version="1.4.1",
     docs_url=None
 )
 if CANARY_ALLOWED_TG_IDS:
@@ -66,10 +66,11 @@ if settings.SENTRY_DSN:
         send_default_pii=True, # send info about http calls (includes AI, currently using for openAI costs)
         integrations=[
             OpenAIIntegration(
-                include_prompts=False,
+                include_prompts=True,
                 # LLM/tokenizer inputs/outputs will be not sent to Sentry, despite send_default_pii=True
             )],
         enable_logs=True,
+        stream_gen_ai_spans=True,
         _experiments={
             "metrics_aggregator": True,
         },
@@ -116,7 +117,6 @@ async def attach_canary_request_context(request: Request, call_next):
 
     response = await call_next(request)
     return response
-
 
 # -------------------------
 
