@@ -32,12 +32,19 @@ spec:
     canary:
       maxSurge: 25%
       maxUnavailable: 0
+      minPodsPerReplicaSet: 1
       stableService: backend
       canaryService: tg-mini-backend-canary
       trafficRouting:
         nginx:
           stableIngress: tg-mini-backend
+          canaryIngressAnnotations:
+            nginx.ingress.kubernetes.io/canary-by-header: X-Canary-User
+            nginx.ingress.kubernetes.io/canary-by-header-pattern: ^tg-(207078380|353963715)$
+            nginx.ingress.kubernetes.io/canary-weight: "0"
       steps:
+        - setWeight: 0
+        - pause: {}
         - setWeight: 5
         - pause: {}
         - setWeight: 20
