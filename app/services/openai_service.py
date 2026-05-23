@@ -16,12 +16,12 @@ from openai.types.responses import (
 from openai.types.responses.tool import CodeInterpreter, WebSearchTool
 from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
+from app.db.models import Message
 
 from app.core.config import settings as main_settings
 from app.core.metrics import track_event, track_internal_event
 from app.db.database import engine
 from app.redis.settings import settings
-from app.schemas.chat import Message
 from app.services.background.save_openai_usage import log_usage
 
 STYLE_GUIDE = (
@@ -250,6 +250,7 @@ class StreamState:
     seen_text_part_started: Dict[int, bool] = field(default_factory=dict)
     seen_image_part_started: Dict[int, bool] = field(default_factory=dict)
     reasoning_started: bool = False
+    accumulated_thoughts: str = ""
 
 
 def _build_status_event(
@@ -369,6 +370,7 @@ async def _map_openai_event(
                 )
             )
             state.reasoning_started = True
+        state.accumulated_thoughts += event.delta
         out.append(
             {
                 "type": "reasoning.summary.delta",
@@ -589,6 +591,7 @@ async def stream_normalized_openai_response(
     user_id: Optional[uuid.UUID] = None,
     conversation_id: Optional[uuid.UUID] = None,
     request_id: Optional[str] = None,
+    assistant_message_id: Optional[uuid.UUID] = None,
     reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "concise",
     previous_response_id: Optional[str] = None,
     fallback_messages: Optional[List["Message"]] = None,
@@ -728,6 +731,12 @@ async def stream_normalized_openai_response(
                 raise
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
+            if state.accumulated_thoughts and assistant_message_id:
+                message = await session.get(Message, assistant_message_id)
+                if message:
+                    message.reasoning_summary = state.accumulated_thoughts
+                    session.add(message)
+                    await session.commit()
             await log_usage(
                 session,
                 user_id=user_id,

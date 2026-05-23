@@ -14,6 +14,7 @@ from app.services.background.save_openai_usage import log_usage
 from app.services.model_registry import GOOGLE_THINKING_MODELS
 from app.db.database import engine
 from sqlmodel.ext.asyncio.session import AsyncSession
+from app.db.models import Message
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,7 @@ async def stream_normalized_google_response(
     user_id: Optional[uuid.UUID],
     conversation_id: Optional[uuid.UUID],
     request_id: Optional[str],
+    assistant_message_id: Optional[uuid.UUID],
     previous_interaction_id: Optional[str] = None,
     thinking_enabled: bool | None = None,
     reasoning_effort: str | None = None,
@@ -308,10 +310,17 @@ async def stream_normalized_google_response(
                             "source_event": "google.thinking",
                         }
                         thinking_started = True
-                    accumulated_thoughts += (delta.content or "")
+                    
+                    thought_text = ""
+                    if delta.content and hasattr(delta.content, "text"):
+                        thought_text = delta.content.text or ""
+                    elif isinstance(delta.content, str):
+                        thought_text = delta.content
+
+                    accumulated_thoughts += thought_text
                     yield {
                         "type": "reasoning.summary.delta",
-                        "delta": delta.content,
+                        "delta": thought_text,
                         "output_index": 0,
                         "summary_index": 0,
                         "item_id": "google-thought-0",
@@ -401,6 +410,12 @@ async def stream_normalized_google_response(
                 reasoning_tokens = usage_meta.total_thought_tokens if usage_meta else 0
 
                 async with AsyncSession(engine, expire_on_commit=False) as db_session:
+                    if accumulated_thoughts and assistant_message_id:
+                        message = await db_session.get(Message, assistant_message_id)
+                        if message:
+                            message.reasoning_summary = accumulated_thoughts
+                            db_session.add(message)
+                            await db_session.commit()
                     await log_usage(
                         db_session,
                         user_id=user_id,

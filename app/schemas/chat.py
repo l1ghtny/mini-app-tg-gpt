@@ -36,6 +36,7 @@ class Message(BaseModel):
     id: uuid.UUID
     role: str
     content: List[MessageContent]
+    reasoning_summary: Optional[str] = None
     model_config = ConfigDict(
         from_attributes=True,
         extra="ignore",

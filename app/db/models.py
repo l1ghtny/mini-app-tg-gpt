@@ -157,6 +157,7 @@ class Message(SQLModel, table=True):
         default_factory=utcnow_naive,
         sa_column=Column(DateTime, index=True)
     )
+    reasoning_summary: Optional[str] = Field(default=None)
 
     conversation: "Conversation" = Relationship(back_populates="messages")
 
