@@ -140,41 +140,32 @@ async def _single_turn_input_from_history(history: list[dict[str, Any]]) -> Any:
     return parts
 
 
-def _thinking_config_for_request(
+def _generation_config_for_request(
     *,
     model: str,
     thinking_enabled: bool | None,
     reasoning_effort: str | None,
-) -> Any | None:
+) -> dict[str, Any]:
+    config = {}
     if model not in GOOGLE_THINKING_MODELS and not reasoning_effort and not thinking_enabled:
-        return None
+        return config
 
     thinking_level = (reasoning_effort or "").strip().lower() or None
-    if thinking_level not in {"minimal", "low", "medium", "high"}:
+    if thinking_level not in {"low", "medium", "high"}:
         if thinking_enabled is False:
-            thinking_level = "minimal"
+            thinking_level = "low"
         elif thinking_enabled:
             thinking_level = "medium"
         else:
             thinking_level = None
 
     if thinking_level:
-        level_map = {
-            "minimal": types.ThinkingLevel.MINIMAL,
-            "low": types.ThinkingLevel.LOW,
-            "medium": types.ThinkingLevel.MEDIUM,
-            "high": types.ThinkingLevel.HIGH,
-        }
-        actual_level = level_map.get(thinking_level)
-        return types.ThinkingConfig(
-            include_thoughts=True,
-            thinking_level=actual_level,
-        )
-    elif thinking_enabled or reasoning_effort:
-        return types.ThinkingConfig(
-            include_thoughts=True,
-        )
-    return None
+        config["thinking_level"] = thinking_level
+
+    if thinking_enabled or reasoning_effort:
+        config["thinking_summaries"] = "auto"
+
+    return config
 
 
 async def stream_normalized_google_response(
@@ -222,14 +213,11 @@ async def stream_normalized_google_response(
     else:
         input_val = await _interactions_steps_from_history(messages)
 
-    generation_config = {}
-    thinking_config = _thinking_config_for_request(
+    generation_config = _generation_config_for_request(
         model=model,
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
     )
-    if thinking_config:
-        generation_config["thinking_config"] = thinking_config
 
     tools_payload = []
     if enabled_web_search and not image_tool:
@@ -246,7 +234,7 @@ async def stream_normalized_google_response(
     if tools_payload:
         kwargs["tools"] = tools_payload
     if generation_config:
-        kwargs["generation_config"] = types.GenerationConfig(**generation_config)
+        kwargs["generation_config"] = generation_config
     if previous_interaction_id:
         kwargs["previous_interaction_id"] = previous_interaction_id
 
