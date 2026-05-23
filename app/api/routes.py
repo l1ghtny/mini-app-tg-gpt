@@ -7,6 +7,7 @@ from sse_starlette.sse import EventSourceResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import chat_helpers
+from app.api import document_helpers
 from app.api.dependencies import get_bus, get_current_user, get_redis, rate_limit_check
 from app.db.models import AppUser, Conversation
 from app.db.database import get_session
@@ -24,6 +25,7 @@ from app.schemas.chat import (
     RequestExists,
     UpdateConversationSettingsRequest, ConversationInfo,
 )
+from app.schemas.documents import ConversationDocumentsUpdateRequest, ConversationDocumentsUpdateResponse
 
 router = APIRouter()
 
@@ -229,6 +231,40 @@ async def update_conversation_settings(
         request=request,
         session=session,
         current_user=current_user,
+    )
+
+
+@router.put(
+    "/conversations/{conversation_id}/documents",
+    response_model=ConversationDocumentsUpdateResponse,
+)
+async def replace_conversation_documents(
+    conversation_id: uuid.UUID,
+    request: ConversationDocumentsUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await document_helpers.replace_conversation_documents(
+        session=session,
+        user=current_user,
+        conversation_id=conversation_id,
+        document_ids=request.document_ids,
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}/documents",
+    response_model=ConversationDocumentsUpdateResponse,
+)
+async def get_conversation_documents(
+    conversation_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await document_helpers.list_conversation_document_ids(
+        session=session,
+        user=current_user,
+        conversation_id=conversation_id,
     )
 
 

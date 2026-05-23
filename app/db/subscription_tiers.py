@@ -2,7 +2,7 @@
 from datetime import datetime, UTC
 from enum import Enum
 from typing import Optional, Literal, List
-from sqlalchemy import Column, UniqueConstraint, DateTime
+from sqlalchemy import BigInteger, Column, UniqueConstraint, DateTime
 from sqlmodel import SQLModel, Field, Relationship
 
 
@@ -37,6 +37,11 @@ class SubscriptionTier(SQLModel, table=True):
     daily_image_energy: int = Field(default=0)
     monthly_docs: int = Field(default=0)
     monthly_deepsearch: int = Field(default=0)
+    max_active_docs: int = Field(default=0)
+    max_storage_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))
+    max_file_size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))
+    max_pinned_docs: int = Field(default=0)
+    doc_retention_hours: int = Field(default=24)
     is_active: bool = Field(default=True)
     is_public: bool = Field(default=True, nullable=False)
     index: int = Field(default=0, nullable=False)

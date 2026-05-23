@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional, Iterable
 
+import logging
+
 from fastapi import HTTPException
 from openai.types.responses import FileSearchToolParam, WebSearchToolParam
 from openai.types.responses.tool import CodeInterpreter, ImageGeneration
@@ -11,6 +13,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import Conversation, MessageContent
+from app.api.document_helpers import touch_conversation_documents_last_used_in_search
 from app.r2.methods import delete_object, put_bytes
 from app.r2.settings import Settings
 from app.redis.event_bus import RedisEventBus
@@ -19,6 +22,8 @@ from app.services.openai_service import stream_normalized_openai_response
 from app.db.database import engine
 from app.services.subscription_check.entitlements import reserve_request, finalize_request
 from app.services.subscription_check.pacing import get_image_quality_cost
+
+logger = logging.getLogger(__name__)
 
 
 async def load_conversation(session: AsyncSession, conversation_id: uuid.UUID) -> Conversation | None:
@@ -229,19 +234,32 @@ async def _handle_stream_event(
         return
 
     if event_type == "response.meta":
-        response_id = ev.get("response_id")
-        if response_id:
+        response_id_raw = ev.get("response_id")
+        response_id = str(response_id_raw).strip() if response_id_raw is not None else ""
+        if response_id and response_id.startswith("resp_"):
             conversation = await session.get(Conversation, conversation_id)
             if conversation:
-                conversation.last_openai_response_id = str(response_id)
+                conversation.last_openai_response_id = response_id
                 conversation.openai_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 conversation.openai_chain_context_fingerprint = chain_context_fingerprint
                 session.add(conversation)
                 await session.commit()
+        elif response_id:
+            # Only persist canonical OpenAI Responses object IDs for chaining.
+            logger.warning(
+                "Skipping non-canonical OpenAI response id for chaining: %s",
+                response_id,
+            )
         return
 
     if event_type in {"reasoning.summary.delta", "reasoning.summary.done"}:
         # UI-only events for frontend stream
+        return
+
+    if event_type == "file_search.used":
+        if not lifecycle.get("file_search_touched"):
+            await touch_conversation_documents_last_used_in_search(session, conversation_id)
+            lifecycle["file_search_touched"] = True
         return
 
     if event_type == "done":

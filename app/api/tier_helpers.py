@@ -141,6 +141,12 @@ def _build_tier_response(
         description_ru=tier.description_ru,
         price_cents=tier.price_cents,
         monthly_images=tier.monthly_images,
+        monthly_docs=tier.monthly_docs,
+        max_active_docs=int(getattr(tier, "max_active_docs", 0) or 0),
+        max_storage_bytes=int(getattr(tier, "max_storage_bytes", 0) or 0),
+        max_file_size_bytes=int(getattr(tier, "max_file_size_bytes", 0) or 0),
+        max_pinned_docs=int(getattr(tier, "max_pinned_docs", 0) or 0),
+        doc_retention_hours=int(getattr(tier, "doc_retention_hours", 24) or 24),
         tier_model_limits=[
             TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests)
             for l in tier.tier_model_limits

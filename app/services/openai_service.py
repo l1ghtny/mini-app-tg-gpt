@@ -138,7 +138,8 @@ def _build_responses_create_kwargs(
     kwargs: Dict[str, Any] = {
         "model": model,
         "input": input_data,
-        "store": False,
+        # Must stay enabled for previous_response_id chaining across turns.
+        "store": True,
     }
 
     if tools is not None:
@@ -420,6 +421,31 @@ async def _map_openai_event(
         out.append({"type": "text.done", "index": content_index})
         return out
 
+    if et in ("response.file_search_call.in_progress", "response.file_search_call.searching"):
+        out.append(
+            _build_status_event(
+                stage="file_search.in_progress",
+                phase="tool.file_search.searching",
+                label="Searching files",
+                source_event=et,
+                event=event,
+            )
+        )
+        return out
+
+    if et == "response.file_search_call.completed":
+        out.append(
+            _build_status_event(
+                stage="file_search.completed",
+                phase="tool.file_search.completed",
+                label="File search complete",
+                source_event=et,
+                event=event,
+            )
+        )
+        out.append({"type": "file_search.used"})
+        return out
+
     if et in ("response.web_search_call.in_progress", "response.web_search_call.searching"):
         out.append(
             _build_status_event(
@@ -467,6 +493,19 @@ async def _map_openai_event(
                     index=event.output_index,
                 )
             )
+        return out
+
+    if et == "response.output_item.done" and getattr(event, "item", None) and event.item.type == "file_search_call":
+        out.append(
+            _build_status_event(
+                stage="file_search.completed",
+                phase="tool.file_search.completed",
+                label="File search complete",
+                source_event=et,
+                event=event,
+            )
+        )
+        out.append({"type": "file_search.used"})
         return out
 
     if et in ("response.image_generation_call.generating", "response.image_generation_call.in_progress"):

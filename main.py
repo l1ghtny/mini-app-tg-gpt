@@ -1,14 +1,16 @@
 import fastapi_swagger_dark as fsd
 import sentry_sdk
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.openai import OpenAIIntegration
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+import os
 
 from app.api.access_codes import access_codes
 from app.api.admin_broadcast import admin_broadcast
 from app.api.auth import auth
 from app.api.chat_folders import router as chat_folders_router
+from app.api.documents import documents
 from app.api.images import images
 from app.api.metrics import metrics
 from app.api.models_catalog import models_catalog
@@ -23,6 +25,13 @@ from app.api.whats_new import whats_new
 from app.core.config import settings
 
 logger = settings.custom_logger
+CANARY_HEADER_NAME = os.getenv("CANARY_HEADER_NAME", "X-Canary-User").strip() or "X-Canary-User"
+CANARY_ALLOWED_TG_IDS = {
+    raw.strip()
+    for raw in os.getenv("CANARY_TG_IDS", "").split(",")
+    if raw.strip()
+}
+CANARY_ALLOWED_HEADER_VALUES = {f"tg-{telegram_id}" for telegram_id in CANARY_ALLOWED_TG_IDS}
 
 
 
@@ -32,9 +41,17 @@ logger = settings.custom_logger
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="1.3.0",
+    version="1.4.1",
     docs_url=None
 )
+if CANARY_ALLOWED_TG_IDS:
+    logger.info(
+        "Canary routing header enabled: %s (%s user ids)",
+        CANARY_HEADER_NAME,
+        len(CANARY_ALLOWED_TG_IDS),
+    )
+else:
+    logger.info("Canary routing header configured but no CANARY_TG_IDS provided")
 
 
 if settings.SENTRY_DSN:
@@ -49,10 +66,11 @@ if settings.SENTRY_DSN:
         send_default_pii=True, # send info about http calls (includes AI, currently using for openAI costs)
         integrations=[
             OpenAIIntegration(
-                include_prompts=False,
+                include_prompts=True,
                 # LLM/tokenizer inputs/outputs will be not sent to Sentry, despite send_default_pii=True
             )],
         enable_logs=True,
+        stream_gen_ai_spans=True,
         _experiments={
             "metrics_aggregator": True,
         },
@@ -87,6 +105,19 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def attach_canary_request_context(request: Request, call_next):
+    canary_header_value = request.headers.get(CANARY_HEADER_NAME)
+    if canary_header_value:
+        is_allowed = canary_header_value in CANARY_ALLOWED_HEADER_VALUES if CANARY_ALLOWED_HEADER_VALUES else False
+        with sentry_sdk.configure_scope() as scope:
+            scope.set_tag("canary_header_name", CANARY_HEADER_NAME)
+            scope.set_tag("canary_header_value", canary_header_value)
+            scope.set_tag("canary_header_allowed", str(is_allowed).lower())
+
+    response = await call_next(request)
+    return response
+
 # -------------------------
 
 dark = APIRouter()
@@ -96,6 +127,7 @@ app.include_router(chat_router, prefix="/api/v1", tags=['conversations'])
 app.include_router(chat_folders_router, prefix="/api/v1", tags=['chat-folders'])
 app.include_router(auth, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
+app.include_router(documents, prefix="/api/v1")
 app.include_router(user_usage, prefix="/api/v1")
 app.include_router(user_subscription, prefix="/api/v1")
 app.include_router(access_codes, prefix="/api/v1")
