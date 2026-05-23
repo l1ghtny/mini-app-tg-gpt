@@ -1,4 +1,4 @@
-﻿from typing import Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 from typing import Literal
@@ -25,10 +25,12 @@ class SubscriptionResponse(BaseModel):
 
 class SubscriptionDiscountResponse(BaseModel):
     code: Optional[str] = None
+    type: str = "first_purchase"           # "first_purchase" | "seasonal" | "referral"
     percent_off: int
-    applies_to: list[str] = []
+    applies_to: list[str] = []             # tier slugs or ["all"] when applies to everything
     expires_at: Optional[str] = None
     stackable: bool = True
+    conditions: Optional[dict] = None      # forwarded from GeneralDiscount for frontend display
 
 
 class ActiveSubscriptionsResponse(BaseModel):
@@ -80,6 +82,7 @@ class SubscriptionTierResponse(BaseModel):
     allowed_image_qualities: List[str] = []
     allowed_image_models: List[str] = []
     tier_id: str
+    applicable_discounts: List[SubscriptionDiscountResponse] = []  # general discounts applicable to this tier
 
 
 class InitPaymentRequest(BaseModel):

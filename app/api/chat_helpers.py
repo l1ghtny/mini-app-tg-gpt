@@ -62,6 +62,10 @@ from app.services.openai_chain import (
     invalidate_openai_chain_state,
     resolve_previous_response_id_for_chain,
 )
+from app.services.google_chain import (
+    invalidate_google_chain_state,
+    resolve_previous_interaction_id_for_chain,
+)
 
 _TOOL_TYPE_ALIASES = {
     "web_search_preview": "web_search",
@@ -213,17 +217,29 @@ async def handle_create_message(
         tools=tools,
         extract_tool_type=_extract_tool_type,
     )
-    previous_response_id, chain_reason = resolve_previous_response_id_for_chain(
-        conversation,
-        current_fingerprint=chain_context_fingerprint,
-        chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
-        max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
-    )
+    provider = get_text_model_provider(request.model)
+    previous_response_id: str | None = None
+    previous_interaction_id: str | None = None
+    if provider == "google":
+        previous_interaction_id, chain_reason = resolve_previous_interaction_id_for_chain(
+            conversation,
+            current_fingerprint=chain_context_fingerprint,
+            chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
+            max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
+        )
+    else:
+        previous_response_id, chain_reason = resolve_previous_response_id_for_chain(
+            conversation,
+            current_fingerprint=chain_context_fingerprint,
+            chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
+            max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
+        )
     if chain_reason in INVALIDATING_CHAIN_REASONS:
         invalidate_openai_chain_state(conversation)
+        invalidate_google_chain_state(conversation)
         session.add(conversation)
         await session.commit()
-    if previous_response_id:
+    if previous_response_id or previous_interaction_id:
         current_turn_history = await _build_history_for_message(
             session,
             message_id=user_msg.id,
@@ -233,8 +249,9 @@ async def handle_create_message(
             fallback_history_for_openai = full_history_for_openai
         else:
             previous_response_id = None
+            previous_interaction_id = None
             chain_reason = "missing_current_turn_payload"
-    if previous_response_id:
+    if previous_response_id or previous_interaction_id:
         background_tasks.add_task(
             track_event,
             "openai.chain.attempted",
@@ -269,6 +286,7 @@ async def handle_create_message(
         tools=tools,
         request_id=idempotency_key,
         previous_response_id=previous_response_id,
+        previous_interaction_id=previous_interaction_id,
         chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
@@ -342,6 +360,7 @@ async def handle_delete_message(
         await session.delete(message)
 
     invalidate_openai_chain_state(conversation)
+    invalidate_google_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -392,6 +411,7 @@ async def handle_edit_message(
         await session.delete(message)
 
     invalidate_openai_chain_state(conversation)
+    invalidate_google_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -1459,6 +1479,7 @@ def _queue_generation(
     tools: list,
     request_id: str,
     previous_response_id: Optional[str],
+    previous_interaction_id: Optional[str],
     chain_context_fingerprint: Optional[str],
     image_entitlement_tier_id: Optional[uuid.UUID],
     image_entitlement_pack_id: Optional[uuid.UUID],
@@ -1479,6 +1500,7 @@ def _queue_generation(
         tools=tools,
         request_id=request_id,
         previous_response_id=previous_response_id,
+        previous_interaction_id=previous_interaction_id,
         chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement_tier_id,
         image_entitlement_pack_id=image_entitlement_pack_id,

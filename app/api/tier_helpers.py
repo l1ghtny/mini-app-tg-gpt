@@ -7,9 +7,10 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import ImageQualityPricing
-from app.db.subscription_tiers import SubscriptionTier
+from app.db.subscription_tiers import GeneralDiscount, SubscriptionTier
 from app.schemas.subscriptions import (
     ImageQualityPricingResponse,
+    SubscriptionDiscountResponse,
     SubscriptionTierResponse,
     TierImageModelLimits,
     TierMonthlyLimits,
@@ -52,7 +53,8 @@ async def list_public_tiers(session: AsyncSession, user) -> list[SubscriptionTie
             tiers_info.insert(0, loaded_tier)
 
     pricing_by_model = await _load_image_pricing(session)
-    return [_build_tier_response(tier, pricing_by_model) for tier in tiers_info]
+    general_discounts = await _load_applicable_general_discounts(session)
+    return [_build_tier_response(tier, pricing_by_model, general_discounts) for tier in tiers_info]
 
 
 async def get_tier_detail(
@@ -69,7 +71,8 @@ async def get_tier_detail(
         raise HTTPException(status_code=404, detail="Tier not found")
 
     pricing_by_model = await _load_image_pricing(session)
-    return _build_tier_response(tier_info, pricing_by_model)
+    general_discounts = await _load_applicable_general_discounts(session)
+    return _build_tier_response(tier_info, pricing_by_model, general_discounts)
 
 
 async def subscribe_to_tier(
@@ -113,9 +116,43 @@ async def _load_image_pricing(session: AsyncSession) -> dict[str, list[ImageQual
     return pricing_by_model
 
 
+async def _load_applicable_general_discounts(
+    session: AsyncSession,
+) -> list[SubscriptionDiscountResponse]:
+    """Load active GeneralDiscount rows without user-specific eligibility checks.
+    Used for the public pricing catalog — conditions are forwarded to frontend.
+    """
+    from datetime import datetime
+    now = datetime.utcnow()
+    rows = (await session.exec(
+        select(GeneralDiscount).where(
+            GeneralDiscount.is_active == True,  # noqa: E712
+            (GeneralDiscount.starts_at.is_(None)) | (GeneralDiscount.starts_at <= now),
+            (GeneralDiscount.expires_at.is_(None)) | (GeneralDiscount.expires_at > now),
+        )
+    )).all()
+
+    result: list[SubscriptionDiscountResponse] = []
+    for gd in rows:
+        applies_to = gd.applies_to_tiers if gd.applies_to_tiers else ["all"]
+        result.append(
+            SubscriptionDiscountResponse(
+                code=gd.code,
+                type=gd.type,
+                percent_off=gd.percent_off,
+                applies_to=applies_to,
+                expires_at=gd.expires_at.isoformat(timespec="seconds") if gd.expires_at else None,
+                stackable=gd.stackable,
+                conditions=gd.conditions if gd.conditions else None,
+            )
+        )
+    return result
+
+
 def _build_tier_response(
     tier: SubscriptionTier,
     pricing_by_model: dict[str, list[ImageQualityPricing]],
+    applicable_discounts: list[SubscriptionDiscountResponse] | None = None,
 ) -> SubscriptionTierResponse:
     daily_energy = _daily_image_energy(tier)
     image_limit_override = -1 if daily_energy > 0 else None
@@ -165,4 +202,5 @@ def _build_tier_response(
         allowed_image_qualities=allowed_qualities,
         allowed_image_models=allowed_models,
         tier_id=str(tier.id),
+        applicable_discounts=applicable_discounts or [],
     )

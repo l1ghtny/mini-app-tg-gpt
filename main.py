@@ -21,6 +21,7 @@ from app.api.tiers import tiers
 from app.api.usage_packs import usage_packs
 from app.api.user_subscription import user_subscription
 from app.api.user_usage import user_usage
+from app.api.user_settings import user_settings
 from app.api.whats_new import whats_new
 from app.core.config import settings
 
@@ -129,6 +130,7 @@ app.include_router(auth, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
 app.include_router(documents, prefix="/api/v1")
 app.include_router(user_usage, prefix="/api/v1")
+app.include_router(user_settings, prefix="/api/v1")
 app.include_router(user_subscription, prefix="/api/v1")
 app.include_router(access_codes, prefix="/api/v1")
 app.include_router(tiers, prefix="/api/v1")

@@ -46,6 +46,7 @@ async def generate_and_publish(
         tool_choice: Optional[str | dict[str, Any]] = "auto",
         request_id: Optional[str] = None,
         previous_response_id: Optional[str] = None,
+        previous_interaction_id: Optional[str] = None,
         chain_context_fingerprint: Optional[str] = None,
         image_entitlement_tier_id: Optional[uuid.UUID] = None,
         image_entitlement_pack_id: Optional[uuid.UUID] = None,
@@ -78,6 +79,7 @@ async def generate_and_publish(
                     conversation_id=conversation_id,
                     request_id=request_id,
                     previous_response_id=previous_response_id,
+                    previous_interaction_id=previous_interaction_id,
                     fallback_messages=fallback_history_for_openai,
                     thinking_enabled=thinking_enabled,
                     reasoning_effort=reasoning_effort,
@@ -238,18 +240,31 @@ async def _handle_stream_event(
         return
 
     if event_type == "response.meta":
+        conversation = await session.get(Conversation, conversation_id)
+        if not conversation:
+            return
+
+        provider = str(ev.get("provider") or "").strip().lower()
         response_id_raw = ev.get("response_id")
+        interaction_id_raw = ev.get("interaction_id")
         response_id = str(response_id_raw).strip() if response_id_raw is not None else ""
+        interaction_id = str(interaction_id_raw).strip() if interaction_id_raw is not None else ""
+
+        if provider == "google" and interaction_id:
+            conversation.last_google_interaction_id = interaction_id
+            conversation.google_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            conversation.google_chain_context_fingerprint = chain_context_fingerprint
+            session.add(conversation)
+            await session.commit()
+            return
+
         if response_id and response_id.startswith("resp_"):
-            conversation = await session.get(Conversation, conversation_id)
-            if conversation:
-                conversation.last_openai_response_id = response_id
-                conversation.openai_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                conversation.openai_chain_context_fingerprint = chain_context_fingerprint
-                session.add(conversation)
-                await session.commit()
+            conversation.last_openai_response_id = response_id
+            conversation.openai_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            conversation.openai_chain_context_fingerprint = chain_context_fingerprint
+            session.add(conversation)
+            await session.commit()
         elif response_id:
-            # Only persist canonical OpenAI Responses object IDs for chaining.
             logger.warning(
                 "Skipping non-canonical OpenAI response id for chaining: %s",
                 response_id,

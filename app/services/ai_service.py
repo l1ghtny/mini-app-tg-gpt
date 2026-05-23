@@ -21,6 +21,7 @@ async def stream_normalized_ai_response(
     request_id: Optional[str] = None,
     reasoning_summary: Optional[str] = "concise",
     previous_response_id: Optional[str] = None,
+    previous_interaction_id: Optional[str] = None,
     fallback_messages: Optional[list[dict[str, Any]]] = None,
     thinking_enabled: bool | None = None,
     reasoning_effort: str | None = None,
@@ -36,6 +37,7 @@ async def stream_normalized_ai_response(
             user_id=user_id,
             conversation_id=conversation_id,
             request_id=request_id,
+            previous_interaction_id=previous_interaction_id,
             thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort,
         ):

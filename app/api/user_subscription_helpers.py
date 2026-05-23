@@ -9,7 +9,13 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.metrics import track_event
 from app.db.models import Payment, PaymentMethod, PaymentProductType
-from app.db.subscription_tiers import SubscriptionStatus, SubscriptionTier, UserSubscription, UserTierDiscount
+from app.db.subscription_tiers import (
+    GeneralDiscount,
+    SubscriptionStatus,
+    SubscriptionTier,
+    UserSubscription,
+    UserTierDiscount,
+)
 from app.schemas.subscriptions import (
     ActiveSubscriptionsResponse,
     CancelSubscriptionResponse,
@@ -74,7 +80,9 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
         raise HTTPException(status_code=403, detail="No active subscription found")
 
     discounts = await _load_active_discounts(session, user.id)
+    general_discounts = await _load_general_discounts(session, user.id)
     first_purchase_available = await _first_purchase_available(session, user.id)
+    all_discounts = discounts + general_discounts
 
     ordered = sorted(subscriptions, key=_subscription_priority_key, reverse=True)
     active_subscriptions: list[SubscriptionResponse] = []
@@ -111,7 +119,7 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
     return ActiveSubscriptionsResponse(
         active_subscriptions=active_subscriptions,
         primary_subscription_id=str(ordered[0].id),
-        discounts=discounts,
+        discounts=all_discounts,
         first_purchase_available=first_purchase_available,
     )
 
@@ -137,6 +145,7 @@ async def _load_active_discounts(
         discounts.append(
             SubscriptionDiscountResponse(
                 code=code,
+                type="access_code",
                 percent_off=int(discount.discount_percent or 0),
                 applies_to=[_tier_slug(tier.name)],
                 expires_at=_format_ts(discount.valid_until),
@@ -156,6 +165,44 @@ async def _first_purchase_available(session: AsyncSession, user_id) -> bool:
         )
     )
     return existing_paid_subscription.first() is None
+
+
+async def _load_general_discounts(
+    session: AsyncSession,
+    user_id,
+) -> list[SubscriptionDiscountResponse]:
+    """Load all currently active GeneralDiscount rows and evaluate eligibility."""
+    now = datetime.utcnow()
+    query = select(GeneralDiscount).where(
+        GeneralDiscount.is_active == True,  # noqa: E712
+        (GeneralDiscount.starts_at.is_(None)) | (GeneralDiscount.starts_at <= now),
+        (GeneralDiscount.expires_at.is_(None)) | (GeneralDiscount.expires_at > now),
+    )
+    rows = (await session.exec(query)).all()
+
+    result: list[SubscriptionDiscountResponse] = []
+    for gd in rows:
+        conditions = gd.conditions or {}
+
+        # Evaluate eligibility conditions
+        if conditions.get("no_prior_paid_sub"):
+            eligible = await _first_purchase_available(session, user_id)
+            if not eligible:
+                continue
+
+        applies_to = gd.applies_to_tiers if gd.applies_to_tiers else ["all"]
+        result.append(
+            SubscriptionDiscountResponse(
+                code=gd.code,
+                type=gd.type,
+                percent_off=gd.percent_off,
+                applies_to=applies_to,
+                expires_at=_format_ts(gd.expires_at),
+                stackable=gd.stackable,
+                conditions=conditions if conditions else None,
+            )
+        )
+    return result
 
 
 async def cancel_subscription(

@@ -1,8 +1,9 @@
-﻿import uuid
+import uuid
 from datetime import datetime, UTC
 from enum import Enum
 from typing import Optional, Literal, List
-from sqlalchemy import BigInteger, Column, UniqueConstraint, DateTime
+from sqlalchemy import BigInteger, Column, UniqueConstraint, DateTime, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field, Relationship
 
 
@@ -168,6 +169,8 @@ class UserSubscription(SQLModel, table=True):
     expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
 
     tier: SubscriptionTier = Relationship(back_populates="user_subscriptions")
+
+
 class AccessCode(SQLModel, table=True):
 
     __tablename__ = "access_code"
@@ -222,3 +225,41 @@ class UserTierDiscount(SQLModel, table=True):
     access_code_id: Optional[uuid.UUID] = Field(default=None, foreign_key="access_code.id")
 
     access_code: Optional[AccessCode] = Relationship(back_populates="user_tier_discounts")
+
+
+class GeneralDiscount(SQLModel, table=True):
+    """
+    Platform-wide automatic discounts (first_purchase, seasonal, referral).
+    Evaluated at request time — no per-user row needed until checkout re-validation.
+    """
+    __tablename__ = "general_discount"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+
+    # Identifier shown to frontend / passed back at checkout
+    code: Optional[str] = Field(default=None, index=True, unique=True)  # e.g. "FIRST_PURCHASE"
+    type: str = Field(index=True)  # "first_purchase" | "seasonal" | "referral"
+
+    percent_off: int = Field(default=0)  # e.g. 20
+
+    # NULL → applies to all tiers; otherwise list of tier slugs/names e.g. ["basic", "pro"]
+    applies_to_tiers: Optional[list] = Field(
+        default=None, sa_column=Column(JSONB, nullable=True)
+    )
+
+    # Eligibility conditions evaluated server-side, e.g. {"no_prior_paid_sub": true}
+    conditions: Optional[dict] = Field(
+        default=None, sa_column=Column(JSONB, nullable=True)
+    )
+
+    starts_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+
+    is_active: bool = Field(default=True, index=True)
+    stackable: bool = Field(default=True)
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
+
+    __table_args__ = (
+        Index("ix_general_discount_active_type", "is_active", "type"),
+    )

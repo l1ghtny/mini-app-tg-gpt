@@ -27,6 +27,8 @@ class AppUser(SQLModel, table=True):
     campaign: Optional[str] = Field(default=None, index=True)
 
     default_prompt: str = Field(default="Ты помощник, готовый ответить на вопросы.")
+    default_text_model: str = Field(default="gpt-5.4-nano")
+    default_image_model: str = Field(default="gpt-image-1.5")
 
     conversations: List["Conversation"] = Relationship(back_populates="user")
     folders: List["ChatFolder"] = Relationship(back_populates="user")
@@ -125,6 +127,9 @@ class Conversation(SQLModel, table=True):
     last_openai_response_id: Optional[str] = Field(default=None, nullable=True, index=True)
     openai_chain_updated_at: Optional[datetime] = Field(default=None, nullable=True)
     openai_chain_context_fingerprint: Optional[str] = Field(default=None, nullable=True)
+    last_google_interaction_id: Optional[str] = Field(default=None, nullable=True, index=True)
+    google_chain_updated_at: Optional[datetime] = Field(default=None, nullable=True)
+    google_chain_context_fingerprint: Optional[str] = Field(default=None, nullable=True)
 
     updated_at: datetime = Field(
         default_factory=utcnow_naive,
