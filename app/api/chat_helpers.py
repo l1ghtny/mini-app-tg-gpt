@@ -38,6 +38,12 @@ from app.services.background.image_deriver import (
     ensure_openai_compatible_image_url,
     rewrite_message_image_url,
 )
+from app.services.model_registry import (
+    get_default_image_model_for_provider,
+    get_image_model_provider,
+    get_text_model_provider,
+    models_share_provider,
+)
 from app.services.streaming.test_idempotency import _choose_link_for_message
 from app.services.subscription_check.entitlements import (
     get_daily_text_count,
@@ -70,6 +76,38 @@ _RESERVED_NON_HISTORY_TOKENS = 6000
 _SUMMARY_MAX_OUTPUT_TOKENS = 2000
 _SUMMARY_REFRESH_MIN_NEW_TOKENS = 600
 _SUMMARY_MODEL = "gpt-5.4-nano"
+
+
+def _provider_mismatch_detail(*, model: str, image_model: str) -> dict[str, str]:
+    return {
+        "error": "provider_mismatch",
+        "message": "Text and image models must use the same provider.",
+        "model": model,
+        "model_provider": get_text_model_provider(model),
+        "image_model": image_model,
+        "image_model_provider": get_image_model_provider(image_model),
+    }
+
+
+def _validate_or_align_image_model(
+    *,
+    model: str,
+    image_model: str | None,
+    explicit_image_model: bool,
+) -> str:
+    if image_model is None:
+        return get_default_image_model_for_provider(get_text_model_provider(model))
+
+    if explicit_image_model and not models_share_provider(model, image_model):
+        raise HTTPException(
+            status_code=400,
+            detail=_provider_mismatch_detail(model=model, image_model=image_model),
+        )
+
+    if not explicit_image_model and not models_share_provider(model, image_model):
+        return get_default_image_model_for_provider(get_text_model_provider(model))
+
+    return image_model
 
 
 @dataclass(frozen=True)
@@ -117,6 +155,17 @@ async def handle_create_message(
         return existing_response
 
     conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
+
+    if get_text_model_provider(request.model) != "openai":
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": "provider_not_implemented",
+                "provider": get_text_model_provider(request.model),
+                "model": request.model,
+                "message": "Google model execution is not wired into the streaming backend yet.",
+            },
+        )
 
     (
         text_entitlement,
@@ -503,7 +552,18 @@ async def handle_update_conversation_settings(
     if request.model is not None:
         conversation.model = request.model
 
-    if request.image_model is not None:
+    if request.model is not None:
+        conversation.image_model = _validate_or_align_image_model(
+            model=request.model,
+            image_model=request.image_model if request.image_model is not None else conversation.image_model,
+            explicit_image_model=request.image_model is not None,
+        )
+    elif request.image_model is not None:
+        if not models_share_provider(conversation.model, request.image_model):
+            raise HTTPException(
+                status_code=400,
+                detail=_provider_mismatch_detail(model=conversation.model, image_model=request.image_model),
+            )
         conversation.image_model = request.image_model
 
     if request.image_quality is not None:
@@ -571,7 +631,7 @@ async def _check_entitlements(
     text_entitlement = await _require_text_entitlement(session, user, request.model)
     await _enforce_gpt52_safeguard(session, user, request.model)
 
-    image_model, image_quality = _resolve_image_settings(request, conversation)
+    image_model, image_quality = _resolve_image_settings(request, conversation, request.model)
     image_entitlement = await _require_image_entitlement(
         session,
         user.id,
@@ -921,8 +981,16 @@ async def _replace_message_content(
         ordinal += 1
 
 
-def _resolve_image_settings(request: NewMessageRequest, conversation: Conversation) -> tuple[str, str]:
-    image_model = request.image_model or conversation.image_model or "gpt-image-1.5"
+def _resolve_image_settings(
+    request: NewMessageRequest,
+    conversation: Conversation,
+    text_model: str,
+) -> tuple[str, str]:
+    image_model = _validate_or_align_image_model(
+        model=text_model,
+        image_model=request.image_model or conversation.image_model,
+        explicit_image_model=request.image_model is not None,
+    )
     image_quality = request.image_quality or conversation.image_quality or "low"
     return image_model, image_quality
 

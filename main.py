@@ -67,7 +67,7 @@ if settings.SENTRY_DSN:
         integrations=[
             OpenAIIntegration(
                 include_prompts=True,
-                # LLM/tokenizer inputs/outputs will be not sent to Sentry, despite send_default_pii=True
+                tiktoken_encoding_name="o200k_base"
             )],
         enable_logs=True,
         stream_gen_ai_spans=True,

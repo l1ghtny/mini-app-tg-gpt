@@ -259,12 +259,14 @@ def _build_status_event(
     label: str,
     source_event: str,
     event: Any,
+    status: str = "active",
     index: Optional[int] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "type": "status",
         "stage": stage,  # backwards compatible field
         "phase": phase,
+        "status": status,
         "label": label,
         "source_event": source_event,
         "sequence_number": getattr(event, "sequence_number", None),
@@ -347,7 +349,7 @@ async def _map_openai_event(
         out.append(
             _build_status_event(
                 stage="thinking",
-                phase="reasoning.in_progress",
+                phase="thinking",
                 label="Thinking",
                 source_event=et,
                 event=event,
@@ -360,7 +362,7 @@ async def _map_openai_event(
             out.append(
                 _build_status_event(
                     stage="thinking",
-                    phase="reasoning.in_progress",
+                    phase="thinking",
                     label="Thinking",
                     source_event=et,
                     event=event,
@@ -392,11 +394,12 @@ async def _map_openai_event(
         )
         out.append(
             _build_status_event(
-                stage="thinking.done",
-                phase="reasoning.completed",
+                stage="thinking",
+                phase="thinking",
                 label="Thinking complete",
                 source_event=et,
                 event=event,
+                status="done",
             )
         )
         return out

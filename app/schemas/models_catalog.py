@@ -16,6 +16,7 @@ class TextModelSupportsResponse(BaseModel):
     file_search: bool = False
     image_gen: bool = False
     reasoning: bool = False
+    thinking: bool = False
 
 
 class TextModelCatalogEntryResponse(BaseModel):

@@ -6,6 +6,7 @@ if ROOT not in sys.path:
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv(f"{ROOT}/.env.test", override=True)
 except Exception:
     pass
@@ -81,21 +82,53 @@ async def _seed_reference_data(engine) -> None:
         session.add(advanced)
         await session.flush()
 
-        session.add(TierModelLimit(tier_id=free.id, model_name="gpt-5.4-nano", monthly_requests=100))
-        session.add(TierModelLimit(tier_id=advanced.id, model_name="gpt-5.4-nano", monthly_requests=10000))
-        session.add(TierModelLimit(tier_id=free.id, model_name="gpt-5.5", monthly_requests=0))
-        session.add(TierModelLimit(tier_id=advanced.id, model_name="gpt-5.5", monthly_requests=0))
+        session.add(
+            TierModelLimit(
+                tier_id=free.id, model_name="gpt-5.4-nano", monthly_requests=100
+            )
+        )
+        session.add(
+            TierModelLimit(
+                tier_id=advanced.id, model_name="gpt-5.4-nano", monthly_requests=10000
+            )
+        )
+        session.add(
+            TierModelLimit(tier_id=free.id, model_name="gpt-5.5", monthly_requests=0)
+        )
+        session.add(
+            TierModelLimit(
+                tier_id=advanced.id, model_name="gpt-5.5", monthly_requests=0
+            )
+        )
 
-        session.add_all([
-            ImageQualityPricing(image_model="gpt-image-1.5", quality="low", credit_cost=10.0),
-            ImageQualityPricing(image_model="gpt-image-1.5", quality="medium", credit_cost=40.0),
-            ImageQualityPricing(image_model="gpt-image-1.5", quality="high", credit_cost=150.0),
-            ImageQualityPricing(image_model="gpt-image-1.5", quality="standard", credit_cost=1.0),
-            ImageQualityPricing(image_model="gpt-image-1.5", quality="auto", credit_cost=1.0),
-            ImageQualityPricing(image_model="gpt-image-2", quality="low", credit_cost=20.0),
-            ImageQualityPricing(image_model="gpt-image-2", quality="medium", credit_cost=60.0),
-            ImageQualityPricing(image_model="gpt-image-2", quality="high", credit_cost=250.0),
-        ])
+        session.add_all(
+            [
+                ImageQualityPricing(
+                    image_model="gpt-image-1.5", quality="low", credit_cost=10.0
+                ),
+                ImageQualityPricing(
+                    image_model="gpt-image-1.5", quality="medium", credit_cost=40.0
+                ),
+                ImageQualityPricing(
+                    image_model="gpt-image-1.5", quality="high", credit_cost=150.0
+                ),
+                ImageQualityPricing(
+                    image_model="gpt-image-1.5", quality="standard", credit_cost=1.0
+                ),
+                ImageQualityPricing(
+                    image_model="gpt-image-1.5", quality="auto", credit_cost=1.0
+                ),
+                ImageQualityPricing(
+                    image_model="gpt-image-2", quality="low", credit_cost=20.0
+                ),
+                ImageQualityPricing(
+                    image_model="gpt-image-2", quality="medium", credit_cost=60.0
+                ),
+                ImageQualityPricing(
+                    image_model="gpt-image-2", quality="high", credit_cost=250.0
+                ),
+            ]
+        )
         await session.commit()
 
 

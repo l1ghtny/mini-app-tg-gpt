@@ -48,6 +48,7 @@ def _normalize_supports(value: Any) -> TextModelSupportsResponse:
         file_search=bool(value.get("file_search", False)),
         image_gen=bool(value.get("image_gen", False)),
         reasoning=bool(value.get("reasoning", False)),
+        thinking=bool(value.get("thinking", False)),
     )
 
 

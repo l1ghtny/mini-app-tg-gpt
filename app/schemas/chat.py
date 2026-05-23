@@ -3,8 +3,10 @@ from typing import List, Literal, Optional, Iterable, Union
 
 from pydantic import BaseModel, ConfigDict
 
-AllowedModels = Literal["gpt-5.5", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
-AllowedImageModels = Literal["gpt-image-1.5", "gpt-image-2"]
+from app.services.model_registry import ImageModelName, TextModelName
+
+AllowedModels = TextModelName
+AllowedImageModels = ImageModelName
 AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter", "auto"]
 
 
@@ -71,6 +73,8 @@ class NewMessageRequest(BaseModel):
     tool_choice: Optional[Union[AllowedToolChoices, List]] = "auto"
     image_model: Optional[AllowedImageModels] = None
     image_quality: Optional[ImageQualitySetting] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
 
 
 class EditMessageRequest(BaseModel):
