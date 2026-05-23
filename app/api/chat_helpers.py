@@ -39,6 +39,7 @@ from app.services.background.image_deriver import (
     rewrite_message_image_url,
 )
 from app.services.model_registry import (
+    GOOGLE_THINKING_MODELS,
     get_default_image_model_for_provider,
     get_image_model_provider,
     get_text_model_provider,
@@ -156,17 +157,6 @@ async def handle_create_message(
 
     conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
 
-    if get_text_model_provider(request.model) != "openai":
-        raise HTTPException(
-            status_code=501,
-            detail={
-                "error": "provider_not_implemented",
-                "provider": get_text_model_provider(request.model),
-                "model": request.model,
-                "message": "Google model execution is not wired into the streaming backend yet.",
-            },
-        )
-
     (
         text_entitlement,
         image_entitlement,
@@ -282,6 +272,8 @@ async def handle_create_message(
         chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
+        thinking_enabled=request.thinking,
+        reasoning_effort=request.reasoning_effort,
     )
     await _track_message_metrics(session, background_tasks, current_user, request.model)
 
@@ -650,11 +642,41 @@ async def _check_entitlements(
         )
 
     vector_store_ids = await list_conversation_ready_vector_store_ids(session, conversation.id)
+    model_provider = get_text_model_provider(request.model)
+    if _is_file_search_requested(request.tool_choice) and model_provider != "openai":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "file_search_not_supported_for_provider",
+                "provider": model_provider,
+                "model": request.model,
+                "message": "File search is currently only supported for OpenAI models.",
+            },
+        )
+
+    if request.thinking is not None and request.model not in GOOGLE_THINKING_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "thinking_not_supported_for_model",
+                "model": request.model,
+            },
+        )
+    if request.reasoning_effort is not None and request.model not in GOOGLE_THINKING_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "reasoning_effort_not_supported_for_model",
+                "model": request.model,
+            },
+        )
+
     tools = await _build_tools(
         image_entitlement.allowed,
         image_model,
         image_quality,
         vector_store_ids=vector_store_ids,
+        provider=model_provider,
     )
 
     if _is_image_generation_requested(request.tool_choice) and not image_entitlement.allowed:
@@ -1041,12 +1063,14 @@ async def _build_tools(
     image_model: str,
     image_quality: str,
     vector_store_ids: list[str] | None = None,
+    provider: str = "openai",
 ):
     return await create_tools_list(
         image_allowed,
         image_model=image_model,
         image_quality=image_quality,
         vector_store_ids=vector_store_ids,
+        provider=provider,
     )
 
 
@@ -1438,6 +1462,8 @@ def _queue_generation(
     chain_context_fingerprint: Optional[str],
     image_entitlement_tier_id: Optional[uuid.UUID],
     image_entitlement_pack_id: Optional[uuid.UUID],
+    thinking_enabled: Optional[bool],
+    reasoning_effort: Optional[str],
 ) -> None:
     background_tasks.add_task(
         generate_and_publish,
@@ -1456,6 +1482,8 @@ def _queue_generation(
         chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement_tier_id,
         image_entitlement_pack_id=image_entitlement_pack_id,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=reasoning_effort,
     )
 
 

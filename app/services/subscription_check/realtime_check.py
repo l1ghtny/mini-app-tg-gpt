@@ -14,10 +14,11 @@ async def create_tools_list(
     image_model: str = "gpt-image-1-mini",
     image_quality: str | None = None,
     vector_store_ids: list[str] | None = None,
+    provider: str = "openai",
 ):
     base_tools = [WebSearchTool(type="web_search")]
 
-    if vector_store_ids:
+    if vector_store_ids and provider == "openai":
         base_tools.append(
             FileSearchToolParam(type="file_search", vector_store_ids=vector_store_ids)
         )
@@ -35,4 +36,3 @@ async def create_tools_list(
         )
 
     return base_tools
-

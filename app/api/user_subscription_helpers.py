@@ -8,11 +8,12 @@ from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.metrics import track_event
-from app.db.models import PaymentMethod
-from app.db.subscription_tiers import SubscriptionStatus, UserSubscription
+from app.db.models import Payment, PaymentMethod, PaymentProductType
+from app.db.subscription_tiers import SubscriptionStatus, SubscriptionTier, UserSubscription, UserTierDiscount
 from app.schemas.subscriptions import (
     ActiveSubscriptionsResponse,
     CancelSubscriptionResponse,
+    SubscriptionDiscountResponse,
     SubscriptionResponse,
 )
 from app.services.subscription_check.entitlements import get_current_subscription
@@ -72,6 +73,9 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
     if not subscriptions:
         raise HTTPException(status_code=403, detail="No active subscription found")
 
+    discounts = await _load_active_discounts(session, user.id)
+    first_purchase_available = await _first_purchase_available(session, user.id)
+
     ordered = sorted(subscriptions, key=_subscription_priority_key, reverse=True)
     active_subscriptions: list[SubscriptionResponse] = []
     for sub in ordered:
@@ -107,7 +111,51 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
     return ActiveSubscriptionsResponse(
         active_subscriptions=active_subscriptions,
         primary_subscription_id=str(ordered[0].id),
+        discounts=discounts,
+        first_purchase_available=first_purchase_available,
     )
+
+
+async def _load_active_discounts(
+    session: AsyncSession,
+    user_id,
+) -> list[SubscriptionDiscountResponse]:
+    query = (
+        select(UserTierDiscount, SubscriptionTier)
+        .join(SubscriptionTier, UserTierDiscount.tier_id == SubscriptionTier.id)
+        .where(
+            UserTierDiscount.user_id == user_id,
+            UserTierDiscount.valid_until > func.now(),
+        )
+        .options(selectinload(UserTierDiscount.access_code))
+    )
+    rows = (await session.exec(query)).all()
+
+    discounts: list[SubscriptionDiscountResponse] = []
+    for discount, tier in rows:
+        code = discount.access_code.code if getattr(discount, "access_code", None) else None
+        discounts.append(
+            SubscriptionDiscountResponse(
+                code=code,
+                percent_off=int(discount.discount_percent or 0),
+                applies_to=[_tier_slug(tier.name)],
+                expires_at=_format_ts(discount.valid_until),
+                stackable=True,
+            )
+        )
+    return discounts
+
+
+async def _first_purchase_available(session: AsyncSession, user_id) -> bool:
+    existing_paid_subscription = await session.exec(
+        select(Payment.id).where(
+            Payment.user_id == user_id,
+            Payment.product_type == PaymentProductType.subscription,
+            Payment.amount > 0,
+            Payment.tbank_status == "CONFIRMED",
+        )
+    )
+    return existing_paid_subscription.first() is None
 
 
 async def cancel_subscription(

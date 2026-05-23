@@ -7,8 +7,14 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.user_subscription import get_active_subscription
-from app.db.models import AppUser
-from app.db.subscription_tiers import SubscriptionTier, UserSubscription, SubscriptionStatus
+from app.db.models import AppUser, Payment, PaymentProductType
+from app.db.subscription_tiers import (
+    AccessCode,
+    SubscriptionTier,
+    SubscriptionStatus,
+    UserSubscription,
+    UserTierDiscount,
+)
 
 
 @pytest.mark.asyncio
@@ -129,3 +135,73 @@ async def test_active_subscription_recurring_without_expiry_gets_fallback_expiry
     assert result.active_subscriptions[0].tier_rank == 10
     assert result.active_subscriptions[0].expires_at is not None
     assert datetime.fromisoformat(result.active_subscriptions[0].expires_at)
+
+
+@pytest.mark.asyncio
+async def test_active_subscription_includes_discounts_and_first_purchase_flag():
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=721000004)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        tier_name = f"starter-{uuid.uuid4()}"
+        tier = SubscriptionTier(
+            name=tier_name,
+            name_ru=tier_name,
+            description="starter",
+            description_ru="starter",
+            price_cents=0,
+            index=1,
+            is_recurring=False,
+        )
+        session.add(tier)
+        await session.commit()
+        await session.refresh(tier)
+
+        session.add(
+            UserSubscription(
+                user_id=user.id,
+                tier_id=tier.id,
+                status=SubscriptionStatus.active,
+                started_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1),
+            )
+        )
+        access_code = AccessCode(code=f"DISC-{uuid.uuid4()}", tier_id=tier.id)
+        session.add(access_code)
+        await session.commit()
+        await session.refresh(access_code)
+
+        session.add(
+            UserTierDiscount(
+                user_id=user.id,
+                tier_id=tier.id,
+                discount_percent=25,
+                valid_until=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=7),
+                access_code_id=access_code.id,
+            )
+        )
+        session.add(
+            Payment(
+                user_id=user.id,
+                tier_name=tier.name,
+                product_type=PaymentProductType.subscription,
+                amount=1000,
+                tbank_status="CONFIRMED",
+            )
+        )
+        await session.commit()
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        result = await get_active_subscription(session=session, user=user)
+
+    assert result.first_purchase_available is False
+    assert len(result.discounts) == 1
+    assert result.discounts[0].percent_off == 25
+    assert result.discounts[0].stackable is True
+    assert result.discounts[0].code is not None
+    assert result.discounts[0].applies_to == [tier_name]

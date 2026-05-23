@@ -18,7 +18,7 @@ from app.r2.methods import delete_object, put_bytes
 from app.r2.settings import Settings
 from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
-from app.services.openai_service import stream_normalized_openai_response
+from app.services.ai_service import stream_normalized_ai_response
 from app.db.database import engine
 from app.services.subscription_check.entitlements import reserve_request, finalize_request
 from app.services.subscription_check.pacing import get_image_quality_cost
@@ -50,6 +50,8 @@ async def generate_and_publish(
         image_entitlement_tier_id: Optional[uuid.UUID] = None,
         image_entitlement_pack_id: Optional[uuid.UUID] = None,
         fallback_history_for_openai: Optional[list] = None,
+        thinking_enabled: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
 ):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         buffers: dict[int, str] = {}
@@ -66,7 +68,7 @@ async def generate_and_publish(
         try:
             await bus.publish(assistant_message_id_str, {"type": "start"})
 
-            async for ev in stream_normalized_openai_response(
+            async for ev in stream_normalized_ai_response(
                     history_for_openai,
                     model,
                     instructions=instructions,
@@ -77,6 +79,8 @@ async def generate_and_publish(
                     request_id=request_id,
                     previous_response_id=previous_response_id,
                     fallback_messages=fallback_history_for_openai,
+                    thinking_enabled=thinking_enabled,
+                    reasoning_effort=reasoning_effort,
             ):
                 if ev.get("type") not in {"image.partial", "image.ready", "response.meta"}:
                     await bus.publish(assistant_message_id_str, ev)

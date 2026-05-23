@@ -23,9 +23,19 @@ class SubscriptionResponse(BaseModel):
     tier_id: str
 
 
+class SubscriptionDiscountResponse(BaseModel):
+    code: Optional[str] = None
+    percent_off: int
+    applies_to: list[str] = []
+    expires_at: Optional[str] = None
+    stackable: bool = True
+
+
 class ActiveSubscriptionsResponse(BaseModel):
     active_subscriptions: List[SubscriptionResponse]
     primary_subscription_id: Optional[str] = None
+    discounts: List[SubscriptionDiscountResponse] = []
+    first_purchase_available: bool = False
 
 
 class TierMonthlyLimits(BaseModel):
