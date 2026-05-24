@@ -20,6 +20,7 @@ from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
 from app.services.ai_service import stream_normalized_ai_response
 from app.db.database import engine
+from app.services.model_registry import get_image_model_provider
 from app.services.subscription_check.entitlements import reserve_request, finalize_request
 from app.services.subscription_check.pacing import get_image_quality_cost
 
@@ -192,8 +193,13 @@ async def _handle_stream_event(
         })
 
         image_model = _extract_image_model_name(tools) or "unknown"
-        image_quality = _extract_image_quality(tools) or "low"
-        image_cost = await get_image_quality_cost(session, image_model, image_quality)
+        image_provider = get_image_model_provider(image_model) if image_model != "unknown" else "openai"
+        image_option_value = (
+            (_extract_image_size(tools) or "1k")
+            if image_provider == "google"
+            else (_extract_image_quality(tools) or "low")
+        )
+        image_cost = await get_image_quality_cost(session, image_model, image_option_value)
         await update_request_ledger_image(
             session,
             request_id,
@@ -310,6 +316,10 @@ def _extract_image_model_name(
         return None
 
     for tool in tools:
+        if isinstance(tool, dict):
+            if str(tool.get("type") or "").strip().lower() == "image_generation":
+                return tool.get("model")
+            continue
         if isinstance(tool, ImageGeneration):
             return getattr(tool, "model", None)
 
@@ -323,8 +333,25 @@ def _extract_image_quality(
         return None
 
     for tool in tools:
+        if isinstance(tool, dict):
+            if str(tool.get("type") or "").strip().lower() == "image_generation":
+                return tool.get("quality")
+            continue
         if isinstance(tool, ImageGeneration):
             return getattr(tool, "quality", None)
+
+    return None
+
+
+def _extract_image_size(
+        tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
+) -> Optional[str]:
+    if not tools:
+        return None
+
+    for tool in tools:
+        if isinstance(tool, dict) and str(tool.get("type") or "").strip().lower() == "image_generation":
+            return tool.get("image_size")
 
     return None
 

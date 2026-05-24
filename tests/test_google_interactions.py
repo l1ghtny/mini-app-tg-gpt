@@ -116,6 +116,7 @@ async def test_google_interactions_stream_normalization(monkeypatch):
         user_id=user.id,
         conversation_id=conversation.id,
         request_id=str(uuid.uuid4()),
+        assistant_message_id=None,
     ):
         events.append(event)
         

@@ -20,6 +20,7 @@ def build_chain_context_fingerprint(
     ledger_tool_choice: str,
     image_model: str,
     image_quality: str,
+    image_size: str,
     tools: list[Any],
     extract_tool_type: Any,
 ) -> str:
@@ -30,6 +31,7 @@ def build_chain_context_fingerprint(
         "ledger_tool_choice": ledger_tool_choice or "auto",
         "image_model": image_model or "",
         "image_quality": image_quality or "",
+        "image_size": image_size or "",
         "tool_types": tool_types,
     }
     raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -72,4 +74,3 @@ def invalidate_openai_chain_state(conversation: Conversation) -> None:
     conversation.last_openai_response_id = None
     conversation.openai_chain_updated_at = None
     conversation.openai_chain_context_fingerprint = None
-

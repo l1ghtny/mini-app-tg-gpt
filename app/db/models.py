@@ -29,6 +29,7 @@ class AppUser(SQLModel, table=True):
     default_prompt: str = Field(default="Ты помощник, готовый ответить на вопросы.")
     default_text_model: str = Field(default="gpt-5.4-nano")
     default_image_model: str = Field(default="gpt-image-1.5")
+    default_thinking: bool = Field(default=True)
 
     conversations: List["Conversation"] = Relationship(back_populates="user")
     folders: List["ChatFolder"] = Relationship(back_populates="user")
@@ -142,6 +143,8 @@ class Conversation(SQLModel, table=True):
     model: str = Field(default="gpt-5.4-nano")
     image_model: str = Field(default="gpt-image-1.5", nullable=True)
     image_quality: str = Field(default="low") # low, medium, high
+    image_size: str = Field(default="1k")  # 512, 1k, 2k
+    thinking: bool = Field(default=True)
     history_summary: Optional[str] = Field(default=None, nullable=True)
     history_summary_up_to_message_id: Optional[uuid.UUID] = Field(default=None, nullable=True)
     history_summary_updated_at: Optional[datetime] = Field(default=None, nullable=True)

@@ -29,6 +29,7 @@ def test_resolve_image_settings_aligns_provider_and_rejects_explicit_mismatch():
         model="gpt-5.4-nano",
         image_model="gpt-image-1.5",
         image_quality="low",
+        image_size="1k",
     )
     request = NewMessageRequest(
         client_request_id=str(uuid.uuid4()),
@@ -36,12 +37,14 @@ def test_resolve_image_settings_aligns_provider_and_rejects_explicit_mismatch():
         content=[MessageContent(type="text", value="hello")],
         model="gemini-3.1-flash-lite",
         tool_choice="auto",
+        image_size="1k",
     )
 
-    image_model, image_quality = _resolve_image_settings(request, conversation, request.model)
+    image_model, image_quality, image_size = _resolve_image_settings(request, conversation, request.model)
 
     assert image_model == "gemini-2.5-flash-image"
-    assert image_quality == "low"
+    assert image_quality == ""
+    assert image_size == "1k"
 
     mismatch_request = NewMessageRequest(
         client_request_id=str(uuid.uuid4()),

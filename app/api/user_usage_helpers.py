@@ -30,6 +30,19 @@ def _daily_energy_from_entitlement(ent: dict) -> int:
     return int(ent.get("daily_image_energy") or 0)
 
 
+def _image_option_sort_key(option: str) -> tuple[int, str]:
+    normalized = (option or "").strip().lower()
+    order = {
+        "512": 0,
+        "1k": 1,
+        "2k": 2,
+        "low": 10,
+        "medium": 11,
+        "high": 12,
+    }
+    return order.get(normalized, 100), normalized
+
+
 async def get_text_usage(session: AsyncSession, user) -> UserTextUsageResponse:
     subscriptions = await get_active_subscriptions(session, user.id)
     packs = await get_active_usage_packs(session, user.id)
@@ -130,9 +143,8 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
         entitlements = breakdown["entitlements"]
         total_remaining_credits = breakdown["total_remaining_credits"]
 
-        # All image qualities are universally available; energy is the sole limiter.
-        qualities = []
-        for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: p.quality):
+        resolutions = []
+        for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: _image_option_sort_key(p.quality)):
             cost = pricing.credit_cost or 1.0
             if total_remaining_credits == -1:
                 remaining = -1
@@ -182,8 +194,9 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                     "pacing": pacing,
                 })
 
-            qualities.append({
-                "quality": pricing.quality,
+            resolution = pricing.quality
+            resolutions.append({
+                "resolution": resolution,
                 "credit_cost": pricing.credit_cost,
                 "description": pricing.description,
                 "remaining": remaining if remaining == -1 else max(0, remaining),
@@ -195,7 +208,7 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
             "model": image_model,
             "entitlements": entitlements,
             "total_remaining_credits": total_remaining_credits,
-            "qualities": qualities,
+            "resolutions": resolutions,
         })
 
     return UserImageUsageResponse(status="active", models=models)

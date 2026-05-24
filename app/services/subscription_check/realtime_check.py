@@ -13,6 +13,7 @@ async def create_tools_list(
     image_allowed: bool,
     image_model: str = "gpt-image-1-mini",
     image_quality: str | None = None,
+    image_size: str | None = None,
     vector_store_ids: list[str] | None = None,
     provider: str = "openai",
 ):
@@ -24,15 +25,25 @@ async def create_tools_list(
         )
 
     if image_allowed:
-        quality = image_quality or ("auto" if image_model == "gpt-image-1.5" else "medium")
-        base_tools.append(
-            ImageGeneration(
-                type="image_generation",
-                model=image_model,
-                quality=quality,
-                moderation="low",
-                partial_images=2,
+        if provider == "google":
+            base_tools.append(
+                {
+                    "type": "image_generation",
+                    "model": image_model,
+                    "image_size": image_size or "1k",
+                    "moderation": "low",
+                }
             )
-        )
+        else:
+            quality = image_quality or ("auto" if image_model == "gpt-image-1.5" else "medium")
+            base_tools.append(
+                ImageGeneration(
+                    type="image_generation",
+                    model=image_model,
+                    quality=quality,
+                    moderation="low",
+                    partial_images=2,
+                )
+            )
 
     return base_tools

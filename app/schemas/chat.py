@@ -11,6 +11,7 @@ AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "c
 
 
 ImageQualitySetting = Literal["low", "medium", "high"]
+ImageSizeSetting = Literal["512", "1k", "2k"]
 
 
 class TextContent(BaseModel):
@@ -74,6 +75,7 @@ class NewMessageRequest(BaseModel):
     tool_choice: Optional[Union[AllowedToolChoices, List]] = "auto"
     image_model: Optional[AllowedImageModels] = None
     image_quality: Optional[ImageQualitySetting] = None
+    image_size: Optional[ImageSizeSetting] = None
     thinking: Optional[bool] = None
     reasoning_effort: Optional[str] = None
 
@@ -89,6 +91,8 @@ class UpdateConversationSettingsRequest(BaseModel):
     image_model: Optional[AllowedImageModels] = None
     tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
     image_quality: Optional[ImageQualitySetting] = None
+    image_size: Optional[ImageSizeSetting] = None
+    thinking: Optional[bool] = None
 
 
 class ConversationInfo(BaseModel):
@@ -98,6 +102,8 @@ class ConversationInfo(BaseModel):
     folder_id: Optional[uuid.UUID] = None
     tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
     image_quality: ImageQualitySetting
+    image_size: ImageSizeSetting
+    thinking: bool = True
 
 
 class MessageCreated(BaseModel):

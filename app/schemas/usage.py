@@ -86,8 +86,8 @@ class ImageSourceUsage(BaseModel):
     pacing: Optional[ImagePacing] = None
 
 
-class ImageQualityUsage(BaseModel):
-    quality: str
+class ImageResolutionUsage(BaseModel):
+    resolution: str
     credit_cost: float
     description: Optional[str] = None
     remaining: int
@@ -99,7 +99,7 @@ class ImageModelUsage(BaseModel):
     model: str
     entitlements: list[ImageEntitlementEntry] = []
     total_remaining_credits: float
-    qualities: list[ImageQualityUsage] = []
+    resolutions: list[ImageResolutionUsage] = []
 
 
 class UserImageUsageResponse(BaseModel):

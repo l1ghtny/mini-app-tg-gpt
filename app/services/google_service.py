@@ -38,10 +38,12 @@ def _extract_tool_type(tool: Any) -> str | None:
 
 def _extract_image_tool(
     tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
-) -> ImageGeneration | None:
+) -> ImageGeneration | dict[str, Any] | None:
     if not tools:
         return None
     for tool in tools:
+        if isinstance(tool, dict) and str(tool.get("type") or "").strip().lower() == "image_generation":
+            return tool
         if isinstance(tool, ImageGeneration):
             return tool
     return None
@@ -146,6 +148,7 @@ def _generation_config_for_request(
     model: str,
     thinking_enabled: bool | None,
     reasoning_effort: str | None,
+    image_size: str | None = None,
 ) -> dict[str, Any]:
     config = {}
     if model not in GOOGLE_THINKING_MODELS and not reasoning_effort and not thinking_enabled:
@@ -165,6 +168,13 @@ def _generation_config_for_request(
 
     if thinking_enabled or reasoning_effort:
         config["thinking_summaries"] = "auto"
+
+    normalized_size = (image_size or "").strip().lower()
+    if normalized_size:
+        size_map = {"512": "512", "1k": "1K", "2k": "2K"}
+        mapped_size = size_map.get(normalized_size)
+        if mapped_size:
+            config["image_config"] = {"image_size": mapped_size}
 
     return config
 
@@ -196,8 +206,13 @@ async def stream_normalized_google_response(
     enabled_web_search = _has_tool(tools, "web_search")
     image_tool = _extract_image_tool(tools)
     request_model = model
+    image_size = None
     if image_tool and _tool_choice_explicitly_requests_image_generation(tool_choice):
-        request_model = getattr(image_tool, "model", None) or model
+        if isinstance(image_tool, dict):
+            request_model = image_tool.get("model") or model
+            image_size = image_tool.get("image_size")
+        else:
+            request_model = getattr(image_tool, "model", None) or model
 
     yield {
         "type": "status",
@@ -219,6 +234,7 @@ async def stream_normalized_google_response(
         model=model,
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
+        image_size=image_size,
     )
 
     tools_payload = []
