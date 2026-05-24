@@ -130,6 +130,7 @@ def _build_responses_create_kwargs(
     instructions: str | None = None,
     stream: bool = False,
     reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = None,
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     previous_response_id: str | None = None,
     max_output_tokens: int | None = None,
     text_format: dict[str, Any] | None = None,
@@ -151,8 +152,13 @@ def _build_responses_create_kwargs(
     if stream:
         kwargs["stream"] = True
         kwargs["service_tier"] = "default"
-    if reasoning_summary:
-        kwargs["reasoning"] = {"summary": reasoning_summary}
+    if reasoning_summary or reasoning_effort:
+        reasoning_cfg: Dict[str, Any] = {}
+        if reasoning_summary:
+            reasoning_cfg["summary"] = reasoning_summary
+        if reasoning_effort:
+            reasoning_cfg["effort"] = reasoning_effort
+        kwargs["reasoning"] = reasoning_cfg
     if previous_response_id:
         kwargs["previous_response_id"] = previous_response_id
     if max_output_tokens is not None:
@@ -358,7 +364,7 @@ async def _map_openai_event(
         )
         return out
 
-    if et == "response.reasoning_summary_text.delta":
+    if et in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
         if not state.reasoning_started:
             out.append(
                 _build_status_event(
@@ -383,7 +389,7 @@ async def _map_openai_event(
         )
         return out
 
-    if et == "response.reasoning_summary_text.done":
+    if et in {"response.reasoning_summary_text.done", "response.reasoning_text.done"}:
         out.append(
             {
                 "type": "reasoning.summary.done",
@@ -562,6 +568,15 @@ async def _map_openai_event(
         )
         if response_id:
             out.append({"type": "response.meta", "response_id": response_id})
+        out.append(
+            {
+                "type": "usage",
+                "provider": "openai",
+                "reasoning_tokens": usage.reasoning_tokens,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            }
+        )
         out.append({"type": "done"})
         return out
 
@@ -592,7 +607,8 @@ async def stream_normalized_openai_response(
     conversation_id: Optional[uuid.UUID] = None,
     request_id: Optional[str] = None,
     assistant_message_id: Optional[uuid.UUID] = None,
-    reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "concise",
+    reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "auto",
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     previous_response_id: Optional[str] = None,
     fallback_messages: Optional[List["Message"]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -628,6 +644,7 @@ async def stream_normalized_openai_response(
                     instructions=(instructions or "") + STYLE_GUIDE,
                     stream=True,
                     reasoning_summary=reasoning_summary,
+                    reasoning_effort=reasoning_effort,
                     metadata=request_metadata,
                     previous_response_id=active_previous_response_id,
                 )
@@ -712,6 +729,7 @@ async def stream_normalized_openai_response(
                         instructions=(instructions or "") + STYLE_GUIDE,
                         stream=True,
                         reasoning_summary=reasoning_summary,
+                        reasoning_effort=reasoning_effort,
                         metadata=request_metadata,
                         previous_response_id=active_previous_response_id,
                     )

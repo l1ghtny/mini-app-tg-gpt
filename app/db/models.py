@@ -98,6 +98,27 @@ class UserPersonalization(SQLModel, table=True):
     updated_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True))
 
 
+class ChatStarterSuggestion(SQLModel, table=True):
+    __tablename__ = "chat_starter_suggestion"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    language: str = Field(index=True)  # en | ru
+    text: str
+    is_active: bool = Field(default=True, index=True)
+    sort_index: int = Field(default=0)
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    __table_args__ = (
+        CheckConstraint(
+            "language IN ('en','ru')",
+            name="ck_chat_starter_suggestion_language",
+        ),
+        UniqueConstraint("language", "text", name="uq_chat_starter_suggestion_language_text"),
+        Index("ix_chat_starter_suggestion_active_lang", "is_active", "language"),
+    )
+
+
 class ChatFolder(SQLModel, table=True):
     __tablename__ = "chat_folder"
 
