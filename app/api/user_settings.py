@@ -35,6 +35,7 @@ async def get_user_settings(
     return UserSettingsResponse(
         default_text_model=current_user.default_text_model or "gpt-5.4-nano",
         default_image_model=current_user.default_image_model or "gpt-image-1.5",
+        default_thinking=bool(getattr(current_user, "default_thinking", True)),
     )
 
 
@@ -64,6 +65,8 @@ async def update_user_settings(
 
     current_user.default_text_model = text_model
     current_user.default_image_model = image_model
+    if request.default_thinking is not None:
+        current_user.default_thinking = bool(request.default_thinking)
 
     session.add(current_user)
     await session.commit()
@@ -72,4 +75,5 @@ async def update_user_settings(
     return UserSettingsResponse(
         default_text_model=current_user.default_text_model,
         default_image_model=current_user.default_image_model,
+        default_thinking=bool(getattr(current_user, "default_thinking", True)),
     )

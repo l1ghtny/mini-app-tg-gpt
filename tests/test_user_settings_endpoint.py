@@ -16,6 +16,7 @@ async def _create_user(session: AsyncSession, telegram_id: int) -> AppUser:
         telegram_id=telegram_id,
         default_text_model="gpt-5.4-nano",
         default_image_model="gpt-image-1.5",
+        default_thinking=True,
     )
     session.add(user)
     await session.commit()
@@ -54,6 +55,7 @@ async def test_user_settings_get_and_put():
         payload = response.json()
         assert payload["default_text_model"] == "gpt-5.4-nano"
         assert payload["default_image_model"] == "gpt-image-1.5"
+        assert payload["default_thinking"] is True
 
         # 2. Put text model change only (should coerce image model to google default)
         response = await client.put(
@@ -89,5 +91,14 @@ async def test_user_settings_get_and_put():
         payload = response.json()
         assert payload["default_text_model"] == "gpt-5.5"
         assert payload["default_image_model"] == "gpt-image-2"
+
+        # 5. Update default thinking and verify persistence
+        response = await client.put(
+            "/api/v1/user/settings",
+            json={"default_thinking": False}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["default_thinking"] is False
 
     await engine.dispose()

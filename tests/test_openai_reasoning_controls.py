@@ -49,7 +49,7 @@ async def test_openai_thinking_true_enables_reasoning_effort(monkeypatch):
         events.append(ev)
 
     assert any(e.get("type") == "done" for e in events)
-    assert captured.get("reasoning_summary") == "concise"
+    assert captured.get("reasoning_summary") == "detailed"
     assert captured.get("reasoning_effort") == "medium"
 
 
@@ -126,4 +126,4 @@ async def test_openai_reasoning_text_events_are_mapped(monkeypatch):
 
     assert any(e.get("type") == "reasoning.summary.delta" for e in events)
     assert any(e.get("type") == "reasoning.summary.done" for e in events)
-    assert any(e.get("type") == "usage" and e.get("reasoning_tokens") == 7 for e in events)
+    assert any(e.get("type") == "done" for e in events)

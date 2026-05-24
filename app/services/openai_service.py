@@ -568,15 +568,6 @@ async def _map_openai_event(
         )
         if response_id:
             out.append({"type": "response.meta", "response_id": response_id})
-        out.append(
-            {
-                "type": "usage",
-                "provider": "openai",
-                "reasoning_tokens": usage.reasoning_tokens,
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-            }
-        )
         out.append({"type": "done"})
         return out
 

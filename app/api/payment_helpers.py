@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+import re
 
 from dateutil.relativedelta import relativedelta
 from fastapi import BackgroundTasks, HTTPException, Response
@@ -10,6 +11,7 @@ from app.core.config import settings
 from app.core.metrics import track_event, track_value
 from app.db.models import Payment, PaymentMethod, PaymentProductType, AppUser, PaymentMethodType
 from app.db.subscription_tiers import (
+    GeneralDiscount,
     SubscriptionStatus,
     SubscriptionTier,
     UsagePack,
@@ -29,6 +31,72 @@ from app.services.banking.tbank import tbank_service
 logger = settings.custom_logger
 
 
+def _tier_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return slug or "tier"
+
+
+async def _first_purchase_available(session: AsyncSession, user_id: uuid.UUID) -> bool:
+    existing_paid_subscription = await session.exec(
+        select(Payment.id).where(
+            Payment.user_id == user_id,
+            Payment.product_type == PaymentProductType.subscription,
+            Payment.amount > 0,
+            Payment.tbank_status == "CONFIRMED",
+        )
+    )
+    return existing_paid_subscription.first() is None
+
+
+async def _eligible_general_discounts_for_tier(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    tier: SubscriptionTier,
+) -> list[GeneralDiscount]:
+    now = datetime.utcnow()
+    rows = (await session.exec(
+        select(GeneralDiscount).where(
+            GeneralDiscount.is_active == True,  # noqa: E712
+            (GeneralDiscount.starts_at.is_(None)) | (GeneralDiscount.starts_at <= now),
+            (GeneralDiscount.expires_at.is_(None)) | (GeneralDiscount.expires_at > now),
+        )
+    )).all()
+
+    tier_slug = _tier_slug(tier.name)
+    first_purchase_available = await _first_purchase_available(session, user_id)
+    eligible: list[GeneralDiscount] = []
+    for gd in rows:
+        applies_to = gd.applies_to_tiers or ["all"]
+        applies_norm = {str(item).strip().lower() for item in applies_to}
+        if "all" not in applies_norm and tier_slug.lower() not in applies_norm:
+            continue
+
+        conditions = gd.conditions or {}
+        if conditions.get("no_prior_paid_sub") and not first_purchase_available:
+            continue
+
+        eligible.append(gd)
+    return eligible
+
+
+def _apply_discount_stack(base_amount_cents: int, discounts: list[GeneralDiscount]) -> int:
+    amount = float(base_amount_cents)
+    if not discounts:
+        return int(round(amount))
+
+    any_non_stackable = any(not d.stackable for d in discounts)
+    if any_non_stackable:
+        best = max(discounts, key=lambda d: int(d.percent_off or 0))
+        pct = max(0, min(100, int(best.percent_off or 0)))
+        return int(round(amount * (1 - pct / 100)))
+
+    for d in discounts:
+        pct = max(0, min(100, int(d.percent_off or 0)))
+        amount *= (1 - pct / 100)
+    return int(round(amount))
+
+
 async def init_subscription_payment(
     session: AsyncSession,
     user,
@@ -42,7 +110,24 @@ async def init_subscription_payment(
     if not tier:
         raise HTTPException(status_code=404, detail="Tier not found")
 
-    amount_cents = int(tier.price_cents * 100)
+    base_amount_cents = int(tier.price_cents * 100)
+    requested_codes = {c.strip().lower() for c in (payload.discount_codes or []) if str(c).strip()}
+    eligible_discounts = await _eligible_general_discounts_for_tier(
+        session,
+        user_id=user.id,
+        tier=tier,
+    )
+    if requested_codes:
+        selected_discounts = [
+            d for d in eligible_discounts
+            if d.code and d.code.strip().lower() in requested_codes
+        ]
+    else:
+        selected_discounts = eligible_discounts
+
+    amount_cents = _apply_discount_stack(base_amount_cents, selected_discounts)
+    applied_codes = [d.code for d in selected_discounts if d.code]
+    discount_amount_cents = max(0, base_amount_cents - amount_cents)
 
     payment = Payment(
         user_id=user.id,
@@ -86,6 +171,15 @@ async def init_subscription_payment(
             recurrent="Y",
             receipt=receipt_data,
         )
+
+        if applied_codes:
+            logger.info(
+                "Applied subscription discounts user_id=%s tier=%s codes=%s discount_cents=%s",
+                user.id,
+                tier.name,
+                ",".join(applied_codes),
+                discount_amount_cents,
+            )
 
         payment.tbank_payment_id = tbank_id
         session.add(payment)

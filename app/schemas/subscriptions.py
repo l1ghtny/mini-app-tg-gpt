@@ -88,6 +88,7 @@ class SubscriptionTierResponse(BaseModel):
 class InitPaymentRequest(BaseModel):
     tier_name: str
     email: str
+    discount_codes: List[str] = []
 
 
 class UsagePackModelLimitResponse(BaseModel):
