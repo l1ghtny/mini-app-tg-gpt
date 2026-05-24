@@ -78,6 +78,7 @@ async def generate_and_publish(
                     user_id=user_id,
                     conversation_id=conversation_id,
                     request_id=request_id,
+                    assistant_message_id=assistant_message_id,
                     previous_response_id=previous_response_id,
                     previous_interaction_id=previous_interaction_id,
                     fallback_messages=fallback_history_for_openai,

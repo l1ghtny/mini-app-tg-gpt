@@ -674,22 +674,7 @@ async def _check_entitlements(
             },
         )
 
-    if request.thinking is not None and request.model not in GOOGLE_THINKING_MODELS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "thinking_not_supported_for_model",
-                "model": request.model,
-            },
-        )
-    if request.reasoning_effort is not None and request.model not in GOOGLE_THINKING_MODELS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "reasoning_effort_not_supported_for_model",
-                "model": request.model,
-            },
-        )
+    _validate_reasoning_controls(request)
 
     tools = await _build_tools(
         image_entitlement.allowed,
@@ -711,6 +696,20 @@ async def _check_entitlements(
         )
 
     return text_entitlement, image_entitlement, tools, image_model, image_quality
+
+
+def _validate_reasoning_controls(request: NewMessageRequest) -> None:
+    # Backward compatibility: legacy/frontend clients may always send the
+    # boolean `thinking` toggle. For models without explicit reasoning controls
+    # we accept and ignore this value instead of hard-failing the request.
+    if request.reasoning_effort is not None and request.model not in GOOGLE_THINKING_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "reasoning_effort_not_supported_for_model",
+                "model": request.model,
+            },
+        )
 
 
 def _normalize_tool_name(value: Any) -> str | None:

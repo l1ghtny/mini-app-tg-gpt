@@ -6,7 +6,11 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.api.chat_helpers import _resolve_image_settings, handle_update_conversation_settings
+from app.api.chat_helpers import (
+    _resolve_image_settings,
+    _validate_reasoning_controls,
+    handle_update_conversation_settings,
+)
 from app.api.model_catalog_helpers import _normalize_supports
 from app.db.models import AppUser, Conversation
 from app.schemas.chat import MessageContent, NewMessageRequest, UpdateConversationSettingsRequest
@@ -53,6 +57,19 @@ def test_resolve_image_settings_aligns_provider_and_rejects_explicit_mismatch():
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["error"] == "provider_mismatch"
+
+
+def test_openai_model_accepts_boolean_thinking_toggle_for_backward_compat():
+    request = NewMessageRequest(
+        client_request_id=str(uuid.uuid4()),
+        role="user",
+        content=[MessageContent(type="text", value="hello")],
+        model="gpt-5.4-nano",
+        tool_choice="auto",
+        thinking=True,
+    )
+
+    _validate_reasoning_controls(request)
 
 
 @pytest.mark.asyncio
