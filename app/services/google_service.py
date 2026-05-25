@@ -11,7 +11,7 @@ from openai.types.responses.tool import CodeInterpreter, ImageGeneration
 
 from app.core.config import settings
 from app.services.background.save_openai_usage import log_usage
-from app.services.model_registry import GOOGLE_THINKING_MODELS
+from app.services.model_registry import GOOGLE_THINKING_MODELS, IMAGE_MODEL_PROVIDER
 from app.db.database import engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.models import Message
@@ -58,9 +58,18 @@ def _has_tool(
     return any(_extract_tool_type(tool) == tool_name for tool in tools)
 
 
-def _tool_choice_explicitly_requests_image_generation(tool_choice: Any) -> bool:
-    if tool_choice == "image_generation":
-        return True
+def _tool_choice_allows_image_generation(tool_choice: Any) -> bool:
+    if isinstance(tool_choice, str):
+        if tool_choice in {"auto", "required", "image_generation"}:
+            return True
+        return False
+    if isinstance(tool_choice, list):
+        requested = {
+            str(item).strip().lower()
+            for item in tool_choice
+            if isinstance(item, str) and str(item).strip()
+        }
+        return "image_generation" in requested
     if isinstance(tool_choice, dict):
         tools_list = tool_choice.get("tools")
         if isinstance(tools_list, list):
@@ -69,7 +78,7 @@ def _tool_choice_explicitly_requests_image_generation(tool_choice: Any) -> bool:
                 for tool in tools_list
                 if isinstance(tool, dict)
             }
-            return requested == {"image_generation"}
+            return "image_generation" in requested
     return False
 
 
@@ -151,7 +160,13 @@ def _generation_config_for_request(
     image_size: str | None = None,
 ) -> dict[str, Any]:
     config = {}
-    if model not in GOOGLE_THINKING_MODELS and not reasoning_effort and not thinking_enabled:
+    is_google_image_model = model in IMAGE_MODEL_PROVIDER
+    if (
+        not is_google_image_model
+        and model not in GOOGLE_THINKING_MODELS
+        and not reasoning_effort
+        and not thinking_enabled
+    ):
         return config
 
     thinking_level = (reasoning_effort or "").strip().lower() or None
@@ -163,10 +178,14 @@ def _generation_config_for_request(
         else:
             thinking_level = None
 
+    if is_google_image_model and thinking_level:
+        # Google image models currently accept "minimal" and "high" levels.
+        thinking_level = {"low": "minimal", "medium": "minimal", "high": "high"}.get(thinking_level)
+
     if thinking_level:
         config["thinking_level"] = thinking_level
 
-    if thinking_enabled or reasoning_effort:
+    if thinking_level:
         config["thinking_summaries"] = "auto"
 
     normalized_size = (image_size or "").strip().lower()
@@ -207,7 +226,8 @@ async def stream_normalized_google_response(
     image_tool = _extract_image_tool(tools)
     request_model = model
     image_size = None
-    if image_tool and _tool_choice_explicitly_requests_image_generation(tool_choice):
+    image_enabled = bool(image_tool and _tool_choice_allows_image_generation(tool_choice))
+    if image_enabled:
         if isinstance(image_tool, dict):
             request_model = image_tool.get("model") or model
             image_size = image_tool.get("image_size")
@@ -231,14 +251,14 @@ async def stream_normalized_google_response(
         input_val = await _interactions_steps_from_history(messages)
 
     generation_config = _generation_config_for_request(
-        model=model,
+        model=request_model,
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
         image_size=image_size,
     )
 
     tools_payload = []
-    if enabled_web_search and not image_tool:
+    if enabled_web_search:
         tools_payload.append({"type": "google_search"})
 
     system_text = ((instructions or "").strip() + "\n\n" + STYLE_GUIDE).strip()
@@ -249,6 +269,11 @@ async def stream_normalized_google_response(
         "stream": True,
         "system_instruction": system_text,
     }
+    if image_enabled:
+        # Keep both modalities in auto/required modes so Gemini can decide
+        # whether to answer with text, image, or a mix.
+        # Interactions API expects lowercase modality values.
+        kwargs["response_modalities"] = ["text", "image"]
     if tools_payload:
         kwargs["tools"] = tools_payload
     if generation_config:
@@ -507,4 +532,4 @@ async def stream_normalized_google_response(
                 web_search_calls=0,
                 images_generated=0,
             )
-        raise
+        return
