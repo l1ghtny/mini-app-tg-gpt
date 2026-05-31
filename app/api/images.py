@@ -1,6 +1,7 @@
 import os
 import time
 import uuid
+import logging
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -18,10 +19,12 @@ from app.r2.settings import Settings
 from app.schemas.images import ImageUploaded, ImagePrepareShareResponse
 
 images = APIRouter(tags=["images"], prefix="/images")
+logger = logging.getLogger(__name__)
 _PROXY_ALLOWED_HOSTS_ENV = "IMAGE_FETCH_PROXY_ALLOWED_HOSTS"
 _PROXY_ACCEPT = "image/*,application/octet-stream;q=0.9,*/*;q=0.1"
 _PROXY_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=10.0)
 _PROXY_MAX_REDIRECTS = int(os.getenv("IMAGE_FETCH_PROXY_MAX_REDIRECTS", "3"))
+_SHARE_BUTTON_TEXT = "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u0441\u0432\u043e\u0439 \u0440\u0438\u0441\u0443\u043d\u043e\u043a \U0001F3A8"
 
 
 def _get_proxy_allowed_hosts() -> set[str]:
@@ -249,7 +252,7 @@ async def prepare_image_share(
                 "inline_keyboard": [
                     [
                         {
-                            "text": "Создать свой рисунок 🎨",
+                            "text": _SHARE_BUTTON_TEXT,
                             "url": f"https://t.me/{bot_username}?start=img_{current_user.telegram_id}"
                         }
                     ]
@@ -272,9 +275,22 @@ async def prepare_image_share(
                 if data.get("ok"):
                     prepared_id = data["result"]["id"]
                     return ImagePrepareShareResponse(prepared_message_id=str(prepared_id))
-            
-            # Fallback to mock in dev/test if Telegram request fails or isn't 200
-            return ImagePrepareShareResponse(prepared_message_id=f"mock_fallback_{uuid.uuid4()}")
-    except Exception:
-        return ImagePrepareShareResponse(prepared_message_id=f"mock_err_{uuid.uuid4()}")
+
+            logger.error(
+                "Telegram savePreparedInlineMessage failed status=%s body=%s image_id=%s user_id=%s",
+                resp.status_code,
+                resp.text[:1000],
+                str(content.id),
+                str(current_user.id),
+            )
+            raise HTTPException(status_code=502, detail="Telegram prepare-share failed")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Telegram prepare-share request failed image_id=%s user_id=%s",
+            str(content.id),
+            str(current_user.id),
+        )
+        raise HTTPException(status_code=502, detail="Telegram prepare-share unavailable") from exc
 
