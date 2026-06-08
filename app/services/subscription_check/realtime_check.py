@@ -1,6 +1,7 @@
 from openai.types.responses import FileSearchToolParam, WebSearchTool
 from openai.types.responses.tool import ImageGeneration
 
+from app.services.model_registry import canonicalize_image_model
 from app.services.subscription_check.entitlements import get_active_tier
 
 
@@ -25,6 +26,7 @@ async def create_tools_list(
         )
 
     if image_allowed:
+        image_model = canonicalize_image_model(image_model)
         if provider == "google":
             base_tools.append(
                 {
