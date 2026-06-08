@@ -57,11 +57,12 @@ async def test_generate_and_publish_emits_rich_status_and_reasoning_events(monke
         yield {
             "type": "status",
             "stage": "thinking",
-            "phase": "reasoning.in_progress",
+            "phase": "thinking",
             "label": "Thinking",
             "source_event": "response.output_item.added",
             "sequence_number": 2,
             "ts": 124,
+            "status": "active",
         }
         yield {
             "type": "reasoning.summary.delta",
@@ -84,7 +85,7 @@ async def test_generate_and_publish_emits_rich_status_and_reasoning_events(monke
     async def fake_finalize_request(*_a, **_kw):
         return None
 
-    monkeypatch.setattr(helpers, "stream_normalized_openai_response", fake_stream, raising=True)
+    monkeypatch.setattr(helpers, "stream_normalized_ai_response", fake_stream, raising=True)
     monkeypatch.setattr(helpers, "AsyncSession", FakeAsyncSessionCtx)
     monkeypatch.setattr(helpers, "finalize_request", fake_finalize_request, raising=True)
 
@@ -104,6 +105,6 @@ async def test_generate_and_publish_emits_rich_status_and_reasoning_events(monke
 
     published = [ev for _mid, ev in bus.events]
     assert any(ev.get("type") == "status" and ev.get("phase") == "response.created" for ev in published)
-    assert any(ev.get("type") == "status" and ev.get("phase") == "reasoning.in_progress" for ev in published)
+    assert any(ev.get("type") == "status" and ev.get("phase") == "thinking" for ev in published)
     assert any(ev.get("type") == "reasoning.summary.delta" for ev in published)
     assert any(ev.get("type") == "reasoning.summary.done" for ev in published)

@@ -1,4 +1,4 @@
-﻿from typing import Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 from typing import Literal
@@ -13,6 +13,11 @@ class SubscriptionResponse(BaseModel):
     auto_renew: bool = False
     can_cancel: bool = False
     cancel_at_period_end: bool = False
+    renewal_state: str = "inactive"
+    renewal_grace_until: Optional[str] = None
+    last_renewal_attempt_at: Optional[str] = None
+    last_renewal_failure_reason: Optional[str] = None
+    default_payment_method_id: Optional[str] = None
     tier_name: str
     tier_slug: str
     tier_rank: int
@@ -23,9 +28,21 @@ class SubscriptionResponse(BaseModel):
     tier_id: str
 
 
+class SubscriptionDiscountResponse(BaseModel):
+    code: Optional[str] = None
+    type: str = "first_purchase"           # "first_purchase" | "seasonal" | "referral"
+    percent_off: int
+    applies_to: list[str] = []             # tier slugs or ["all"] when applies to everything
+    expires_at: Optional[str] = None
+    stackable: bool = True
+    conditions: Optional[dict] = None      # forwarded from GeneralDiscount for frontend display
+
+
 class ActiveSubscriptionsResponse(BaseModel):
     active_subscriptions: List[SubscriptionResponse]
     primary_subscription_id: Optional[str] = None
+    discounts: List[SubscriptionDiscountResponse] = []
+    first_purchase_available: bool = False
 
 
 class TierMonthlyLimits(BaseModel):
@@ -70,11 +87,98 @@ class SubscriptionTierResponse(BaseModel):
     allowed_image_qualities: List[str] = []
     allowed_image_models: List[str] = []
     tier_id: str
+    applicable_discounts: List[SubscriptionDiscountResponse] = []  # general discounts applicable to this tier
 
 
 class InitPaymentRequest(BaseModel):
     tier_name: str
     email: str
+    discount_codes: List[str] = []
+
+
+class SubscriptionBindingInitRequest(BaseModel):
+    tier_name: str
+    email: str
+    method_type: Literal["auto", "card", "sbp"] = "auto"
+    bank_id: Optional[str] = None
+
+
+class SubscriptionBindingInitResponse(BaseModel):
+    binding_id: str
+    status: str
+    method_type: Literal["auto", "card", "sbp"]
+    payment_url: Optional[str] = None
+    qr_payload: Optional[str] = None
+    qr_image_svg: Optional[str] = None
+
+
+class SubscriptionBindingStatusResponse(BaseModel):
+    binding_id: str
+    status: str
+    method_type: Literal["auto", "card", "sbp"]
+    payment_method_id: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class BoundSubscriptionChargeRequest(BaseModel):
+    tier_name: str
+    email: str
+    payment_method_id: Optional[str] = None
+    binding_id: Optional[str] = None
+    manual_retry: bool = False
+
+
+class BoundSubscriptionChargeResponse(BaseModel):
+    payment_id: str
+    status: str
+    subscription_status: str
+
+
+class CurrentSubscriptionRefundStatusResponse(BaseModel):
+    refundable: bool
+    reason: Optional[str] = None
+    window_hours: int
+    payment_id: Optional[str] = None
+    tier_name: Optional[str] = None
+    amount_cents: Optional[int] = None
+    purchased_at: Optional[str] = None
+    refund_deadline_at: Optional[str] = None
+
+
+class CurrentSubscriptionRefundResponse(BaseModel):
+    payment_id: str
+    status: str
+    subscription_status: str
+    refunded_at: str
+
+
+class UserAgreementResponse(BaseModel):
+    document_key: str
+    version: str
+    lang: str
+    title: str
+    text: str
+
+
+class PaymentMethodResponse(BaseModel):
+    id: str
+    type: Literal["card", "sbp"]
+    status: str
+    is_default: bool
+    card_type: str
+    pan: str
+    exp_date: str
+    phone: Optional[str] = None
+    bound_at: Optional[str] = None
+    detached_at: Optional[str] = None
+    last_charge_at: Optional[str] = None
+    last_charge_status: Optional[str] = None
+    last_charge_error: Optional[str] = None
+
+
+class PaymentMethodsResponse(BaseModel):
+    methods: List[PaymentMethodResponse] = []
 
 
 class UsagePackModelLimitResponse(BaseModel):

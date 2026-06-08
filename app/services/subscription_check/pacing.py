@@ -8,6 +8,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import ImageQualityPricing, RequestLedger
+from app.services.model_registry import get_image_model_provider
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,12 @@ async def get_image_quality_pricing(
     image_model: str,
     quality_name: str,
 ) -> Row[Any] | None | Any:
+    try:
+        provider = get_image_model_provider(image_model)
+    except KeyError:
+        provider = None
+    if provider == "google" and quality_name not in {"512", "1k", "2k"}:
+        return None
     statement = select(ImageQualityPricing).where(
         ImageQualityPricing.image_model == image_model,
         ImageQualityPricing.quality == quality_name,

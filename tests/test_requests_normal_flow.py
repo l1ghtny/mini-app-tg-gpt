@@ -29,7 +29,7 @@ async def test_text_request_reserve_and_consume(monkeypatch):
         yield {"type":"text.done","index":0}
         yield {"type":"done"}
 
-    monkeypatch.setattr(helpers, "stream_normalized_openai_response", fake_stream, raising=True)
+    monkeypatch.setattr(helpers, "stream_normalized_ai_response", fake_stream, raising=True)
 
     req_id = str(uuid.uuid4())
     async with AsyncSession(engine, expire_on_commit=False) as s:

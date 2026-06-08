@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 
 from fastapi import BackgroundTasks, HTTPException
@@ -8,11 +8,18 @@ from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.metrics import track_event
-from app.db.models import PaymentMethod
-from app.db.subscription_tiers import SubscriptionStatus, UserSubscription
+from app.db.models import Payment, PaymentMethod, PaymentProductType
+from app.db.subscription_tiers import (
+    GeneralDiscount,
+    SubscriptionStatus,
+    SubscriptionTier,
+    UserSubscription,
+    UserTierDiscount,
+)
 from app.schemas.subscriptions import (
     ActiveSubscriptionsResponse,
     CancelSubscriptionResponse,
+    SubscriptionDiscountResponse,
     SubscriptionResponse,
 )
 from app.services.subscription_check.entitlements import get_current_subscription
@@ -52,19 +59,25 @@ def _tier_slug(name: str) -> str:
 
 async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscriptionsResponse:
     default_payment_method = await session.exec(
-        select(PaymentMethod.id).where(
+        select(PaymentMethod).where(
             PaymentMethod.user_id == user.id,
             PaymentMethod.is_default == True,
         )
     )
-    has_default_payment_method = default_payment_method.first() is not None
+    default_payment_method = default_payment_method.first()
+    has_default_payment_method = default_payment_method is not None
 
     query = (
         select(UserSubscription)
         .where(
             UserSubscription.user_id == user.id,
             UserSubscription.status == SubscriptionStatus.active,
-            (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > func.now()),
+            (UserSubscription.expires_at.is_(None))
+            | (UserSubscription.expires_at > func.now())
+            | (
+                UserSubscription.renewal_grace_until.is_not(None)
+                & (UserSubscription.renewal_grace_until > func.now())
+            ),
         )
         .options(selectinload(UserSubscription.tier))
     )
@@ -72,16 +85,32 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
     if not subscriptions:
         raise HTTPException(status_code=403, detail="No active subscription found")
 
+    discounts = await _load_active_discounts(session, user.id)
+    general_discounts = await _load_general_discounts(session, user.id)
+    first_purchase_available = await _first_purchase_available(session, user.id)
+    all_discounts = discounts + general_discounts
+
     ordered = sorted(subscriptions, key=_subscription_priority_key, reverse=True)
     active_subscriptions: list[SubscriptionResponse] = []
     for sub in ordered:
         expires_at = sub.expires_at
         is_recurring_tier = bool(getattr(sub.tier, "is_recurring", True))
         is_paid_tier = sub.tier.price_cents > 0
-        auto_renew = is_recurring_tier and is_paid_tier and has_default_payment_method
+        auto_renew = bool(is_recurring_tier and is_paid_tier and getattr(sub, "auto_renew_enabled", True))
 
         if is_recurring_tier and expires_at is None:
             expires_at = _add_one_calendar_month(sub.started_at)
+
+        if not is_recurring_tier or not is_paid_tier:
+            renewal_state = "inactive"
+        elif sub.renewal_grace_until and sub.renewal_grace_until > datetime.now(timezone.utc).replace(tzinfo=None):
+            renewal_state = "grace"
+        elif not getattr(sub, "auto_renew_enabled", True):
+            renewal_state = "disabled"
+        elif has_default_payment_method:
+            renewal_state = "scheduled"
+        else:
+            renewal_state = "requires_method"
 
         active_subscriptions.append(
             SubscriptionResponse(
@@ -93,6 +122,11 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
                 auto_renew=auto_renew,
                 can_cancel=auto_renew,
                 cancel_at_period_end=is_recurring_tier and is_paid_tier and not auto_renew,
+                renewal_state=renewal_state,
+                renewal_grace_until=_format_ts(getattr(sub, "renewal_grace_until", None)),
+                last_renewal_attempt_at=_format_ts(getattr(sub, "last_renewal_attempt_at", None)),
+                last_renewal_failure_reason=getattr(sub, "last_renewal_failure_reason", None),
+                default_payment_method_id=str(default_payment_method.id) if default_payment_method else None,
                 tier_name=sub.tier.name,
                 tier_slug=_tier_slug(sub.tier.name),
                 tier_rank=sub.tier.index or 0,
@@ -107,7 +141,90 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
     return ActiveSubscriptionsResponse(
         active_subscriptions=active_subscriptions,
         primary_subscription_id=str(ordered[0].id),
+        discounts=all_discounts,
+        first_purchase_available=first_purchase_available,
     )
+
+
+async def _load_active_discounts(
+    session: AsyncSession,
+    user_id,
+) -> list[SubscriptionDiscountResponse]:
+    query = (
+        select(UserTierDiscount, SubscriptionTier)
+        .join(SubscriptionTier, UserTierDiscount.tier_id == SubscriptionTier.id)
+        .where(
+            UserTierDiscount.user_id == user_id,
+            UserTierDiscount.valid_until > func.now(),
+        )
+        .options(selectinload(UserTierDiscount.access_code))
+    )
+    rows = (await session.exec(query)).all()
+
+    discounts: list[SubscriptionDiscountResponse] = []
+    for discount, tier in rows:
+        code = discount.access_code.code if getattr(discount, "access_code", None) else None
+        discounts.append(
+            SubscriptionDiscountResponse(
+                code=code,
+                type="access_code",
+                percent_off=int(discount.discount_percent or 0),
+                applies_to=[_tier_slug(tier.name)],
+                expires_at=_format_ts(discount.valid_until),
+                stackable=True,
+            )
+        )
+    return discounts
+
+
+async def _first_purchase_available(session: AsyncSession, user_id) -> bool:
+    existing_paid_subscription = await session.exec(
+        select(Payment.id).where(
+            Payment.user_id == user_id,
+            Payment.product_type == PaymentProductType.subscription,
+            Payment.amount > 0,
+            Payment.tbank_status == "CONFIRMED",
+        )
+    )
+    return existing_paid_subscription.first() is None
+
+
+async def _load_general_discounts(
+    session: AsyncSession,
+    user_id,
+) -> list[SubscriptionDiscountResponse]:
+    """Load all currently active GeneralDiscount rows and evaluate eligibility."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    query = select(GeneralDiscount).where(
+        GeneralDiscount.is_active == True,  # noqa: E712
+        (GeneralDiscount.starts_at.is_(None)) | (GeneralDiscount.starts_at <= now),
+        (GeneralDiscount.expires_at.is_(None)) | (GeneralDiscount.expires_at > now),
+    )
+    rows = (await session.exec(query)).all()
+
+    result: list[SubscriptionDiscountResponse] = []
+    for gd in rows:
+        conditions = gd.conditions or {}
+
+        # Evaluate eligibility conditions
+        if conditions.get("no_prior_paid_sub"):
+            eligible = await _first_purchase_available(session, user_id)
+            if not eligible:
+                continue
+
+        applies_to = gd.applies_to_tiers if gd.applies_to_tiers else ["all"]
+        result.append(
+            SubscriptionDiscountResponse(
+                code=gd.code,
+                type=gd.type,
+                percent_off=gd.percent_off,
+                applies_to=applies_to,
+                expires_at=_format_ts(gd.expires_at),
+                stackable=gd.stackable,
+                conditions=conditions if conditions else None,
+            )
+        )
+    return result
 
 
 async def cancel_subscription(
@@ -129,19 +246,8 @@ async def cancel_subscription(
     if sub.tier.price_cents == 0:
         raise HTTPException(status_code=400, detail="Cannot cancel a free plan.")
 
-    payment_methods = await session.exec(
-        select(PaymentMethod).where(
-            PaymentMethod.user_id == user.id,
-            PaymentMethod.is_default == True,
-        )
-    )
-
-    pms = payment_methods.all()
-    if not pms:
-        raise HTTPException(status_code=400, detail="No active payment method found to cancel.")
-
-    for pm in pms:
-        await session.delete(pm)
+    sub.auto_renew_enabled = False
+    session.add(sub)
 
     background_tasks.add_task(
         track_event,

@@ -18,8 +18,9 @@ from app.r2.methods import delete_object, put_bytes
 from app.r2.settings import Settings
 from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
-from app.services.openai_service import stream_normalized_openai_response
+from app.services.ai_service import stream_normalized_ai_response
 from app.db.database import engine
+from app.services.model_registry import get_image_model_provider
 from app.services.subscription_check.entitlements import reserve_request, finalize_request
 from app.services.subscription_check.pacing import get_image_quality_cost
 
@@ -46,10 +47,13 @@ async def generate_and_publish(
         tool_choice: Optional[str | dict[str, Any]] = "auto",
         request_id: Optional[str] = None,
         previous_response_id: Optional[str] = None,
+        previous_interaction_id: Optional[str] = None,
         chain_context_fingerprint: Optional[str] = None,
         image_entitlement_tier_id: Optional[uuid.UUID] = None,
         image_entitlement_pack_id: Optional[uuid.UUID] = None,
         fallback_history_for_openai: Optional[list] = None,
+        thinking_enabled: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
 ):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         buffers: dict[int, str] = {}
@@ -66,7 +70,7 @@ async def generate_and_publish(
         try:
             await bus.publish(assistant_message_id_str, {"type": "start"})
 
-            async for ev in stream_normalized_openai_response(
+            async for ev in stream_normalized_ai_response(
                     history_for_openai,
                     model,
                     instructions=instructions,
@@ -75,8 +79,12 @@ async def generate_and_publish(
                     user_id=user_id,
                     conversation_id=conversation_id,
                     request_id=request_id,
+                    assistant_message_id=assistant_message_id,
                     previous_response_id=previous_response_id,
+                    previous_interaction_id=previous_interaction_id,
                     fallback_messages=fallback_history_for_openai,
+                    thinking_enabled=thinking_enabled,
+                    reasoning_effort=reasoning_effort,
             ):
                 if ev.get("type") not in {"image.partial", "image.ready", "response.meta"}:
                     await bus.publish(assistant_message_id_str, ev)
@@ -185,8 +193,13 @@ async def _handle_stream_event(
         })
 
         image_model = _extract_image_model_name(tools) or "unknown"
-        image_quality = _extract_image_quality(tools) or "low"
-        image_cost = await get_image_quality_cost(session, image_model, image_quality)
+        image_provider = get_image_model_provider(image_model) if image_model != "unknown" else "openai"
+        image_option_value = (
+            (_extract_image_size(tools) or "1k")
+            if image_provider == "google"
+            else (_extract_image_quality(tools) or "low")
+        )
+        image_cost = await get_image_quality_cost(session, image_model, image_option_value)
         await update_request_ledger_image(
             session,
             request_id,
@@ -234,18 +247,31 @@ async def _handle_stream_event(
         return
 
     if event_type == "response.meta":
+        conversation = await session.get(Conversation, conversation_id)
+        if not conversation:
+            return
+
+        provider = str(ev.get("provider") or "").strip().lower()
         response_id_raw = ev.get("response_id")
+        interaction_id_raw = ev.get("interaction_id")
         response_id = str(response_id_raw).strip() if response_id_raw is not None else ""
+        interaction_id = str(interaction_id_raw).strip() if interaction_id_raw is not None else ""
+
+        if provider == "google" and interaction_id:
+            conversation.last_google_interaction_id = interaction_id
+            conversation.google_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            conversation.google_chain_context_fingerprint = chain_context_fingerprint
+            session.add(conversation)
+            await session.commit()
+            return
+
         if response_id and response_id.startswith("resp_"):
-            conversation = await session.get(Conversation, conversation_id)
-            if conversation:
-                conversation.last_openai_response_id = response_id
-                conversation.openai_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                conversation.openai_chain_context_fingerprint = chain_context_fingerprint
-                session.add(conversation)
-                await session.commit()
+            conversation.last_openai_response_id = response_id
+            conversation.openai_chain_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            conversation.openai_chain_context_fingerprint = chain_context_fingerprint
+            session.add(conversation)
+            await session.commit()
         elif response_id:
-            # Only persist canonical OpenAI Responses object IDs for chaining.
             logger.warning(
                 "Skipping non-canonical OpenAI response id for chaining: %s",
                 response_id,
@@ -290,6 +316,10 @@ def _extract_image_model_name(
         return None
 
     for tool in tools:
+        if isinstance(tool, dict):
+            if str(tool.get("type") or "").strip().lower() == "image_generation":
+                return tool.get("model")
+            continue
         if isinstance(tool, ImageGeneration):
             return getattr(tool, "model", None)
 
@@ -303,8 +333,25 @@ def _extract_image_quality(
         return None
 
     for tool in tools:
+        if isinstance(tool, dict):
+            if str(tool.get("type") or "").strip().lower() == "image_generation":
+                return tool.get("quality")
+            continue
         if isinstance(tool, ImageGeneration):
             return getattr(tool, "quality", None)
+
+    return None
+
+
+def _extract_image_size(
+        tools: Optional[Iterable[FileSearchToolParam | WebSearchToolParam | CodeInterpreter | ImageGeneration]],
+) -> Optional[str]:
+    if not tools:
+        return None
+
+    for tool in tools:
+        if isinstance(tool, dict) and str(tool.get("type") or "").strip().lower() == "image_generation":
+            return tool.get("image_size")
 
     return None
 

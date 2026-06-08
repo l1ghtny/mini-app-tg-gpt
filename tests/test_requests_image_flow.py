@@ -28,7 +28,7 @@ async def test_image_flow_records_ledger_and_url(monkeypatch):
         yield {"type":"image.ready","index":1,"format":"b64","data":b64}
         yield {"type":"done"}
 
-    monkeypatch.setattr(helpers, "stream_normalized_openai_response", fake_stream, raising=True)
+    monkeypatch.setattr(helpers, "stream_normalized_ai_response", fake_stream, raising=True)
 
     async def fake_upload_with_key(data, prefix="gen", suffix=None):
         return "https://cdn.example/img.png", "gen/aa/final.png"

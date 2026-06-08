@@ -16,12 +16,12 @@ from openai.types.responses import (
 from openai.types.responses.tool import CodeInterpreter, WebSearchTool
 from openai.types.responses.tool_param import ImageGeneration
 from sqlmodel.ext.asyncio.session import AsyncSession
+from app.db.models import Message
 
 from app.core.config import settings as main_settings
 from app.core.metrics import track_event, track_internal_event
 from app.db.database import engine
 from app.redis.settings import settings
-from app.schemas.chat import Message
 from app.services.background.save_openai_usage import log_usage
 
 STYLE_GUIDE = (
@@ -130,6 +130,7 @@ def _build_responses_create_kwargs(
     instructions: str | None = None,
     stream: bool = False,
     reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = None,
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     previous_response_id: str | None = None,
     max_output_tokens: int | None = None,
     text_format: dict[str, Any] | None = None,
@@ -151,8 +152,13 @@ def _build_responses_create_kwargs(
     if stream:
         kwargs["stream"] = True
         kwargs["service_tier"] = "default"
-    if reasoning_summary:
-        kwargs["reasoning"] = {"summary": reasoning_summary}
+    if reasoning_summary or reasoning_effort:
+        reasoning_cfg: Dict[str, Any] = {}
+        if reasoning_summary:
+            reasoning_cfg["summary"] = reasoning_summary
+        if reasoning_effort:
+            reasoning_cfg["effort"] = reasoning_effort
+        kwargs["reasoning"] = reasoning_cfg
     if previous_response_id:
         kwargs["previous_response_id"] = previous_response_id
     if max_output_tokens is not None:
@@ -250,6 +256,7 @@ class StreamState:
     seen_text_part_started: Dict[int, bool] = field(default_factory=dict)
     seen_image_part_started: Dict[int, bool] = field(default_factory=dict)
     reasoning_started: bool = False
+    accumulated_thoughts: str = ""
 
 
 def _build_status_event(
@@ -259,12 +266,14 @@ def _build_status_event(
     label: str,
     source_event: str,
     event: Any,
+    status: str = "active",
     index: Optional[int] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "type": "status",
         "stage": stage,  # backwards compatible field
         "phase": phase,
+        "status": status,
         "label": label,
         "source_event": source_event,
         "sequence_number": getattr(event, "sequence_number", None),
@@ -347,7 +356,7 @@ async def _map_openai_event(
         out.append(
             _build_status_event(
                 stage="thinking",
-                phase="reasoning.in_progress",
+                phase="thinking",
                 label="Thinking",
                 source_event=et,
                 event=event,
@@ -355,18 +364,19 @@ async def _map_openai_event(
         )
         return out
 
-    if et == "response.reasoning_summary_text.delta":
+    if et in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
         if not state.reasoning_started:
             out.append(
                 _build_status_event(
                     stage="thinking",
-                    phase="reasoning.in_progress",
+                    phase="thinking",
                     label="Thinking",
                     source_event=et,
                     event=event,
                 )
             )
             state.reasoning_started = True
+        state.accumulated_thoughts += event.delta
         out.append(
             {
                 "type": "reasoning.summary.delta",
@@ -379,7 +389,7 @@ async def _map_openai_event(
         )
         return out
 
-    if et == "response.reasoning_summary_text.done":
+    if et in {"response.reasoning_summary_text.done", "response.reasoning_text.done"}:
         out.append(
             {
                 "type": "reasoning.summary.done",
@@ -392,11 +402,12 @@ async def _map_openai_event(
         )
         out.append(
             _build_status_event(
-                stage="thinking.done",
-                phase="reasoning.completed",
+                stage="thinking",
+                phase="thinking",
                 label="Thinking complete",
                 source_event=et,
                 event=event,
+                status="done",
             )
         )
         return out
@@ -586,7 +597,9 @@ async def stream_normalized_openai_response(
     user_id: Optional[uuid.UUID] = None,
     conversation_id: Optional[uuid.UUID] = None,
     request_id: Optional[str] = None,
-    reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "concise",
+    assistant_message_id: Optional[uuid.UUID] = None,
+    reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "auto",
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     previous_response_id: Optional[str] = None,
     fallback_messages: Optional[List["Message"]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -622,6 +635,7 @@ async def stream_normalized_openai_response(
                     instructions=(instructions or "") + STYLE_GUIDE,
                     stream=True,
                     reasoning_summary=reasoning_summary,
+                    reasoning_effort=reasoning_effort,
                     metadata=request_metadata,
                     previous_response_id=active_previous_response_id,
                 )
@@ -706,6 +720,7 @@ async def stream_normalized_openai_response(
                         instructions=(instructions or "") + STYLE_GUIDE,
                         stream=True,
                         reasoning_summary=reasoning_summary,
+                        reasoning_effort=reasoning_effort,
                         metadata=request_metadata,
                         previous_response_id=active_previous_response_id,
                     )
@@ -725,6 +740,12 @@ async def stream_normalized_openai_response(
                 raise
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
+            if state.accumulated_thoughts and assistant_message_id:
+                message = await session.get(Message, assistant_message_id)
+                if message:
+                    message.reasoning_summary = state.accumulated_thoughts
+                    session.add(message)
+                    await session.commit()
             await log_usage(
                 session,
                 user_id=user_id,

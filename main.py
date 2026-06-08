@@ -10,6 +10,7 @@ from app.api.access_codes import access_codes
 from app.api.admin_broadcast import admin_broadcast
 from app.api.auth import auth
 from app.api.chat_folders import router as chat_folders_router
+from app.api.chat_starters import chat_starters
 from app.api.documents import documents
 from app.api.images import images
 from app.api.metrics import metrics
@@ -21,6 +22,7 @@ from app.api.tiers import tiers
 from app.api.usage_packs import usage_packs
 from app.api.user_subscription import user_subscription
 from app.api.user_usage import user_usage
+from app.api.user_settings import user_settings
 from app.api.whats_new import whats_new
 from app.core.config import settings
 
@@ -41,7 +43,7 @@ CANARY_ALLOWED_HEADER_VALUES = {f"tg-{telegram_id}" for telegram_id in CANARY_AL
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="1.4.1",
+    version="1.5.0",
     docs_url=None
 )
 if CANARY_ALLOWED_TG_IDS:
@@ -67,7 +69,7 @@ if settings.SENTRY_DSN:
         integrations=[
             OpenAIIntegration(
                 include_prompts=True,
-                # LLM/tokenizer inputs/outputs will be not sent to Sentry, despite send_default_pii=True
+                tiktoken_encoding_name="o200k_base"
             )],
         enable_logs=True,
         stream_gen_ai_spans=True,
@@ -129,6 +131,7 @@ app.include_router(auth, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
 app.include_router(documents, prefix="/api/v1")
 app.include_router(user_usage, prefix="/api/v1")
+app.include_router(user_settings, prefix="/api/v1")
 app.include_router(user_subscription, prefix="/api/v1")
 app.include_router(access_codes, prefix="/api/v1")
 app.include_router(tiers, prefix="/api/v1")
@@ -139,3 +142,4 @@ app.include_router(models_catalog, prefix="/api/v1")
 app.include_router(whats_new, prefix="/api/v1")
 app.include_router(admin_broadcast, prefix="/api/v1")
 app.include_router(personalization, prefix="/api/v1")
+app.include_router(chat_starters, prefix="/api/v1")

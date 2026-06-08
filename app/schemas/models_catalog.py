@@ -16,6 +16,7 @@ class TextModelSupportsResponse(BaseModel):
     file_search: bool = False
     image_gen: bool = False
     reasoning: bool = False
+    thinking: bool = False
 
 
 class TextModelCatalogEntryResponse(BaseModel):
@@ -67,4 +68,5 @@ class ImageModelCatalogEntryResponse(BaseModel):
 class ModelsCatalogResponse(BaseModel):
     text_models: list[TextModelCatalogEntryResponse] = Field(default_factory=list)
     image_models: list[ImageModelCatalogEntryResponse] = Field(default_factory=list)
+    provider_defaults: dict[str, dict[str, Optional[str]]] = Field(default_factory=dict)
     updated_at: datetime

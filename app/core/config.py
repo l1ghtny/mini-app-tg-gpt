@@ -15,6 +15,8 @@ else:
 
 class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    GEMINI_API_BASE_URL: str = os.getenv("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
     DATABASE_URL: str = os.getenv("TEST_DATABASE_URL") if TEST_ENV else os.getenv("DATABASE_URL")
     SECRET_KEY: str = os.getenv("SECRET_KEY")
     BOT_TOKEN: str = os.getenv("BOT_TOKEN")
@@ -37,5 +39,9 @@ class Settings:
     BROADCAST_ADMIN_TOKEN: str = os.getenv("BROADCAST_ADMIN_TOKEN", "")
     OPENAI_CHAINING_ENABLED: bool = os.getenv("OPENAI_CHAINING_ENABLED", "False").lower() in ("true", "1")
     OPENAI_CHAIN_MAX_INACTIVITY_DAYS: int = int(os.getenv("OPENAI_CHAIN_MAX_INACTIVITY_DAYS", "14"))
+    DOCUMENT_PROVIDER_DEFAULT: str = os.getenv("DOCUMENT_PROVIDER_DEFAULT", "openai")
+    GOOGLE_DOCUMENTS_ENABLED: bool = os.getenv("GOOGLE_DOCUMENTS_ENABLED", "False").lower() in ("true", "1")
+    DOCUMENT_PROVIDER_FALLBACK_ENABLED: bool = os.getenv("DOCUMENT_PROVIDER_FALLBACK_ENABLED", "True").lower() in ("true", "1")
+    DOCUMENT_DUAL_INDEX_ENABLED: bool = os.getenv("DOCUMENT_DUAL_INDEX_ENABLED", "False").lower() in ("true", "1")
 
 settings = Settings()

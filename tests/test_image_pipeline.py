@@ -31,15 +31,15 @@ async def test_generate_and_publish_uploads_b64_and_persists_url(monkeypatch):
     # ---- 1) Fake adapter to yield base64 image as you do now ----
     # part.start (image), then image.ready with base64 payload, then done
     fake_png_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\x00fake").decode("ascii")
-    async def fake_stream_normalized_openai_response(*a, **kw):
+    async def fake_stream_normalized_ai_response(*a, **kw):
         # text not required here; just image path
         yield {"type": "part.start", "index": 999, "content_type": "image"}
         yield {"type": "image.partial", "index": 999, "format": "b64", "data": "partial-b64", "partial_index": 0, "sequence_number": 1}
         yield {"type": "image.ready", "index": 999, "format": "b64", "data": fake_png_b64}
         yield {"type": "done"}
 
-    monkeypatch.setattr(helpers, "stream_normalized_openai_response",
-                        fake_stream_normalized_openai_response)
+    monkeypatch.setattr(helpers, "stream_normalized_ai_response",
+                        fake_stream_normalized_ai_response)
 
     # ---- 2) Stub out AsyncSession context manager (no real DB) ----
     monkeypatch.setattr(helpers, "AsyncSession", FakeAsyncSessionCtx)

@@ -35,6 +35,8 @@ aiogram = "^3.23.0"
 uuid6 = "^2025.0.1"
 asyncpg = "^0.31.0"
 ruff = "^0.15.12"
+tiktoken = "^0.13.0"
+google-genai = ">=1.55.0"
 
 
 [build-system]

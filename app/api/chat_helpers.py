@@ -38,6 +38,13 @@ from app.services.background.image_deriver import (
     ensure_openai_compatible_image_url,
     rewrite_message_image_url,
 )
+from app.services.model_registry import (
+    GOOGLE_THINKING_MODELS,
+    get_default_image_model_for_provider,
+    get_image_model_provider,
+    get_text_model_provider,
+    models_share_provider,
+)
 from app.services.streaming.test_idempotency import _choose_link_for_message
 from app.services.subscription_check.entitlements import (
     get_daily_text_count,
@@ -55,6 +62,10 @@ from app.services.openai_chain import (
     invalidate_openai_chain_state,
     resolve_previous_response_id_for_chain,
 )
+from app.services.google_chain import (
+    invalidate_google_chain_state,
+    resolve_previous_interaction_id_for_chain,
+)
 
 _TOOL_TYPE_ALIASES = {
     "web_search_preview": "web_search",
@@ -70,6 +81,38 @@ _RESERVED_NON_HISTORY_TOKENS = 6000
 _SUMMARY_MAX_OUTPUT_TOKENS = 2000
 _SUMMARY_REFRESH_MIN_NEW_TOKENS = 600
 _SUMMARY_MODEL = "gpt-5.4-nano"
+
+
+def _provider_mismatch_detail(*, model: str, image_model: str) -> dict[str, str]:
+    return {
+        "error": "provider_mismatch",
+        "message": "Text and image models must use the same provider.",
+        "model": model,
+        "model_provider": get_text_model_provider(model),
+        "image_model": image_model,
+        "image_model_provider": get_image_model_provider(image_model),
+    }
+
+
+def _validate_or_align_image_model(
+    *,
+    model: str,
+    image_model: str | None,
+    explicit_image_model: bool,
+) -> str:
+    if image_model is None:
+        return get_default_image_model_for_provider(get_text_model_provider(model))
+
+    if explicit_image_model and not models_share_provider(model, image_model):
+        raise HTTPException(
+            status_code=400,
+            detail=_provider_mismatch_detail(model=model, image_model=image_model),
+        )
+
+    if not explicit_image_model and not models_share_provider(model, image_model):
+        return get_default_image_model_for_provider(get_text_model_provider(model))
+
+    return image_model
 
 
 @dataclass(frozen=True)
@@ -124,6 +167,7 @@ async def handle_create_message(
         available_tools,
         image_model,
         image_quality,
+        image_size,
     ) = await _check_entitlements(session, current_user, request, conversation)
     tools, request_tool_choice, ledger_tool_choice = _resolve_openai_tooling(
         request.tool_choice,
@@ -139,7 +183,11 @@ async def handle_create_message(
         wait_time=image_entitlement.wait_time,
         image_model=image_model,
         image_quality=image_quality,
+        image_size=image_size,
     )
+
+    if request.thinking is not None:
+        conversation.thinking = bool(request.thinking)
 
     user_msg = await _create_user_message(session, conversation, request, background_tasks)
     assistant_msg = await _create_assistant_message(session, conversation_id)
@@ -171,20 +219,33 @@ async def handle_create_message(
         ledger_tool_choice=ledger_tool_choice,
         image_model=image_model,
         image_quality=image_quality,
+        image_size=image_size,
         tools=tools,
         extract_tool_type=_extract_tool_type,
     )
-    previous_response_id, chain_reason = resolve_previous_response_id_for_chain(
-        conversation,
-        current_fingerprint=chain_context_fingerprint,
-        chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
-        max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
-    )
+    provider = get_text_model_provider(request.model)
+    previous_response_id: str | None = None
+    previous_interaction_id: str | None = None
+    if provider == "google":
+        previous_interaction_id, chain_reason = resolve_previous_interaction_id_for_chain(
+            conversation,
+            current_fingerprint=chain_context_fingerprint,
+            chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
+            max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
+        )
+    else:
+        previous_response_id, chain_reason = resolve_previous_response_id_for_chain(
+            conversation,
+            current_fingerprint=chain_context_fingerprint,
+            chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
+            max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
+        )
     if chain_reason in INVALIDATING_CHAIN_REASONS:
         invalidate_openai_chain_state(conversation)
+        invalidate_google_chain_state(conversation)
         session.add(conversation)
         await session.commit()
-    if previous_response_id:
+    if previous_response_id or previous_interaction_id:
         current_turn_history = await _build_history_for_message(
             session,
             message_id=user_msg.id,
@@ -194,8 +255,9 @@ async def handle_create_message(
             fallback_history_for_openai = full_history_for_openai
         else:
             previous_response_id = None
+            previous_interaction_id = None
             chain_reason = "missing_current_turn_payload"
-    if previous_response_id:
+    if previous_response_id or previous_interaction_id:
         background_tasks.add_task(
             track_event,
             "openai.chain.attempted",
@@ -230,9 +292,12 @@ async def handle_create_message(
         tools=tools,
         request_id=idempotency_key,
         previous_response_id=previous_response_id,
+        previous_interaction_id=previous_interaction_id,
         chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement.tier_id,
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
+        thinking_enabled=request.thinking if request.thinking is not None else conversation.thinking,
+        reasoning_effort=request.reasoning_effort,
     )
     await _track_message_metrics(session, background_tasks, current_user, request.model)
 
@@ -301,6 +366,7 @@ async def handle_delete_message(
         await session.delete(message)
 
     invalidate_openai_chain_state(conversation)
+    invalidate_google_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -351,6 +417,7 @@ async def handle_edit_message(
         await session.delete(message)
 
     invalidate_openai_chain_state(conversation)
+    invalidate_google_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await session.commit()
@@ -383,6 +450,7 @@ async def handle_create_conversation(
         title="New Chat",
         user_id=user.id,
         folder_id=folder_id,
+        thinking=bool(getattr(user, "default_thinking", True)),
     )
     session.add(new_conversation)
     await session.commit()
@@ -503,11 +571,46 @@ async def handle_update_conversation_settings(
     if request.model is not None:
         conversation.model = request.model
 
-    if request.image_model is not None:
+    if request.model is not None:
+        conversation.image_model = _validate_or_align_image_model(
+            model=request.model,
+            image_model=request.image_model if request.image_model is not None else conversation.image_model,
+            explicit_image_model=request.image_model is not None,
+        )
+    elif request.image_model is not None:
+        if not models_share_provider(conversation.model, request.image_model):
+            raise HTTPException(
+                status_code=400,
+                detail=_provider_mismatch_detail(model=conversation.model, image_model=request.image_model),
+            )
         conversation.image_model = request.image_model
+
+    image_provider = get_image_model_provider(conversation.image_model)
+    if image_provider == "google" and request.image_quality is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "image_quality_not_supported_for_provider",
+                "provider": "google",
+                "image_model": conversation.image_model,
+            },
+        )
+    if image_provider != "google" and request.image_size is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "image_size_not_supported_for_provider",
+                "provider": image_provider,
+                "image_model": conversation.image_model,
+            },
+        )
 
     if request.image_quality is not None:
         conversation.image_quality = request.image_quality
+    if request.image_size is not None:
+        conversation.image_size = request.image_size
+    if request.thinking is not None:
+        conversation.thinking = bool(request.thinking)
 
     session.add(conversation)
     await session.commit()
@@ -567,18 +670,28 @@ async def _check_entitlements(
     user: AppUser,
     request: NewMessageRequest,
     conversation: Conversation,
-) -> tuple[TextEntitlementSelection, ImageEntitlementSelection, list, str, str]:
+) -> tuple[TextEntitlementSelection, ImageEntitlementSelection, list, str, str, str]:
     text_entitlement = await _require_text_entitlement(session, user, request.model)
     await _enforce_gpt52_safeguard(session, user, request.model)
 
-    image_model, image_quality = _resolve_image_settings(request, conversation)
+    image_model, image_quality, image_size = _resolve_image_settings(request, conversation, request.model)
+    _validate_provider_image_option_controls(
+        request=request,
+        image_model=image_model,
+        requires_image_generation=_is_image_generation_requested(request.tool_choice),
+    )
     image_entitlement = await _require_image_entitlement(
         session,
         user.id,
         image_model,
         image_quality,
+        image_size,
     )
-    pending_docs_count = await count_conversation_pending_indexing_documents(session, conversation.id)
+    pending_docs_count = await count_conversation_pending_indexing_documents(
+        session,
+        conversation.id,
+        user=user,
+    )
     if pending_docs_count > 0:
         raise HTTPException(
             status_code=409,
@@ -589,16 +702,36 @@ async def _check_entitlements(
             },
         )
 
-    vector_store_ids = await list_conversation_ready_vector_store_ids(session, conversation.id)
+    vector_store_ids = await list_conversation_ready_vector_store_ids(
+        session,
+        conversation.id,
+        user=user,
+    )
+    model_provider = get_text_model_provider(request.model)
+    if _is_file_search_requested(request.tool_choice) and model_provider != "openai":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "file_search_not_supported_for_provider",
+                "provider": model_provider,
+                "model": request.model,
+                "message": "File search is currently only supported for OpenAI models.",
+            },
+        )
+
+    _validate_reasoning_controls(request)
+
     tools = await _build_tools(
         image_entitlement.allowed,
         image_model,
         image_quality,
+        image_size,
         vector_store_ids=vector_store_ids,
+        provider=model_provider,
     )
 
     if _is_image_generation_requested(request.tool_choice) and not image_entitlement.allowed:
-        _raise_image_entitlement_error(image_entitlement, image_model, image_quality)
+        _raise_image_entitlement_error(image_entitlement, image_model, image_quality, image_size)
     if _is_file_search_requested(request.tool_choice) and not vector_store_ids:
         raise HTTPException(
             status_code=409,
@@ -608,7 +741,59 @@ async def _check_entitlements(
             },
         )
 
-    return text_entitlement, image_entitlement, tools, image_model, image_quality
+    return text_entitlement, image_entitlement, tools, image_model, image_quality, image_size
+
+
+def _validate_reasoning_controls(request: NewMessageRequest) -> None:
+    # Backward compatibility: legacy/frontend clients may always send the
+    # boolean `thinking` toggle. For models without explicit reasoning controls
+    # we accept and ignore this value instead of hard-failing the request.
+    if request.reasoning_effort is not None and request.model not in GOOGLE_THINKING_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "reasoning_effort_not_supported_for_model",
+                "model": request.model,
+            },
+        )
+
+
+def _validate_provider_image_option_controls(
+    *,
+    request: NewMessageRequest,
+    image_model: str,
+    requires_image_generation: bool,
+) -> None:
+    provider = get_image_model_provider(image_model)
+    if provider == "google":
+        if request.image_quality is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "image_quality_not_supported_for_provider",
+                    "provider": "google",
+                    "image_model": image_model,
+                },
+            )
+        if requires_image_generation and request.image_size is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "image_size_required_for_provider",
+                    "provider": "google",
+                    "image_model": image_model,
+                },
+            )
+    else:
+        if request.image_size is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "image_size_not_supported_for_provider",
+                    "provider": provider,
+                    "image_model": image_model,
+                },
+            )
 
 
 def _normalize_tool_name(value: Any) -> str | None:
@@ -728,6 +913,7 @@ def _raise_image_entitlement_error(
     image_entitlement: ImageEntitlementSelection,
     image_model: str,
     image_quality: str,
+    image_size: str,
 ) -> None:
     if image_entitlement.throttle_reason == "pacing":
         wait_seconds = (
@@ -745,6 +931,14 @@ def _raise_image_entitlement_error(
             detail={
                 "error": "image_quality_not_allowed",
                 "requested_quality": image_quality,
+            },
+        )
+    if image_entitlement.throttle_reason == "resolution_restricted":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "image_resolution_not_allowed",
+                "requested_resolution": image_size,
             },
         )
     if image_entitlement.throttle_reason == "model_restricted":
@@ -921,10 +1115,22 @@ async def _replace_message_content(
         ordinal += 1
 
 
-def _resolve_image_settings(request: NewMessageRequest, conversation: Conversation) -> tuple[str, str]:
-    image_model = request.image_model or conversation.image_model or "gpt-image-1.5"
+def _resolve_image_settings(
+    request: NewMessageRequest,
+    conversation: Conversation,
+    text_model: str,
+) -> tuple[str, str, str]:
+    image_model = _validate_or_align_image_model(
+        model=text_model,
+        image_model=request.image_model or conversation.image_model,
+        explicit_image_model=request.image_model is not None,
+    )
+    image_provider = get_image_model_provider(image_model)
+    if image_provider == "google":
+        image_size = request.image_size or conversation.image_size or "1k"
+        return image_model, "", image_size
     image_quality = request.image_quality or conversation.image_quality or "low"
-    return image_model, image_quality
+    return image_model, image_quality, ""
 
 
 async def _require_image_entitlement(
@@ -932,15 +1138,20 @@ async def _require_image_entitlement(
     user_id: uuid.UUID,
     image_model: str,
     image_quality: str,
+    image_size: str,
 ) -> ImageEntitlementSelection:
-    pricing = await get_image_quality_pricing(session, image_model, image_quality)
+    image_provider = get_image_model_provider(image_model)
+    option_value = image_size if image_provider == "google" else image_quality
+    pricing = await get_image_quality_pricing(session, image_model, option_value)
     if not pricing:
+        error_key = "image_resolution_unavailable" if image_provider == "google" else "image_quality_unavailable"
+        requested_key = "requested_resolution" if image_provider == "google" else "requested_quality"
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "image_quality_unavailable",
+                "error": error_key,
                 "requested_model": image_model,
-                "requested_quality": image_quality,
+                requested_key: option_value,
             },
         )
 
@@ -948,7 +1159,7 @@ async def _require_image_entitlement(
         session,
         user_id,
         image_model,
-        image_quality,
+        option_value,
     )
     allowed = image_entitlement.get("allowed", image_entitlement.get("source") != "none")
     tier_id = uuid.UUID(image_entitlement["tier_id"]) if image_entitlement.get("tier_id") else None
@@ -972,13 +1183,17 @@ async def _build_tools(
     image_allowed: bool,
     image_model: str,
     image_quality: str,
+    image_size: str,
     vector_store_ids: list[str] | None = None,
+    provider: str = "openai",
 ):
     return await create_tools_list(
         image_allowed,
         image_model=image_model,
         image_quality=image_quality,
+        image_size=image_size,
         vector_store_ids=vector_store_ids,
+        provider=provider,
     )
 
 
@@ -1006,6 +1221,7 @@ def _apply_image_quota_notice(
     wait_time: timedelta | None = None,
     image_model: str | None = None,
     image_quality: str | None = None,
+    image_size: str | None = None,
 ) -> str:
     prompt = system_prompt or ""
     if image_allowed:
@@ -1035,6 +1251,14 @@ def _apply_image_quota_notice(
             + f"\n\nSYSTEM NOTICE: The requested image quality '{quality_label}' is not included in the user's plan. "
             "The image generation tool is disabled for this request. "
             "If the user asks for that quality, explain that they need to upgrade their subscription tier to access it.\n\n"
+        )
+    if throttle_reason == "resolution_restricted":
+        resolution_label = image_size or "requested"
+        return (
+            prompt
+            + f"\n\nSYSTEM NOTICE: The requested image resolution '{resolution_label}' is not included in the user's plan. "
+            "The image generation tool is disabled for this request. "
+            "If the user asks for that resolution, explain that they need to upgrade their subscription tier to access it.\n\n"
         )
 
     if throttle_reason == "model_restricted":
@@ -1367,9 +1591,12 @@ def _queue_generation(
     tools: list,
     request_id: str,
     previous_response_id: Optional[str],
+    previous_interaction_id: Optional[str],
     chain_context_fingerprint: Optional[str],
     image_entitlement_tier_id: Optional[uuid.UUID],
     image_entitlement_pack_id: Optional[uuid.UUID],
+    thinking_enabled: Optional[bool],
+    reasoning_effort: Optional[str],
 ) -> None:
     background_tasks.add_task(
         generate_and_publish,
@@ -1385,9 +1612,12 @@ def _queue_generation(
         tools=tools,
         request_id=request_id,
         previous_response_id=previous_response_id,
+        previous_interaction_id=previous_interaction_id,
         chain_context_fingerprint=chain_context_fingerprint,
         image_entitlement_tier_id=image_entitlement_tier_id,
         image_entitlement_pack_id=image_entitlement_pack_id,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -1458,6 +1688,8 @@ async def handle_get_conversation(
         model=conversation.model,
         image_model=conversation.image_model,
         image_quality=conversation.image_quality,
+        image_size=conversation.image_size,
+        thinking=bool(getattr(conversation, "thinking", True)),
     )
 
 

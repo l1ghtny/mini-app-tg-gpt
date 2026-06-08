@@ -1,10 +1,11 @@
 import math
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.models import ImageQualityPricing, RequestLedger
+from app.db.models import ImageQualityPricing, RequestLedger, TextModelCatalog
 from app.schemas.usage import (
     FeatureUsageResponse,
     UserImageEnergyResponse,
@@ -20,6 +21,17 @@ from app.services.subscription_check.entitlements import (
     remaining_images,
 )
 from app.services.subscription_check.pacing import check_image_pacing, get_image_energy_snapshot
+from app.services.model_registry import (
+    get_image_model_provider,
+    get_text_usage_bucket,
+    get_text_usage_bucket_display_names,
+    list_text_usage_bucket_models,
+)
+
+
+def _next_utc_midnight() -> datetime:
+    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    return now + timedelta(days=1)
 
 
 def _daily_energy_from_tier(tier) -> int:
@@ -28,6 +40,19 @@ def _daily_energy_from_tier(tier) -> int:
 
 def _daily_energy_from_entitlement(ent: dict) -> int:
     return int(ent.get("daily_image_energy") or 0)
+
+
+def _image_option_sort_key(option: str) -> tuple[int, str]:
+    normalized = (option or "").strip().lower()
+    order = {
+        "512": 0,
+        "1k": 1,
+        "2k": 2,
+        "low": 10,
+        "medium": 11,
+        "high": 12,
+    }
+    return order.get(normalized, 100), normalized
 
 
 async def get_text_usage(session: AsyncSession, user) -> UserTextUsageResponse:
@@ -39,20 +64,35 @@ async def get_text_usage(session: AsyncSession, user) -> UserTextUsageResponse:
     model_names: set[str] = set()
     for sub in subscriptions:
         for limit in sub.tier.tier_model_limits:
-            model_names.add(limit.model_name)
+            model_names.add(get_text_usage_bucket(limit.model_name))
     for pack in packs:
         for limit in pack.pack.pack_model_limits:
-            model_names.add(limit.model_name)
+            model_names.add(get_text_usage_bucket(limit.model_name))
 
     sorted_model_names = sorted(model_names)
     bulk_entitlements = await list_text_entitlements_bulk(session, user.id, sorted_model_names)
+    catalog_rows = (await session.exec(
+        select(TextModelCatalog).where(
+            TextModelCatalog.model_name.in_(sorted_model_names),
+            TextModelCatalog.is_active == True,
+        )
+    )).all()
+    catalog_by_model = {row.model_name: row for row in catalog_rows}
 
     models = []
     for model_name in sorted_model_names:
         ent = bulk_entitlements.get(model_name)
         if ent:
+            bucket_model = ent.get("bucket_model", model_name)
+            catalog_row = catalog_by_model.get(bucket_model)
+            fallback_en, fallback_ru = get_text_usage_bucket_display_names(bucket_model)
             models.append({
-                "model": model_name,
+                "model": bucket_model,
+                "display_name": (catalog_row.display_name if catalog_row and catalog_row.display_name else fallback_en),
+                "display_name_ru": (
+                    catalog_row.display_name_ru if catalog_row and catalog_row.display_name_ru else fallback_ru
+                ),
+                "bucket_models": ent.get("bucket_models") or list_text_usage_bucket_models(model_name),
                 "total_remaining": ent["total_remaining"],
                 "selected": ent["selected"],
                 "entitlements": ent["entitlements"],
@@ -120,6 +160,8 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
 
     pricing_by_model: dict[str, list[ImageQualityPricing]] = {}
     for row in pricing_rows:
+        if get_image_model_provider(row.image_model) == "google" and row.quality not in {"512", "1k", "2k"}:
+            continue
         pricing_by_model.setdefault(row.image_model, []).append(row)
 
     models = []
@@ -130,9 +172,8 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
         entitlements = breakdown["entitlements"]
         total_remaining_credits = breakdown["total_remaining_credits"]
 
-        # All image qualities are universally available; energy is the sole limiter.
-        qualities = []
-        for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: p.quality):
+        resolutions = []
+        for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: _image_option_sort_key(p.quality)):
             cost = pricing.credit_cost or 1.0
             if total_remaining_credits == -1:
                 remaining = -1
@@ -180,10 +221,12 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                     "remaining": ent_remaining if ent_remaining == -1 else max(0, ent_remaining),
                     "remaining_credits": ent_remaining_credits,
                     "pacing": pacing,
+                    "next_reset_at": _next_utc_midnight() if ent.get("daily_image_energy") else None,
                 })
 
-            qualities.append({
-                "quality": pricing.quality,
+            resolution = pricing.quality
+            resolutions.append({
+                "resolution": resolution,
                 "credit_cost": pricing.credit_cost,
                 "description": pricing.description,
                 "remaining": remaining if remaining == -1 else max(0, remaining),
@@ -195,7 +238,7 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
             "model": image_model,
             "entitlements": entitlements,
             "total_remaining_credits": total_remaining_credits,
-            "qualities": qualities,
+            "resolutions": resolutions,
         })
 
     return UserImageUsageResponse(status="active", models=models)
@@ -273,6 +316,7 @@ async def get_image_energy_usage(session: AsyncSession, user) -> UserImageEnergy
             "saved_days": saved_energy // daily_energy if daily_energy > 0 else 0,
             "is_throttled": is_throttled,
             "wait_seconds": int(wait_time.total_seconds()),
+            "next_reset_at": _next_utc_midnight() if daily_energy > 0 else None,
         })
 
     if not sources:

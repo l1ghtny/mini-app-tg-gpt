@@ -20,11 +20,21 @@ from app.db.subscription_tiers import (
     UsagePackSource,
     UsagePackStatus,
 )
+from app.services.model_registry import get_text_usage_bucket, get_text_usage_bucket_models
 from app.services.subscription_check.pacing import (
     check_image_pacing,
     get_image_energy_snapshot,
     get_image_quality_pricing,
 )
+
+
+def _utc_day_start(now: datetime | None = None) -> datetime:
+    moment = now or utcnow_naive()
+    return datetime(moment.year, moment.month, moment.day, 0, 0, 0)
+
+
+def _next_utc_midnight(now: datetime | None = None) -> datetime:
+    return _utc_day_start(now) + timedelta(days=1)
 
 
 async def month_start_expr():
@@ -41,7 +51,12 @@ async def get_current_subscription(
         .where(
             UserSubscription.user_id == user_id,
             UserSubscription.status == SubscriptionStatus.active,
-            (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > func.now()),
+            (UserSubscription.expires_at.is_(None))
+            | (UserSubscription.expires_at > func.now())
+            | (
+                UserSubscription.renewal_grace_until.is_not(None)
+                & (UserSubscription.renewal_grace_until > func.now())
+            ),
         )
         .order_by(
             SubscriptionTier.price_cents.desc(),
@@ -66,7 +81,12 @@ async def get_active_subscriptions(
         .where(
             UserSubscription.user_id == user_id,
             UserSubscription.status == SubscriptionStatus.active,
-            (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > func.now()),
+            (UserSubscription.expires_at.is_(None))
+            | (UserSubscription.expires_at > func.now())
+            | (
+                UserSubscription.renewal_grace_until.is_not(None)
+                & (UserSubscription.renewal_grace_until > func.now())
+            ),
         )
         .options(
             selectinload(UserSubscription.tier)
@@ -583,32 +603,59 @@ async def list_text_entitlements_bulk(
     if not model_names:
         return {}
 
+    requested_keys = list(dict.fromkeys(model_names))
+    bucket_models: dict[str, tuple[str, ...]] = {}
+    for key in requested_keys:
+        bucket_name = get_text_usage_bucket(key)
+        if bucket_name not in bucket_models:
+            bucket_models[bucket_name] = get_text_usage_bucket_models(key)
+    usage_model_names = sorted({member for members in bucket_models.values() for member in members})
+
     # 3. Fetch usage counts
     # For tiers
     tier_usages = {}  # tier_id -> {model_name -> count}
     for sub in subs:
-        tier_usages[sub.tier.id] = await get_tier_usage_counts(session, user_id, sub.tier, model_names)
+        tier_usages[sub.tier.id] = await get_tier_usage_counts(session, user_id, sub.tier, usage_model_names)
 
     # For packs
     pack_ids = [p.id for p in packs]
-    pack_usage_map = await get_pack_usage_counts(session, user_id, pack_ids, model_names)
+    pack_usage_map = await get_pack_usage_counts(session, user_id, pack_ids, usage_model_names)
 
     # 4. Build result
     result = {}
+    day_start = _utc_day_start()
+    next_reset_at = _next_utc_midnight(day_start)
 
     sorted_subs = _sort_subscriptions(subs)
     sorted_packs = _sort_usage_packs(packs)
 
-    for model_name in model_names:
+    for model_key in requested_keys:
+        bucket_name = get_text_usage_bucket(model_key)
+        bucket_member_names = bucket_models[bucket_name]
         tier_entries = []
         for sub in sorted_subs:
             tier = sub.tier
-            limit = next((l for l in tier.tier_model_limits if l.model_name == model_name), None)
-            if not limit:
+            bucket_limits = [limit for limit in tier.tier_model_limits if get_text_usage_bucket(limit.model_name) == bucket_name]
+            if not bucket_limits:
                 continue
 
-            used = tier_usages.get(tier.id, {}).get(model_name, 0)
-            cap = limit.monthly_requests or 0
+            used = sum(tier_usages.get(tier.id, {}).get(member_name, 0) for member_name in bucket_member_names)
+            cap = max(int(limit.monthly_requests or 0) for limit in bucket_limits)
+            daily_cap = max(int(getattr(limit, "daily_requests", 0) or 0) for limit in bucket_limits)
+
+            if daily_cap > 0:
+                used = (await session.exec(
+                    select(func.count())
+                    .where(
+                        RequestLedger.user_id == user_id,
+                        _tier_usage_filter(tier.id),
+                        RequestLedger.model_name.in_(bucket_member_names),
+                        RequestLedger.feature == "text",
+                        RequestLedger.state.in_(("reserved", "consumed")),
+                        RequestLedger.created_at >= day_start,
+                    )
+                )).one() or 0
+                cap = daily_cap
 
             if cap == -1:
                 remaining = -1
@@ -629,16 +676,17 @@ async def list_text_entitlements_bulk(
                 "remaining": remaining,
                 "expires_at": None,
                 "purchased_at": None,
+                "next_reset_at": next_reset_at if daily_cap > 0 else None,
             })
 
         pack_entries = []
         for pack in sorted_packs:
-            limit = next((l for l in pack.pack.pack_model_limits if l.model_name == model_name), None)
-            if not limit:
+            bucket_limits = [limit for limit in pack.pack.pack_model_limits if get_text_usage_bucket(limit.model_name) == bucket_name]
+            if not bucket_limits:
                 continue
 
-            used = pack_usage_map.get((pack.id, model_name), 0)
-            cap = limit.request_credits or 0
+            used = sum(pack_usage_map.get((pack.id, member_name), 0) for member_name in bucket_member_names)
+            cap = max(int(limit.request_credits or 0) for limit in bucket_limits)
 
             if cap == -1:
                 remaining = -1
@@ -659,6 +707,7 @@ async def list_text_entitlements_bulk(
                 "remaining": remaining,
                 "expires_at": pack.expires_at,
                 "purchased_at": pack.purchased_at,
+                "next_reset_at": None,
             })
 
         entitlements = tier_entries + pack_entries
@@ -666,12 +715,14 @@ async def list_text_entitlements_bulk(
         if not selected:
             selected = next((e for e in pack_entries if e["remaining"] > 0 or e["remaining"] == -1), None)
 
-        total_remaining = sum(e["remaining"] for e in entitlements if e["remaining"] != -1)
+        total_remaining = -1 if any(e["remaining"] == -1 for e in entitlements) else sum(e["remaining"] for e in entitlements)
 
-        result[model_name] = {
+        result[model_key] = {
             "entitlements": entitlements,
             "selected": selected,
             "total_remaining": total_remaining,
+            "bucket_model": bucket_name,
+            "bucket_models": list(bucket_member_names),
         }
 
     return result
@@ -1099,9 +1150,9 @@ async def finalize_request(session, *, request_id, user_id, success: bool):
 
 async def get_daily_text_count(session: AsyncSession, user_id: uuid.UUID, model: str) -> int:
     """
-    Counts how many text messages were sent using a specific model in the last 24h.
+    Counts how many text messages were sent using a specific model since UTC midnight.
     """
-    start_window = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+    start_window = _utc_day_start()
 
     statement = select(func.count()).where(
         RequestLedger.user_id == user_id,

@@ -14,6 +14,11 @@ from app.schemas.models_catalog import (
     TextModelSupportsResponse,
     TierRequirementResponse,
 )
+from app.services.model_registry import (
+    DEFAULT_IMAGE_MODEL_BY_PROVIDER,
+    DEFAULT_TEXT_MODEL_BY_PROVIDER,
+    get_image_model_provider,
+)
 
 
 _QUALITY_SORT_RANK = {
@@ -48,6 +53,7 @@ def _normalize_supports(value: Any) -> TextModelSupportsResponse:
         file_search=bool(value.get("file_search", False)),
         image_gen=bool(value.get("image_gen", False)),
         reasoning=bool(value.get("reasoning", False)),
+        thinking=bool(value.get("thinking", False)),
     )
 
 
@@ -78,6 +84,8 @@ async def get_models_catalog(session: AsyncSession) -> ModelsCatalogResponse:
 
     qualities_by_model: dict[str, list[ImageQualityPricing]] = {}
     for row in quality_rows:
+        if get_image_model_provider(row.image_model) == "google" and row.quality not in {"512", "1k", "2k"}:
+            continue
         qualities_by_model.setdefault(row.image_model, []).append(row)
 
     text_models = [
@@ -140,8 +148,18 @@ async def get_models_catalog(session: AsyncSession) -> ModelsCatalogResponse:
     updated_candidates.extend([r.updated_at for r in image_rows if r.updated_at])
     updated_at = max(updated_candidates) if updated_candidates else datetime.now(timezone.utc).replace(tzinfo=None)
 
+    provider_defaults: dict[str, dict[str, Any]] = {}
+    for provider in ("openai", "google"):
+        text_default = next((row.model_name for row in text_rows if row.provider == provider), None)
+        image_default = next((row.model_name for row in image_rows if row.provider == provider), None)
+        provider_defaults[provider] = {
+            "text": text_default or DEFAULT_TEXT_MODEL_BY_PROVIDER.get(provider),
+            "image": image_default or DEFAULT_IMAGE_MODEL_BY_PROVIDER.get(provider),
+        }
+
     return ModelsCatalogResponse(
         text_models=text_models,
         image_models=image_models,
+        provider_defaults=provider_defaults,
         updated_at=updated_at,
     )

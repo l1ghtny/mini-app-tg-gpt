@@ -42,7 +42,7 @@ async def test_generate_and_publish_with_b64_image_real_r2(monkeypatch):
         async def publish(self, mid, ev): self.events.append(ev)
         async def mark_done(self, mid, ok=True, error=None): self._done=(ok,error)
 
-    monkeypatch.setattr(helpers, "stream_normalized_openai_response", fake_stream, raising=True)
+    monkeypatch.setattr(helpers, "stream_normalized_ai_response", fake_stream, raising=True)
     await helpers.generate_and_publish(
         conversation_id=convo.id,
         assistant_message_id=msg.id,

@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Response, UploadFile
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -16,6 +17,7 @@ documents = APIRouter(tags=["documents"], prefix="/documents")
 async def upload_document(
     file: UploadFile,
     background_tasks: BackgroundTasks,
+    provider_override: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
@@ -24,6 +26,7 @@ async def upload_document(
         user=current_user,
         background_tasks=background_tasks,
         upload=file,
+        provider_override=provider_override,
     )
 
 
@@ -85,4 +88,3 @@ async def unpin_document(
         document_id=document_id,
         pin=False,
     )
-

@@ -1,6 +1,7 @@
 import os
 import time
 import uuid
+import logging
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -12,16 +13,18 @@ from starlette.responses import StreamingResponse
 
 from app.api.dependencies import get_current_user
 from app.db.database import get_session
-from app.db.models import AppUser
+from app.db.models import AppUser, MessageContent
 from app.r2.methods import upload_fileobject
 from app.r2.settings import Settings
-from app.schemas.images import ImageUploaded
+from app.schemas.images import ImageUploaded, ImagePrepareShareResponse
 
 images = APIRouter(tags=["images"], prefix="/images")
+logger = logging.getLogger(__name__)
 _PROXY_ALLOWED_HOSTS_ENV = "IMAGE_FETCH_PROXY_ALLOWED_HOSTS"
 _PROXY_ACCEPT = "image/*,application/octet-stream;q=0.9,*/*;q=0.1"
 _PROXY_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=10.0)
 _PROXY_MAX_REDIRECTS = int(os.getenv("IMAGE_FETCH_PROXY_MAX_REDIRECTS", "3"))
+_SHARE_BUTTON_TEXT = "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u0441\u0432\u043e\u0439 \u0440\u0438\u0441\u0443\u043d\u043e\u043a \U0001F3A8"
 
 
 def _get_proxy_allowed_hosts() -> set[str]:
@@ -189,3 +192,105 @@ async def proxy_image(url: str = Query(..., min_length=8, description="Public im
         headers=headers,
         background=BackgroundTask(_close_proxy_stream, client, upstream),
     )
+
+
+_bot_username = None
+
+
+async def _get_bot_username() -> str:
+    global _bot_username
+    if _bot_username is not None:
+        return _bot_username
+
+    token = os.getenv("BOT_TOKEN")
+    if not token or token == "mock_token":
+        return "bot"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("ok"):
+                    _bot_username = data["result"]["username"]
+                    return _bot_username
+    except Exception:
+        pass
+
+    return "bot"
+
+
+@images.post("/{id}/prepare-share", response_model=ImagePrepareShareResponse)
+async def prepare_image_share(
+    id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    # Find the image message content
+    content = await session.get(MessageContent, id)
+    if not content or content.type != "image_url":
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    image_url = content.value
+
+    # Call Telegram savePreparedInlineMessage
+    token = os.getenv("BOT_TOKEN")
+    if not token or token == "mock_token":
+        # Return mock ID for local testing/dev
+        return ImagePrepareShareResponse(prepared_message_id=f"mock_prep_{uuid.uuid4()}")
+
+    bot_username = await _get_bot_username()
+
+    payload = {
+        "user_id": current_user.telegram_id,
+        "result": {
+            "type": "photo",
+            "id": str(content.id),
+            "photo_url": image_url,
+            "thumbnail_url": image_url,
+            "reply_markup": {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": _SHARE_BUTTON_TEXT,
+                            "url": f"https://t.me/{bot_username}?start=img_{current_user.telegram_id}"
+                        }
+                    ]
+                ]
+            }
+        },
+        "allow_user_chats": True,
+        "allow_group_chats": True,
+        "allow_channel_chats": True
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{token}/savePreparedInlineMessage",
+                json=payload
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("ok"):
+                    prepared_id = data["result"]["id"]
+                    return ImagePrepareShareResponse(prepared_message_id=str(prepared_id))
+
+            logger.error(
+                "Telegram savePreparedInlineMessage failed status=%s body=%s image_id=%s user_id=%s",
+                resp.status_code,
+                resp.text[:1000],
+                str(content.id),
+                str(current_user.id),
+            )
+            raise HTTPException(status_code=502, detail="Telegram prepare-share failed")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Telegram prepare-share request failed image_id=%s user_id=%s",
+            str(content.id),
+            str(current_user.id),
+        )
+        raise HTTPException(status_code=502, detail="Telegram prepare-share unavailable") from exc
+
