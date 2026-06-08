@@ -170,22 +170,27 @@ def _generation_config_for_request(
         return config
 
     thinking_level = (reasoning_effort or "").strip().lower() or None
-    if thinking_level not in {"low", "medium", "high"}:
+    if thinking_level not in {"minimal", "low", "medium", "high"}:
         if thinking_enabled is False:
             thinking_level = "low"
         elif thinking_enabled:
-            thinking_level = "medium"
+            thinking_level = "low"
         else:
             thinking_level = None
 
-    if is_google_image_model and thinking_level:
-        # Google image models currently accept "minimal" and "high" levels.
-        thinking_level = {"low": "minimal", "medium": "minimal", "high": "high"}.get(thinking_level)
+    if thinking_level:
+        # Gemini currently rejects the legacy "minimal" value for the affected
+        # models and accepts only "low" and "high". Keep internal/legacy values
+        # from being forwarded upstream.
+        thinking_level = {
+            "minimal": "low",
+            "low": "low",
+            "medium": "low",
+            "high": "high",
+        }.get(thinking_level)
 
     if thinking_level:
         config["thinking_level"] = thinking_level
-
-    if thinking_level:
         config["thinking_summaries"] = "auto"
 
     normalized_size = (image_size or "").strip().lower()
@@ -351,7 +356,7 @@ async def stream_normalized_google_response(
                             "source_event": "google.thinking",
                         }
                         thinking_started = True
-                    
+
                     thought_text = ""
                     if delta.content and hasattr(delta.content, "text"):
                         thought_text = delta.content.text or ""
