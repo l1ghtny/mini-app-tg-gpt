@@ -63,6 +63,7 @@ async def test_create_message_returns_user_and_assistant_ids(monkeypatch):
             [],
             "gpt-image-1.5",
             "low",
+            "1k",
         )
 
     async def _fake_build_history(*_args, **_kwargs):
@@ -137,6 +138,7 @@ async def test_create_message_idempotent_response_includes_both_ids(monkeypatch)
             [],
             "gpt-image-1.5",
             "low",
+            "1k",
         )
 
     async def _fake_build_history(*_args, **_kwargs):

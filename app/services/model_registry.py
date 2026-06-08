@@ -55,6 +55,28 @@ GOOGLE_THINKING_MODELS = {
     "gemini-3.1-pro-preview",
 }
 
+TEXT_USAGE_BUCKET_MEMBERS: dict[str, tuple[str, ...]] = {
+    "gpt-5.4-nano": ("gpt-5.4-nano", "gemini-3.1-flash-lite"),
+    "gpt-5.4-mini": ("gpt-5.4-mini", "gemini-3.5-flash"),
+    "gpt-5.5": ("gpt-5.5", "gemini-3.1-pro-preview"),
+}
+
+TEXT_MODEL_DISPLAY_NAMES: dict[str, tuple[str, str]] = {
+    "gpt-5.5": ("Flagship", "Флагман"),
+    "gpt-5.2": ("Balanced", "Сбалансированный"),
+    "gpt-5.4": ("Balanced", "Сбалансированный"),
+    "gpt-5.4-mini": ("Smart", "Умный"),
+    "gpt-5.4-nano": ("Fast", "Быстрый"),
+    "gemini-3.1-flash-lite": ("Gemini 3.1 Flash Lite", "Gemini 3.1 Flash Lite"),
+    "gemini-3.5-flash": ("Gemini 3.5 Flash", "Gemini 3.5 Flash"),
+    "gemini-3.1-pro-preview": ("Gemini 3.1 Pro", "Gemini 3.1 Pro"),
+}
+
+TEXT_USAGE_BUCKET_BY_MODEL: dict[str, str] = {}
+for _bucket_name, _members in TEXT_USAGE_BUCKET_MEMBERS.items():
+    for _member in _members:
+        TEXT_USAGE_BUCKET_BY_MODEL[_member] = _bucket_name
+
 
 def get_text_model_provider(model_name: str) -> ProviderName:
     return TEXT_MODEL_PROVIDER[model_name]
@@ -70,6 +92,28 @@ def get_default_image_model_for_provider(provider: ProviderName) -> str:
 
 def get_default_text_model_for_provider(provider: ProviderName) -> str:
     return DEFAULT_TEXT_MODEL_BY_PROVIDER[provider]
+
+
+def get_text_usage_bucket(model_name: str) -> str:
+    return TEXT_USAGE_BUCKET_BY_MODEL.get(model_name, model_name)
+
+
+def get_text_usage_bucket_models(model_name: str) -> tuple[str, ...]:
+    bucket = get_text_usage_bucket(model_name)
+    return TEXT_USAGE_BUCKET_MEMBERS.get(bucket, (bucket,))
+
+
+def list_text_usage_bucket_models(model_name: str) -> list[str]:
+    return list(get_text_usage_bucket_models(model_name))
+
+
+def get_text_model_display_names(model_name: str) -> tuple[str, str]:
+    return TEXT_MODEL_DISPLAY_NAMES.get(model_name, (model_name, model_name))
+
+
+def get_text_usage_bucket_display_names(model_name: str) -> tuple[str, str]:
+    bucket = get_text_usage_bucket(model_name)
+    return get_text_model_display_names(bucket)
 
 
 def models_share_provider(text_model: str, image_model: str) -> bool:

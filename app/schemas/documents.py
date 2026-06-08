@@ -14,6 +14,18 @@ DocumentStatus = Literal[
     "deleted",
 ]
 
+DocumentProvider = Literal["openai", "google"]
+
+
+class DocumentProviderArtifactResponse(BaseModel):
+    provider: DocumentProvider
+    status: DocumentStatus
+    external_file_id: Optional[str] = None
+    external_index_id: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    indexed_at: Optional[datetime] = None
+
 
 class UserDocumentResponse(BaseModel):
     id: uuid.UUID
@@ -29,6 +41,8 @@ class UserDocumentResponse(BaseModel):
     updated_at: datetime
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+    primary_provider: DocumentProvider = "openai"
+    provider_artifacts: list[DocumentProviderArtifactResponse] = []
 
 
 class DocumentsListResponse(BaseModel):
@@ -51,9 +65,10 @@ class DocumentCapabilitiesResponse(BaseModel):
 
 class ConversationDocumentsUpdateRequest(BaseModel):
     document_ids: list[uuid.UUID]
+    provider_override: Optional[DocumentProvider] = None
 
 
 class ConversationDocumentsUpdateResponse(BaseModel):
     conversation_id: uuid.UUID
     document_ids: list[uuid.UUID]
-
+    effective_provider: DocumentProvider = "openai"

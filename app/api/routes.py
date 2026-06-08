@@ -249,6 +249,7 @@ async def replace_conversation_documents(
         user=current_user,
         conversation_id=conversation_id,
         document_ids=request.document_ids,
+        provider_override=request.provider_override,
     )
 
 
@@ -258,6 +259,7 @@ async def replace_conversation_documents(
 )
 async def get_conversation_documents(
     conversation_id: uuid.UUID,
+    provider_override: str | None = None,
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
@@ -265,6 +267,7 @@ async def get_conversation_documents(
         session=session,
         user=current_user,
         conversation_id=conversation_id,
+        provider_override=provider_override,
     )
 
 

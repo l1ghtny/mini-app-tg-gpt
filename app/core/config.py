@@ -39,5 +39,9 @@ class Settings:
     BROADCAST_ADMIN_TOKEN: str = os.getenv("BROADCAST_ADMIN_TOKEN", "")
     OPENAI_CHAINING_ENABLED: bool = os.getenv("OPENAI_CHAINING_ENABLED", "False").lower() in ("true", "1")
     OPENAI_CHAIN_MAX_INACTIVITY_DAYS: int = int(os.getenv("OPENAI_CHAIN_MAX_INACTIVITY_DAYS", "14"))
+    DOCUMENT_PROVIDER_DEFAULT: str = os.getenv("DOCUMENT_PROVIDER_DEFAULT", "openai")
+    GOOGLE_DOCUMENTS_ENABLED: bool = os.getenv("GOOGLE_DOCUMENTS_ENABLED", "False").lower() in ("true", "1")
+    DOCUMENT_PROVIDER_FALLBACK_ENABLED: bool = os.getenv("DOCUMENT_PROVIDER_FALLBACK_ENABLED", "True").lower() in ("true", "1")
+    DOCUMENT_DUAL_INDEX_ENABLED: bool = os.getenv("DOCUMENT_DUAL_INDEX_ENABLED", "False").lower() in ("true", "1")
 
 settings = Settings()

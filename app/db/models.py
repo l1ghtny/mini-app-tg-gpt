@@ -29,6 +29,7 @@ class AppUser(SQLModel, table=True):
     default_prompt: str = Field(default="Ты помощник, готовый ответить на вопросы.")
     default_text_model: str = Field(default="gpt-5.4-nano")
     default_image_model: str = Field(default="gpt-image-1.5")
+    default_document_provider: str = Field(default="openai")
     default_thinking: bool = Field(default=True)
 
     conversations: List["Conversation"] = Relationship(back_populates="user")
@@ -36,6 +37,7 @@ class AppUser(SQLModel, table=True):
     requests: List["RequestLedger"] = Relationship(back_populates="user")
     payments: List["Payment"] = Relationship(back_populates="user")
     documents: List["UserDocument"] = Relationship(back_populates="user")
+    payment_binding_sessions: List["PaymentBindingSession"] = Relationship(back_populates="user")
 
 
 class WhatsNewItem(SQLModel, table=True):
@@ -443,6 +445,10 @@ class UserDocument(SQLModel, table=True):
         back_populates="document",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
+    provider_artifacts: List["DocumentProviderArtifact"] = Relationship(
+        back_populates="document",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
 
 
 class ConversationDocument(SQLModel, table=True):
@@ -477,16 +483,55 @@ class Payment(SQLModel, table=True):
     # TBank specific fields
     tbank_payment_id: Optional[str] = Field(default=None, index=True)
     tbank_status: str = Field(default="NEW")  # NEW, CONFIRMED, REJECTED, etc.
+    payment_method_id: Optional[uuid.UUID] = Field(default=None, foreign_key="payment_methods.id", index=True)
+    flow_kind: str = Field(default="purchase", index=True)
+    renewal_failure_reason: Optional[str] = Field(default=None, index=True)
+    bound_method_snapshot: Optional[dict] = Field(default=None, sa_column=Column(JSONB, nullable=True))
 
     created_at: datetime = Field(default_factory=utcnow_naive)
     updated_at: datetime = Field(default_factory=utcnow_naive)
 
     user: "AppUser" = Relationship()
+    payment_method: Optional["PaymentMethod"] = Relationship()
 
 
 class PaymentMethodType(str, Enum):
     card = "card"
     sbp = "sbp"
+
+
+class PaymentMethodStatus(str, Enum):
+    pending = "pending"
+    active = "active"
+    detached = "detached"
+    failed = "failed"
+
+
+class BindingMethodType(str, Enum):
+    auto = "auto"
+    card = "card"
+    sbp = "sbp"
+
+
+class BindingSessionStatus(str, Enum):
+    pending = "pending"
+    active = "active"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class DocumentProvider(str, Enum):
+    openai = "openai"
+    google = "google"
+
+
+class DocumentProviderArtifactStatus(str, Enum):
+    uploading = "uploading"
+    processing = "processing"
+    ready = "ready"
+    failed = "failed"
+    delete_queued = "delete_queued"
+    deleted = "deleted"
 
 
 class PaymentMethod(SQLModel, table=True):
@@ -512,10 +557,64 @@ class PaymentMethod(SQLModel, table=True):
     # Phone for SBP if available
     phone: Optional[str] = Field(default=None)
 
+    status: str = Field(default=PaymentMethodStatus.active.value, index=True)
     is_default: bool = Field(default=False)
+    bound_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    detached_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    last_charge_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    last_charge_status: Optional[str] = Field(default=None)
+    last_charge_error: Optional[str] = Field(default=None)
+    binding_request_key: Optional[str] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow_naive)
 
     user: "AppUser" = Relationship()
+
+
+class PaymentBindingSession(SQLModel, table=True):
+    __tablename__ = "payment_binding_session"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    tier_id: Optional[uuid.UUID] = Field(default=None, foreign_key="subscription_tier.id", index=True)
+    method_type: str = Field(default=BindingMethodType.auto.value, index=True)
+    status: str = Field(default=BindingSessionStatus.pending.value, index=True)
+    request_key: str = Field(index=True, unique=True)
+    payment_url: Optional[str] = Field(default=None)
+    qr_payload: Optional[str] = Field(default=None)
+    qr_image_svg: Optional[str] = Field(default=None)
+    bank_member_id: Optional[str] = Field(default=None)
+    linked_payment_method_id: Optional[uuid.UUID] = Field(default=None, foreign_key="payment_methods.id", index=True)
+    error_code: Optional[str] = Field(default=None, index=True)
+    error_message: Optional[str] = Field(default=None)
+    bound_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    user: "AppUser" = Relationship(back_populates="payment_binding_sessions")
+    linked_payment_method: Optional["PaymentMethod"] = Relationship()
+
+
+class DocumentProviderArtifact(SQLModel, table=True):
+    __tablename__ = "document_provider_artifact"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    document_id: uuid.UUID = Field(foreign_key="user_document.id", index=True)
+    provider: str = Field(default=DocumentProvider.openai.value, index=True)
+    status: str = Field(default=DocumentProviderArtifactStatus.uploading.value, index=True)
+    external_file_id: Optional[str] = Field(default=None, index=True)
+    external_index_id: Optional[str] = Field(default=None, index=True)
+    error_code: Optional[str] = Field(default=None, index=True)
+    error_message: Optional[str] = Field(default=None)
+    indexed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    deleted_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    document: UserDocument = Relationship(back_populates="provider_artifacts")
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "provider", name="uq_document_provider_artifact"),
+    )
 
 
 class ImageQualityPricing(SQLModel, table=True):

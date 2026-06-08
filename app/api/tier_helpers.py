@@ -16,6 +16,7 @@ from app.schemas.subscriptions import (
     TierMonthlyLimits,
     TierSubscribeResponse,
 )
+from app.services.model_registry import get_image_model_provider
 from app.services.subscription_check.realtime_check import check_tier
 
 
@@ -112,6 +113,8 @@ async def _load_image_pricing(session: AsyncSession) -> dict[str, list[ImageQual
 
     pricing_by_model: dict[str, list[ImageQualityPricing]] = {}
     for row in pricing_rows:
+        if get_image_model_provider(row.image_model) == "google" and row.quality not in {"512", "1k", "2k"}:
+            continue
         pricing_by_model.setdefault(row.image_model, []).append(row)
     return pricing_by_model
 

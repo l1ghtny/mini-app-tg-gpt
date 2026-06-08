@@ -687,7 +687,11 @@ async def _check_entitlements(
         image_quality,
         image_size,
     )
-    pending_docs_count = await count_conversation_pending_indexing_documents(session, conversation.id)
+    pending_docs_count = await count_conversation_pending_indexing_documents(
+        session,
+        conversation.id,
+        user=user,
+    )
     if pending_docs_count > 0:
         raise HTTPException(
             status_code=409,
@@ -698,7 +702,11 @@ async def _check_entitlements(
             },
         )
 
-    vector_store_ids = await list_conversation_ready_vector_store_ids(session, conversation.id)
+    vector_store_ids = await list_conversation_ready_vector_store_ids(
+        session,
+        conversation.id,
+        user=user,
+    )
     model_provider = get_text_model_provider(request.model)
     if _is_file_search_requested(request.tool_choice) and model_provider != "openai":
         raise HTTPException(

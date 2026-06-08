@@ -18,10 +18,14 @@ class TextEntitlementEntry(BaseModel):
     remaining: int
     expires_at: Optional[datetime] = None
     purchased_at: Optional[datetime] = None
+    next_reset_at: Optional[datetime] = None
 
 
 class TextModelUsage(BaseModel):
     model: str
+    display_name: str
+    display_name_ru: str
+    bucket_models: list[str] = []
     total_remaining: int
     selected: Optional[TextEntitlementEntry] = None
     entitlements: list[TextEntitlementEntry] = []
@@ -72,6 +76,7 @@ class ImageEntitlementEntry(BaseModel):
     expires_at: Optional[datetime] = None
     purchased_at: Optional[datetime] = None
     pacing: Optional[ImagePacing] = None
+    next_reset_at: Optional[datetime] = None
 
 
 class ImageSourceUsage(BaseModel):
@@ -84,6 +89,7 @@ class ImageSourceUsage(BaseModel):
     remaining: int
     remaining_credits: float
     pacing: Optional[ImagePacing] = None
+    next_reset_at: Optional[datetime] = None
 
 
 class ImageResolutionUsage(BaseModel):
@@ -120,6 +126,7 @@ class ImageEnergySourceUsage(BaseModel):
     saved_days: int
     is_throttled: bool
     wait_seconds: int
+    next_reset_at: Optional[datetime] = None
 
 
 class UserImageEnergyResponse(BaseModel):

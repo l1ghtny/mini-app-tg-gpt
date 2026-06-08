@@ -7,20 +7,40 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.api.payment_helpers import init_subscription_payment
+from app.api.payment_helpers import (
+    charge_bound_subscription,
+    get_subscription_binding_status,
+    init_subscription_binding,
+)
 from app.db.models import AppUser, Payment
 from app.db.subscription_tiers import GeneralDiscount, SubscriptionTier
-from app.schemas.subscriptions import InitPaymentRequest
+from app.schemas.subscriptions import BoundSubscriptionChargeRequest, SubscriptionBindingInitRequest
 import app.api.payment_helpers as payment_helpers
 
 
 class _FakeTbankService:
+    async def add_card(self, **_kwargs):
+        return {"Success": True, "RequestKey": "BIND-DISCOUNT-1", "PaymentURL": "https://bind.example.test"}
+
+    async def get_add_card_state(self, _request_key: str):
+        return {
+            "Success": True,
+            "Status": "COMPLETED",
+            "RebillId": "REBILL-DISCOUNT-1",
+            "Pan": "**** 4242",
+            "CardType": "Visa",
+            "ExpDate": "1229",
+        }
+
     async def init_payment(self, **_kwargs):
         return "https://pay.example.test/checkout", "TBANK_FAKE_1"
 
+    async def charge(self, *_args, **_kwargs):
+        return {"Success": True}
+
 
 @pytest.mark.asyncio
-async def test_init_subscription_payment_applies_stackable_general_discounts(monkeypatch):
+async def test_bound_subscription_charge_applies_stackable_general_discounts(monkeypatch):
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url
     engine = create_async_engine(test_db_url, future=True, echo=False)
@@ -71,16 +91,28 @@ async def test_init_subscription_payment_applies_stackable_general_discounts(mon
         session.add(d2)
         await session.commit()
 
-        result = await init_subscription_payment(
+        binding = await init_subscription_binding(
             session=session,
             user=user,
-            payload=InitPaymentRequest(
+            payload=SubscriptionBindingInitRequest(
                 tier_name="Basic",
                 email="user@example.com",
-                discount_codes=["FIRST20", "MAY10"],
+                method_type="card",
             ),
         )
-        assert result.payment_url
+        assert binding.payment_url
+
+        await get_subscription_binding_status(session, user, uuid.UUID(binding.binding_id))
+        result = await charge_bound_subscription(
+            session=session,
+            user=user,
+            payload=BoundSubscriptionChargeRequest(
+                tier_name="Basic",
+                email="user@example.com",
+                binding_id=binding.binding_id,
+            ),
+        )
+        assert result.payment_id
 
         payment = (await session.exec(select(Payment).where(Payment.user_id == user.id))).first()
 

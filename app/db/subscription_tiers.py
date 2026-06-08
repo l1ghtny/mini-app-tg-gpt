@@ -128,6 +128,7 @@ class TierModelLimit(SQLModel, table=True):
     tier_id: uuid.UUID = Field(foreign_key="subscription_tier.id", index=True)
     model_name: str = Field(index=True)
     monthly_requests: int = Field(default=0)
+    daily_requests: int = Field(default=0)
     __table_args__ = (UniqueConstraint("tier_id", "model_name", name="uq_tier_model"),)
 
     tier: SubscriptionTier = Relationship(back_populates="tier_model_limits")
@@ -167,6 +168,10 @@ class UserSubscription(SQLModel, table=True):
     status: SubscriptionStatus = Field(default=SubscriptionStatus.active)
     started_at: datetime = Field(default_factory=datetime.now, sa_column=Column(DateTime, index=True))
     expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    auto_renew_enabled: bool = Field(default=True)
+    renewal_grace_until: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    last_renewal_attempt_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    last_renewal_failure_reason: Optional[str] = Field(default=None, index=True)
 
     tier: SubscriptionTier = Relationship(back_populates="user_subscriptions")
 

@@ -15,6 +15,7 @@ from app.services.model_registry import (
 )
 
 user_settings = APIRouter(tags=["user/settings"], prefix="/user/settings")
+_ALLOWED_DOCUMENT_PROVIDERS = {"openai", "google"}
 
 
 def _provider_mismatch_detail(*, model: str, image_model: str) -> dict[str, str]:
@@ -35,6 +36,7 @@ async def get_user_settings(
     return UserSettingsResponse(
         default_text_model=current_user.default_text_model or "gpt-5.4-nano",
         default_image_model=current_user.default_image_model or "gpt-image-1.5",
+        default_document_provider=(getattr(current_user, "default_document_provider", None) or "openai"),
         default_thinking=bool(getattr(current_user, "default_thinking", True)),
     )
 
@@ -63,8 +65,13 @@ async def update_user_settings(
     if not explicit_image_model and not models_share_provider(text_model, image_model):
         image_model = get_default_image_model_for_provider(get_text_model_provider(text_model))
 
+    document_provider = request.default_document_provider or getattr(current_user, "default_document_provider", None) or "openai"
+    if document_provider not in _ALLOWED_DOCUMENT_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Invalid document provider: {document_provider}")
+
     current_user.default_text_model = text_model
     current_user.default_image_model = image_model
+    current_user.default_document_provider = document_provider
     if request.default_thinking is not None:
         current_user.default_thinking = bool(request.default_thinking)
 
@@ -75,5 +82,6 @@ async def update_user_settings(
     return UserSettingsResponse(
         default_text_model=current_user.default_text_model,
         default_image_model=current_user.default_image_model,
+        default_document_provider=(getattr(current_user, "default_document_provider", None) or "openai"),
         default_thinking=bool(getattr(current_user, "default_thinking", True)),
     )

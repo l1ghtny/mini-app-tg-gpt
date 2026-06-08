@@ -17,6 +17,7 @@ from app.schemas.models_catalog import (
 from app.services.model_registry import (
     DEFAULT_IMAGE_MODEL_BY_PROVIDER,
     DEFAULT_TEXT_MODEL_BY_PROVIDER,
+    get_image_model_provider,
 )
 
 
@@ -83,6 +84,8 @@ async def get_models_catalog(session: AsyncSession) -> ModelsCatalogResponse:
 
     qualities_by_model: dict[str, list[ImageQualityPricing]] = {}
     for row in quality_rows:
+        if get_image_model_provider(row.image_model) == "google" and row.quality not in {"512", "1k", "2k"}:
+            continue
         qualities_by_model.setdefault(row.image_model, []).append(row)
 
     text_models = [

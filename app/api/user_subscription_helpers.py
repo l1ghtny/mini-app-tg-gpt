@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 
 from fastapi import BackgroundTasks, HTTPException
@@ -59,19 +59,25 @@ def _tier_slug(name: str) -> str:
 
 async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscriptionsResponse:
     default_payment_method = await session.exec(
-        select(PaymentMethod.id).where(
+        select(PaymentMethod).where(
             PaymentMethod.user_id == user.id,
             PaymentMethod.is_default == True,
         )
     )
-    has_default_payment_method = default_payment_method.first() is not None
+    default_payment_method = default_payment_method.first()
+    has_default_payment_method = default_payment_method is not None
 
     query = (
         select(UserSubscription)
         .where(
             UserSubscription.user_id == user.id,
             UserSubscription.status == SubscriptionStatus.active,
-            (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > func.now()),
+            (UserSubscription.expires_at.is_(None))
+            | (UserSubscription.expires_at > func.now())
+            | (
+                UserSubscription.renewal_grace_until.is_not(None)
+                & (UserSubscription.renewal_grace_until > func.now())
+            ),
         )
         .options(selectinload(UserSubscription.tier))
     )
@@ -90,10 +96,21 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
         expires_at = sub.expires_at
         is_recurring_tier = bool(getattr(sub.tier, "is_recurring", True))
         is_paid_tier = sub.tier.price_cents > 0
-        auto_renew = is_recurring_tier and is_paid_tier and has_default_payment_method
+        auto_renew = bool(is_recurring_tier and is_paid_tier and getattr(sub, "auto_renew_enabled", True))
 
         if is_recurring_tier and expires_at is None:
             expires_at = _add_one_calendar_month(sub.started_at)
+
+        if not is_recurring_tier or not is_paid_tier:
+            renewal_state = "inactive"
+        elif sub.renewal_grace_until and sub.renewal_grace_until > datetime.now(timezone.utc).replace(tzinfo=None):
+            renewal_state = "grace"
+        elif not getattr(sub, "auto_renew_enabled", True):
+            renewal_state = "disabled"
+        elif has_default_payment_method:
+            renewal_state = "scheduled"
+        else:
+            renewal_state = "requires_method"
 
         active_subscriptions.append(
             SubscriptionResponse(
@@ -105,6 +122,11 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
                 auto_renew=auto_renew,
                 can_cancel=auto_renew,
                 cancel_at_period_end=is_recurring_tier and is_paid_tier and not auto_renew,
+                renewal_state=renewal_state,
+                renewal_grace_until=_format_ts(getattr(sub, "renewal_grace_until", None)),
+                last_renewal_attempt_at=_format_ts(getattr(sub, "last_renewal_attempt_at", None)),
+                last_renewal_failure_reason=getattr(sub, "last_renewal_failure_reason", None),
+                default_payment_method_id=str(default_payment_method.id) if default_payment_method else None,
                 tier_name=sub.tier.name,
                 tier_slug=_tier_slug(sub.tier.name),
                 tier_rank=sub.tier.index or 0,
@@ -172,7 +194,7 @@ async def _load_general_discounts(
     user_id,
 ) -> list[SubscriptionDiscountResponse]:
     """Load all currently active GeneralDiscount rows and evaluate eligibility."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     query = select(GeneralDiscount).where(
         GeneralDiscount.is_active == True,  # noqa: E712
         (GeneralDiscount.starts_at.is_(None)) | (GeneralDiscount.starts_at <= now),
@@ -224,19 +246,8 @@ async def cancel_subscription(
     if sub.tier.price_cents == 0:
         raise HTTPException(status_code=400, detail="Cannot cancel a free plan.")
 
-    payment_methods = await session.exec(
-        select(PaymentMethod).where(
-            PaymentMethod.user_id == user.id,
-            PaymentMethod.is_default == True,
-        )
-    )
-
-    pms = payment_methods.all()
-    if not pms:
-        raise HTTPException(status_code=400, detail="No active payment method found to cancel.")
-
-    for pm in pms:
-        await session.delete(pm)
+    sub.auto_renew_enabled = False
+    session.add(sub)
 
     background_tasks.add_task(
         track_event,

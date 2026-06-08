@@ -57,7 +57,33 @@ class TBankService:
         calculated_token = self._generate_token(data)
         return received_token == calculated_token
 
-    async def init_payment(self, order_id: str, amount_cents: int, description: str, user_id: str, recurrent: bool = False, receipt: dict = None, data: dict = None) -> tuple[str, str]:
+    async def _post(self, endpoint: str, payload: dict) -> dict:
+        payload["Token"] = self._generate_token(payload)
+        timeout = httpx.Timeout(
+            timeout=settings.TBANK_TIMEOUT_SECONDS,
+            connect=settings.TBANK_TIMEOUT_SECONDS,
+            read=settings.TBANK_TIMEOUT_SECONDS,
+            write=settings.TBANK_TIMEOUT_SECONDS,
+            pool=settings.TBANK_TIMEOUT_SECONDS,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{self.base_url}/{endpoint}", json=payload)
+        data = resp.json()
+        if not data.get("Success", False):
+            raise Exception(f"TBank {endpoint} Failed: {data.get('Message')} {data.get('Details', '')}")
+        return data
+
+    async def init_payment(
+        self,
+        order_id: str,
+        amount_cents: int,
+        description: str,
+        user_id: str,
+        recurrent: bool = False,
+        receipt: dict = None,
+        data: dict = None,
+        operation_initiator_type: str | None = None,
+    ) -> tuple[str, str]:
         """
         Initializes payment and returns (PaymentURL, PaymentId)
         """
@@ -75,6 +101,11 @@ class TBankService:
         if recurrent:
             payload["Recurrent"] = "Y"
             payload["CustomerKey"] = user_id
+        else:
+            payload["Recurrent"] = "N"
+
+        if operation_initiator_type:
+            payload["OperationInitiatorType"] = operation_initiator_type
 
         if receipt:
             payload["Receipt"] = receipt
@@ -120,6 +151,49 @@ class TBankService:
             )
 
         return data.get("PaymentURL"), str(data.get("PaymentId"))
+
+    async def add_card(self, *, customer_key: str, check_type: str = "3DSHOLD", ip: str | None = None) -> dict:
+        payload = {
+            "TerminalKey": self.terminal_key,
+            "CustomerKey": customer_key,
+            "CheckType": check_type,
+        }
+        if ip:
+            payload["IP"] = ip
+        return await self._post("AddCard", payload)
+
+    async def get_add_card_state(self, request_key: str) -> dict:
+        payload = {
+            "TerminalKey": self.terminal_key,
+            "RequestKey": request_key,
+        }
+        return await self._post("GetAddCardState", payload)
+
+    async def add_account_qr(
+        self,
+        *,
+        description: str,
+        data_type: str = "PAYLOAD",
+        data: dict | None = None,
+        bank_id: str | None = None,
+    ) -> dict:
+        payload = {
+            "TerminalKey": self.terminal_key,
+            "Description": description,
+            "DataType": data_type,
+        }
+        if bank_id:
+            payload["BankId"] = bank_id
+        if data:
+            payload["Data"] = data
+        return await self._post("AddAccountQr", payload)
+
+    async def get_add_account_qr_state(self, request_key: str) -> dict:
+        payload = {
+            "TerminalKey": self.terminal_key,
+            "RequestKey": request_key,
+        }
+        return await self._post("GetAddAccountQrState", payload)
 
     async def get_card_list(self, user_id: str) -> list[dict]:
         """
@@ -210,6 +284,15 @@ class TBankService:
             raise Exception(f"TBank Charge Failed: {data.get('Message')} {data.get('Details', '')}")
 
         return True
+
+    async def cancel_payment(self, payment_id: str, amount: int | None = None) -> dict:
+        payload = {
+            "TerminalKey": self.terminal_key,
+            "PaymentId": payment_id,
+        }
+        if amount is not None:
+            payload["Amount"] = amount
+        return await self._post("Cancel", payload)
 
 
 tbank_service = TBankService()

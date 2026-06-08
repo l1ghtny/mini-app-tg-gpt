@@ -56,6 +56,7 @@ async def test_user_settings_get_and_put():
         assert payload["default_text_model"] == "gpt-5.4-nano"
         assert payload["default_image_model"] == "gpt-image-1.5"
         assert payload["default_thinking"] is True
+        assert payload["default_document_provider"] == "openai"
 
         # 2. Put text model change only (should coerce image model to google default)
         response = await client.put(
@@ -100,5 +101,19 @@ async def test_user_settings_get_and_put():
         assert response.status_code == 200
         payload = response.json()
         assert payload["default_thinking"] is False
+
+        # 6. Update default document provider and verify persistence
+        response = await client.put(
+            "/api/v1/user/settings",
+            json={"default_document_provider": "google"}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["default_document_provider"] == "google"
+
+        response = await client.get("/api/v1/user/settings")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["default_document_provider"] == "google"
 
     await engine.dispose()
