@@ -47,7 +47,11 @@ DEFAULT_TEXT_MODEL_BY_PROVIDER: dict[ProviderName, str] = {
 
 DEFAULT_IMAGE_MODEL_BY_PROVIDER: dict[ProviderName, str] = {
     "openai": "gpt-image-1.5",
-    "google": "gemini-2.5-flash-image",
+    "google": "gemini-3.1-flash-image-preview",
+}
+
+LEGACY_IMAGE_MODEL_REPLACEMENTS: dict[str, str] = {
+    "gemini-2.5-flash-image": "gemini-3.1-flash-image-preview",
 }
 
 GOOGLE_THINKING_MODELS = {
@@ -78,12 +82,16 @@ for _bucket_name, _members in TEXT_USAGE_BUCKET_MEMBERS.items():
         TEXT_USAGE_BUCKET_BY_MODEL[_member] = _bucket_name
 
 
+def canonicalize_image_model(model_name: str) -> str:
+    return LEGACY_IMAGE_MODEL_REPLACEMENTS.get(model_name, model_name)
+
+
 def get_text_model_provider(model_name: str) -> ProviderName:
     return TEXT_MODEL_PROVIDER[model_name]
 
 
 def get_image_model_provider(model_name: str) -> ProviderName:
-    return IMAGE_MODEL_PROVIDER[model_name]
+    return IMAGE_MODEL_PROVIDER[canonicalize_image_model(model_name)]
 
 
 def get_default_image_model_for_provider(provider: ProviderName) -> str:
