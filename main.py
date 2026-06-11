@@ -25,6 +25,7 @@ from app.api.user_usage import user_usage
 from app.api.user_settings import user_settings
 from app.api.whats_new import whats_new
 from app.core.config import settings
+from app.core.version import APP_VERSION
 
 logger = settings.custom_logger
 CANARY_HEADER_NAME = os.getenv("CANARY_HEADER_NAME", "X-Canary-User").strip() or "X-Canary-User"
@@ -43,7 +44,7 @@ CANARY_ALLOWED_HEADER_VALUES = {f"tg-{telegram_id}" for telegram_id in CANARY_AL
 
 app = FastAPI(
     title="Telegram ChatGPT API",
-    version="1.5.0",
+    version=APP_VERSION,
     docs_url=None
 )
 if CANARY_ALLOWED_TG_IDS:

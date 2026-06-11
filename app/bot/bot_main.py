@@ -15,10 +15,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 import sentry_sdk
 
 from app.core.config import settings
+from app.core.version import APP_VERSION
 from app.db.database import engine
 from app.db.models import AppUser
 from app.core.metrics import track_event
-from main import app
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,7 +34,7 @@ if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
-        release=app.version,
+        release=APP_VERSION,
         # Capture only 10% of transactions for performance monitoring
         traces_sample_rate=0.1 if settings.ENVIRONMENT in ("production", "production_main_server") else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
