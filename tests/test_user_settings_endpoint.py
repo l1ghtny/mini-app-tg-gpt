@@ -66,7 +66,7 @@ async def test_user_settings_get_and_put():
         assert response.status_code == 200
         payload = response.json()
         assert payload["default_text_model"] == "gemini-3.5-flash"
-        assert payload["default_image_model"] == "gemini-2.5-flash-image"  # Coerced!
+        assert payload["default_image_model"] == "gemini-3.1-flash-image-preview"
 
         # 3. Put mismatched models (should raise provider mismatch)
         response = await client.put(

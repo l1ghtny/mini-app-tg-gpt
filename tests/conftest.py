@@ -133,15 +133,6 @@ async def _seed_reference_data(engine) -> None:
                     image_model="gpt-image-2", quality="high", credit_cost=250.0
                 ),
                 ImageQualityPricing(
-                    image_model="gemini-2.5-flash-image", quality="512", credit_cost=1.0
-                ),
-                ImageQualityPricing(
-                    image_model="gemini-2.5-flash-image", quality="1k", credit_cost=2.0
-                ),
-                ImageQualityPricing(
-                    image_model="gemini-2.5-flash-image", quality="2k", credit_cost=4.0
-                ),
-                ImageQualityPricing(
                     image_model="gemini-3.1-flash-image-preview", quality="512", credit_cost=1.0
                 ),
                 ImageQualityPricing(

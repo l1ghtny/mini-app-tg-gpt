@@ -14,7 +14,6 @@ TextModelName = Literal[
 ImageModelName = Literal[
     "gpt-image-1.5",
     "gpt-image-2",
-    "gemini-2.5-flash-image",
     "gemini-3.1-flash-image-preview",
     "gemini-3-pro-image-preview",
 ]
@@ -35,7 +34,6 @@ TEXT_MODEL_PROVIDER: dict[str, ProviderName] = {
 IMAGE_MODEL_PROVIDER: dict[str, ProviderName] = {
     "gpt-image-1.5": "openai",
     "gpt-image-2": "openai",
-    "gemini-2.5-flash-image": "google",
     "gemini-3.1-flash-image-preview": "google",
     "gemini-3-pro-image-preview": "google",
 }

@@ -129,6 +129,13 @@ Frontend messaging requirement after `activate-bound`:
 - Keep polling `GET /api/v1/payments/tbank/status/{payment_id}` until the payment becomes `CONFIRMED` or reaches a terminal failure state.
 - For this release, do not imply that the subscription is active immediately after the button press; activation happens only after bank confirmation.
 
+Local testing note:
+
+- `GET /api/v1/payments/tbank/bind-status/{binding_id}` actively syncs with T-Bank, so bind completion can be tested locally without a webhook.
+- `GET /api/v1/payments/tbank/status/{payment_id}` only returns backend-persisted payment state. It does not call T-Bank directly.
+- Because of that, a full localhost activation test still requires the T-Bank webhook to reach the local backend, for example through a temporary public tunnel or a manually replayed webhook payload.
+- Without the webhook, the UI can still test bind UX and the post-charge `pending_confirmation` state, but it will not see the subscription transition to active.
+
 ### Compatibility note for old endpoint
 
 `POST /api/v1/payments/tbank/init` still exists, but it is now only a compatibility alias to binding-init.

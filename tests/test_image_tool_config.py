@@ -20,7 +20,7 @@ async def test_create_tools_list_requests_partial_images_when_image_tool_is_enab
 async def test_create_tools_list_skips_file_search_for_google_provider():
     tools = await create_tools_list(
         image_allowed=True,
-        image_model="gemini-2.5-flash-image",
+        image_model="gemini-3.1-flash-image-preview",
         image_size="1k",
         vector_store_ids=["vs_123"],
         provider="google",
