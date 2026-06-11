@@ -86,8 +86,12 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
         raise HTTPException(status_code=403, detail="No active subscription found")
 
     discounts = await _load_active_discounts(session, user.id)
-    general_discounts = await _load_general_discounts(session, user.id)
     first_purchase_available = await _first_purchase_available(session, user.id)
+    general_discounts = await _load_general_discounts(
+        session,
+        user.id,
+        first_purchase_available=first_purchase_available,
+    )
     all_discounts = discounts + general_discounts
 
     ordered = sorted(subscriptions, key=_subscription_priority_key, reverse=True)
@@ -192,6 +196,8 @@ async def _first_purchase_available(session: AsyncSession, user_id) -> bool:
 async def _load_general_discounts(
     session: AsyncSession,
     user_id,
+    *,
+    first_purchase_available: bool | None = None,
 ) -> list[SubscriptionDiscountResponse]:
     """Load all currently active GeneralDiscount rows and evaluate eligibility."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -208,7 +214,9 @@ async def _load_general_discounts(
 
         # Evaluate eligibility conditions
         if conditions.get("no_prior_paid_sub"):
-            eligible = await _first_purchase_available(session, user_id)
+            eligible = first_purchase_available
+            if eligible is None:
+                eligible = await _first_purchase_available(session, user_id)
             if not eligible:
                 continue
 

@@ -10,7 +10,11 @@ from app.db.database import get_session
 from app.db.models import AppUser
 from app.schemas.subscriptions import UsagePackResponse
 from app.schemas.usage import UsageBalanceResponse, UsagePackBalanceInfo
-from app.services.subscription_check.entitlements import get_active_usage_packs, remaining_pack_image_requests_for_model, remaining_pack_requests_for_model
+from app.services.subscription_check.entitlements import (
+    get_active_usage_packs,
+    get_pack_image_usage_sums,
+    get_pack_usage_counts,
+)
 
 usage_packs = APIRouter(tags=["usage packs"], prefix="/usage-packs")
 
@@ -35,6 +39,30 @@ async def get_usage_balance(
     """
     # 1. Fetch all active/non-expired packs for the user
     active_packs = await get_active_usage_packs(session, current_user.id)
+    if not active_packs:
+        return UsageBalanceResponse(
+            active_packs_count=0,
+            label="No Active Packs",
+            packs=[]
+        )
+
+    pack_ids = [user_pack.id for user_pack in active_packs]
+    text_model_names = sorted(
+        {
+            limit.model_name
+            for user_pack in active_packs
+            for limit in user_pack.pack.pack_model_limits
+        }
+    )
+    image_model_names = sorted(
+        {
+            limit.image_model
+            for user_pack in active_packs
+            for limit in user_pack.pack.pack_image_model_limits
+        }
+    )
+    text_usage_map = await get_pack_usage_counts(session, current_user.id, pack_ids, text_model_names)
+    image_usage_map = await get_pack_image_usage_sums(session, current_user.id, pack_ids, image_model_names)
 
     packs_info = []
 
@@ -44,18 +72,18 @@ async def get_usage_balance(
         
         # Sum up image credits
         for limit in user_pack.pack.pack_image_model_limits:
-            pack_purchased += limit.credit_amount
-            
-            # Calculate remaining for this specific limit
-            rem = await remaining_pack_image_requests_for_model(session, user_pack, limit.image_model)
+            cap = float(limit.credit_amount or 0)
+            pack_purchased += cap
+            used = float(image_usage_map.get((user_pack.id, limit.image_model), 0.0) or 0.0)
+            rem = -1 if cap == -1 else max(0.0, cap - used)
             pack_remaining += rem
 
         # Sum up text credits (requests)
         for limit in user_pack.pack.pack_model_limits:
-            pack_purchased += limit.request_credits
-            
-            # Calculate remaining for this specific limit
-            rem = await remaining_pack_requests_for_model(session, user_pack, limit.model_name)
+            cap = float(limit.request_credits or 0)
+            pack_purchased += cap
+            used = float(text_usage_map.get((user_pack.id, limit.model_name), 0) or 0)
+            rem = -1 if cap == -1 else max(0.0, cap - used)
             pack_remaining += rem
             
         packs_info.append(UsagePackBalanceInfo(
@@ -68,14 +96,6 @@ async def get_usage_balance(
             purchased_at=user_pack.purchased_at,
             pack_details=usage_pack_helpers.pack_to_response(user_pack.pack)
         ))
-
-    # If no packs, return zeros, frontend will handle hiding/empty state
-    if not active_packs:
-        return UsageBalanceResponse(
-            active_packs_count=0,
-            label="No Active Packs",
-            packs=[]
-        )
 
     return UsageBalanceResponse(
         active_packs_count=len(active_packs),

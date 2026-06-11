@@ -39,6 +39,11 @@ async def _reset_schema(test_db_url: str) -> None:
     try:
         await conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
         await conn.execute("CREATE SCHEMA public")
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        try:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception:
+            pass
     finally:
         await conn.close()
 

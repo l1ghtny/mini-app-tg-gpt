@@ -18,7 +18,10 @@ from app.db.subscription_tiers import *
 load_dotenv()
 
 
+# Alembic must always bind to the primary/write database.
 raw_url = os.getenv("DATABASE_URL")
+if not raw_url:
+    raise RuntimeError("DATABASE_URL must be set for Alembic migrations")
 config = context.config
 safe_url = raw_url.replace("%", "%%")
 config.set_main_option("sqlalchemy.url", safe_url)

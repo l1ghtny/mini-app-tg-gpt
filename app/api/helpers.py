@@ -20,6 +20,7 @@ from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
 from app.services.ai_service import stream_normalized_ai_response
 from app.db.database import engine
+from app.services.conversation_search import queue_assistant_index_refresh
 from app.services.model_registry import get_image_model_provider
 from app.services.subscription_check.entitlements import reserve_request, finalize_request
 from app.services.subscription_check.pacing import get_image_quality_cost
@@ -165,6 +166,7 @@ async def _handle_stream_event(
     if event_type == "text.delta":
         i = ev["index"]
         buffers[i] = buffers.get(i, "") + ev["text"]
+        lifecycle["assistant_text_dirty"] = True
 
         checkpoint_bytes = settings.CHECKPOINT_BYTES
         if len(buffers[i]) - last_ckpt.get(i, 0) >= checkpoint_bytes:
@@ -293,6 +295,12 @@ async def _handle_stream_event(
         if not lifecycle.get("text_request_finalized"):
             await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
             lifecycle["text_request_finalized"] = True
+        if lifecycle.get("assistant_text_dirty"):
+            await queue_assistant_index_refresh(
+                conversation_id=conversation_id,
+                assistant_message_id=assistant_message_id,
+            )
+            lifecycle["assistant_text_dirty"] = False
         return
 
     if event_type == "error":

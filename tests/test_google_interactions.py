@@ -6,7 +6,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.db.models import AppUser, Conversation, TokenUsage
-from app.services.google_service import stream_normalized_google_response
+from app.services.google_service import _generation_config_for_request, stream_normalized_google_response
 import app.services.google_service as google_service
 
 class MockUsage:
@@ -65,7 +65,11 @@ class MockStream:
         return event
 
 class MockInteractionsResource:
+    def __init__(self):
+        self.calls = []
+
     async def create(self, **kwargs):
+        self.calls.append(kwargs)
         return MockStream()
 
 class MockAioClient:
@@ -139,3 +143,93 @@ async def test_google_interactions_stream_normalization(monkeypatch):
         assert usage.output_tokens == 24
         assert usage.reasoning_tokens == 6
         assert usage.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
+    monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
+
+    interactions = MockInteractionsResource()
+
+    class CapturingAioClient:
+        def __init__(self):
+            self.interactions = interactions
+
+    class CapturingGenaiClient:
+        def __init__(self, api_key=None):
+            self.aio = CapturingAioClient()
+
+    monkeypatch.setattr(google_service.genai, "Client", CapturingGenaiClient)
+
+    events = []
+    async for event in stream_normalized_google_response(
+        [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+        model="gemini-3.1-flash-lite",
+        instructions="You are a helpful assistant",
+        tool_choice="auto",
+        tools=[
+            {"type": "web_search"},
+            {"type": "image_generation", "model": "gemini-2.5-flash-image", "image_size": "1k"},
+        ],
+        user_id=None,
+        conversation_id=None,
+        request_id=str(uuid.uuid4()),
+        assistant_message_id=None,
+    ):
+        events.append(event)
+
+    assert interactions.calls
+    assert interactions.calls[0]["model"] == "gemini-3.1-flash-lite"
+    assert "response_modalities" not in interactions.calls[0]
+    assert any(ev.get("type") == "done" for ev in events)
+
+
+@pytest.mark.asyncio
+async def test_google_explicit_image_generation_uses_image_model(monkeypatch):
+    monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
+
+    interactions = MockInteractionsResource()
+
+    class CapturingAioClient:
+        def __init__(self):
+            self.interactions = interactions
+
+    class CapturingGenaiClient:
+        def __init__(self, api_key=None):
+            self.aio = CapturingAioClient()
+
+    monkeypatch.setattr(google_service.genai, "Client", CapturingGenaiClient)
+
+    async for _ in stream_normalized_google_response(
+        [{"role": "user", "content": [{"type": "input_text", "text": "draw a cat"}]}],
+        model="gemini-3.1-flash-lite",
+        instructions="You are a helpful assistant",
+        tool_choice={"type": "allowed_tools", "mode": "required", "tools": [{"type": "image_generation"}]},
+        tools=[
+            {"type": "web_search"},
+            {"type": "image_generation", "model": "gemini-2.5-flash-image", "image_size": "2k"},
+        ],
+        user_id=None,
+        conversation_id=None,
+        request_id=str(uuid.uuid4()),
+        assistant_message_id=None,
+    ):
+        pass
+
+    assert interactions.calls
+    assert interactions.calls[0]["model"] == "gemini-2.5-flash-image"
+    assert interactions.calls[0]["response_modalities"] == ["text", "image"]
+    assert interactions.calls[0]["generation_config"]["image_config"] == {"image_size": "2K"}
+
+
+def test_google_image_models_map_low_thinking_to_minimal():
+    config = _generation_config_for_request(
+        model="gemini-3.1-flash-image-preview",
+        thinking_enabled=False,
+        reasoning_effort=None,
+        image_size="1k",
+    )
+
+    assert config["thinking_level"] == "minimal"
+    assert config["thinking_summaries"] == "auto"
+    assert config["image_config"] == {"image_size": "1K"}

@@ -10,7 +10,7 @@ from app.api import chat_helpers
 from app.api import document_helpers
 from app.api.dependencies import get_bus, get_current_user, get_redis, rate_limit_check
 from app.db.models import AppUser, Conversation
-from app.db.database import get_session
+from app.db.database import get_read_session, get_session
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import (
     ConversationStreamRedirect,
@@ -281,7 +281,11 @@ async def get_conversation(conversation_id: uuid.UUID, session: AsyncSession = D
 
 
 @router.get("/conversations/search/{string}")
-async def search_conversations(string: str, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+async def search_conversations(
+    string: str,
+    session: AsyncSession = Depends(get_read_session),
+    current_user: AppUser = Depends(get_current_user),
+):
     return await chat_helpers.handle_conversation_search(
         query=string,
         session=session,

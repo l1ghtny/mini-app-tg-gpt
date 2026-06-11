@@ -52,6 +52,7 @@ from app.services.legal_documents import (
     PUBLIC_OFFER_VERSION,
     get_public_offer_text_ru,
 )
+from app.services.premium_samples import get_recent_premium_sample_kind
 
 logger = settings.custom_logger
 
@@ -666,25 +667,30 @@ async def _create_subscription_payment(
         amount_cents=amount_cents,
     )
 
+    is_sbp_method = method.type == PaymentMethodType.sbp.value
+    init_data = {"QR": "true"} if is_sbp_method else None
+    operation_initiator_type = None if is_sbp_method else _subscription_charge_operation_type(
+        manual_retry=manual_retry,
+        flow_kind=flow_kind,
+    )
+
     try:
         payment_url, tbank_id = await tbank_service.init_payment(
             order_id=str(payment.id),
             amount_cents=amount_cents,
             description=f"Subscription: {tier.name}",
             user_id=str(user.id),
-            recurrent=False,
+            recurrent=is_sbp_method,
             receipt=receipt_data,
-            operation_initiator_type=_subscription_charge_operation_type(
-                manual_retry=manual_retry,
-                flow_kind=flow_kind,
-            ),
+            data=init_data,
+            operation_initiator_type=operation_initiator_type,
         )
         payment.tbank_payment_id = tbank_id
         session.add(payment)
         await session.commit()
 
         token = method.rebill_id or method.account_token
-        payment_type = "sbp" if method.type == PaymentMethodType.sbp.value else "card"
+        payment_type = "sbp" if is_sbp_method else "card"
         await tbank_service.charge(tbank_id, token, payment_type=payment_type)
         method.last_charge_at = _utcnow_naive()
         method.last_charge_status = "processing"
@@ -1131,6 +1137,21 @@ async def handle_tbank_webhook(
                             str(payment.user_id),
                             {"tier": payment.tier_name, "flow_kind": payment.flow_kind},
                         )
+                        recent_premium_sample_kind = await get_recent_premium_sample_kind(
+                            session,
+                            user_id=payment.user_id,
+                        )
+                        if recent_premium_sample_kind:
+                            background_tasks.add_task(
+                                track_event,
+                                "premium_sample_converted",
+                                str(payment.user_id),
+                                {
+                                    "tier": payment.tier_name,
+                                    "flow_kind": payment.flow_kind,
+                                    "kind": recent_premium_sample_kind,
+                                },
+                            )
 
                     background_tasks.add_task(
                         track_value,

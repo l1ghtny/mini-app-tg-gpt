@@ -18,6 +18,11 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     GEMINI_API_BASE_URL: str = os.getenv("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
     DATABASE_URL: str = os.getenv("TEST_DATABASE_URL") if TEST_ENV else os.getenv("DATABASE_URL")
+    DATABASE_READ_URL: str = (
+        os.getenv("TEST_DATABASE_URL")
+        if TEST_ENV
+        else (os.getenv("DATABASE_READ_URL") or os.getenv("DATABASE_URL"))
+    )
     SECRET_KEY: str = os.getenv("SECRET_KEY")
     BOT_TOKEN: str = os.getenv("BOT_TOKEN")
     DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "False").lower() in ("true", "1")
@@ -26,7 +31,7 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 4
     TBANK_TERMINAL_KEY: str = os.getenv("TBANK_TERMINAL_KEY", "DEMO")
     TBANK_PASSWORD: str = os.getenv("TBANK_PASSWORD", "password")
-    TBANK_API_URL: str = "https://securepay.tinkoff.ru/v2"
+    TBANK_API_URL: str = os.getenv("TBANK_API_URL", "https://securepay.tinkoff.ru/v2")
     TBANK_TIMEOUT_SECONDS: float = float(os.getenv("TBANK_TIMEOUT_SECONDS", "15"))
     custom_logger = logging.getLogger("uvicorn")
     # Add Sentry Config

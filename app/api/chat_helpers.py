@@ -54,6 +54,10 @@ from app.services.subscription_check.entitlements import (
 )
 from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
+from app.services.premium_samples import (
+    assert_premium_sample_can_be_used,
+    premium_sample_access_path,
+)
 from app.services.tasks import generate_and_save_title
 from app.services.openai_service import summarize_history_chunk
 from app.services.openai_chain import (
@@ -65,6 +69,12 @@ from app.services.openai_chain import (
 from app.services.google_chain import (
     invalidate_google_chain_state,
     resolve_previous_interaction_id_for_chain,
+)
+from app.services.conversation_search import (
+    queue_conversation_reindex,
+    queue_message_reindex,
+    queue_projection_refresh,
+    search_conversations as semantic_search_conversations,
 )
 
 _TOOL_TYPE_ALIASES = {
@@ -120,6 +130,7 @@ class TextEntitlementSelection:
     remaining: int
     tier_id: Optional[uuid.UUID]
     usage_pack_id: Optional[uuid.UUID]
+    access_path: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +179,7 @@ async def handle_create_message(
         image_model,
         image_quality,
         image_size,
+        text_access_path,
     ) = await _check_entitlements(session, current_user, request, conversation)
     tools, request_tool_choice, ledger_tool_choice = _resolve_openai_tooling(
         request.tool_choice,
@@ -204,7 +216,19 @@ async def handle_create_message(
         tool_choice=ledger_tool_choice,
         tier_id=text_entitlement.tier_id,
         usage_pack_id=text_entitlement.usage_pack_id,
+        access_path=text_access_path,
     )
+    if text_access_path and text_access_path.startswith("premium_sample:"):
+        background_tasks.add_task(
+            track_event,
+            "premium_sample_sent",
+            str(current_user.id),
+            {
+                "campaign": current_user.campaign or "organic",
+                "kind": text_access_path.split("premium_sample:", 1)[-1],
+                "model": request.model,
+            },
+        )
 
     full_history_for_openai = await _build_history_for_openai(
         session,
@@ -369,6 +393,7 @@ async def handle_delete_message(
     invalidate_google_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
+    await queue_conversation_reindex(session, conversation_id=conversation_id)
     await session.commit()
 
 
@@ -420,6 +445,7 @@ async def handle_edit_message(
     invalidate_google_chain_state(conversation)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
+    await queue_conversation_reindex(session, conversation_id=conversation_id)
     await session.commit()
 
     return MessageUpdated(
@@ -529,6 +555,7 @@ async def handle_rename_conversation(
 
     conversation.title = request.title
     session.add(conversation)
+    await queue_projection_refresh(session, conversation_id=conversation_id)
     await session.commit()
     await session.refresh(conversation)
     return conversation
@@ -670,8 +697,13 @@ async def _check_entitlements(
     user: AppUser,
     request: NewMessageRequest,
     conversation: Conversation,
-) -> tuple[TextEntitlementSelection, ImageEntitlementSelection, list, str, str, str]:
-    text_entitlement = await _require_text_entitlement(session, user, request.model)
+) -> tuple[TextEntitlementSelection, ImageEntitlementSelection, list, str, str, str, str | None]:
+    text_entitlement = await _require_text_entitlement(
+        session,
+        user,
+        request.model,
+        premium_sample_kind=request.premium_sample_kind,
+    )
     await _enforce_gpt52_safeguard(session, user, request.model)
 
     image_model, image_quality, image_size = _resolve_image_settings(request, conversation, request.model)
@@ -741,7 +773,15 @@ async def _check_entitlements(
             },
         )
 
-    return text_entitlement, image_entitlement, tools, image_model, image_quality, image_size
+    return (
+        text_entitlement,
+        image_entitlement,
+        tools,
+        image_model,
+        image_quality,
+        image_size,
+        text_entitlement.access_path,
+    )
 
 
 def _validate_reasoning_controls(request: NewMessageRequest) -> None:
@@ -956,10 +996,24 @@ async def _require_text_entitlement(
     session: AsyncSession,
     user: AppUser,
     model: str,
+    premium_sample_kind: str | None = None,
 ) -> TextEntitlementSelection:
     text_entitlement = await select_text_entitlement(session, user.id, model)
     remaining = text_entitlement["remaining"]
     if remaining != -1 and remaining <= 0:
+        if premium_sample_kind:
+            await assert_premium_sample_can_be_used(
+                session,
+                user_id=user.id,
+                kind=premium_sample_kind,
+                model=model,
+            )
+            return TextEntitlementSelection(
+                remaining=1,
+                tier_id=None,
+                usage_pack_id=None,
+                access_path=premium_sample_access_path(premium_sample_kind),
+            )
         available_models = await get_available_models(user, session)
         if not available_models:
             raise HTTPException(status_code=402, detail="No text usage available")
@@ -982,6 +1036,7 @@ async def _require_text_entitlement(
         remaining=remaining,
         tier_id=tier_id,
         usage_pack_id=usage_pack_id,
+        access_path=None,
     )
 
 
@@ -1323,6 +1378,13 @@ async def _create_user_message(
         session.add(conversation)
 
     await session.commit()
+    await queue_message_reindex(
+        session,
+        conversation_id=conversation.id,
+        message_id=user_msg.id,
+    )
+    await queue_projection_refresh(session, conversation_id=conversation.id)
+    await session.commit()
     await session.refresh(user_msg)
     return user_msg
 
@@ -1552,6 +1614,7 @@ async def _maybe_refresh_and_build_summary_item(
             conversation.history_summary_up_to_message_id = newest_dropped_id
             conversation.history_summary_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             session.add(conversation)
+            await queue_projection_refresh(session, conversation_id=conversation.id)
             await session.commit()
             summary_text = refreshed
             current_up_to = newest_dropped_id
@@ -1699,11 +1762,8 @@ async def handle_conversation_search(
     session: AsyncSession,
     current_user: AppUser,
 ) -> Sequence[Conversation]:
-    return (
-        await session.exec(
-            select(Conversation).where(
-                Conversation.user_id == current_user.id,
-                Conversation.title.ilike(f"%{query}%"),
-            )
-        )
-    ).all()
+    return await semantic_search_conversations(
+        session,
+        current_user=current_user,
+        query=query,
+    )

@@ -58,11 +58,9 @@ def _has_tool(
     return any(_extract_tool_type(tool) == tool_name for tool in tools)
 
 
-def _tool_choice_allows_image_generation(tool_choice: Any) -> bool:
+def _tool_choice_requests_image_generation(tool_choice: Any) -> bool:
     if isinstance(tool_choice, str):
-        if tool_choice in {"auto", "required", "image_generation"}:
-            return True
-        return False
+        return tool_choice == "image_generation"
     if isinstance(tool_choice, list):
         requested = {
             str(item).strip().lower()
@@ -226,7 +224,9 @@ async def stream_normalized_google_response(
     image_tool = _extract_image_tool(tools)
     request_model = model
     image_size = None
-    image_enabled = bool(image_tool and _tool_choice_allows_image_generation(tool_choice))
+    # Keep ordinary Gemini chats on the selected text model. Only switch to the
+    # image model when the request explicitly asks for image generation.
+    image_enabled = bool(image_tool and _tool_choice_requests_image_generation(tool_choice))
     if image_enabled:
         if isinstance(image_tool, dict):
             request_model = image_tool.get("model") or model

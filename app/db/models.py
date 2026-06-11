@@ -3,8 +3,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Column, Numeric, Index, DateTime, ForeignKey, Integer, UniqueConstraint, \
-    CheckConstraint
+from sqlalchemy import ARRAY, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, \
+    Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 import uuid
@@ -398,6 +398,7 @@ class RequestLedger(SQLModel, table=True):
     model_name: str = Field(index=True)
     feature: str = Field(index=True)
     cost: float = Field(default=1.0)
+    access_path: Optional[str] = Field(default=None, index=True)
 
     state: State = Field(default=State.reserved, index=True)
     tool_choice: Optional[str] = None     # e.g., "auto" or "image_generation"
@@ -464,6 +465,89 @@ class ConversationDocument(SQLModel, table=True):
 
     __table_args__ = (
         UniqueConstraint("conversation_id", "document_id", name="uq_conversation_document"),
+    )
+
+
+class ConversationSearchChunk(SQLModel, table=True):
+    __tablename__ = "conversation_search_chunk"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    conversation_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("conversation.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    message_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("message.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    message_content_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("messagecontent.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    message_role: str = Field(index=True)
+    chunk_ordinal: int = Field(default=0)
+    chunk_text: str
+    text_hash: str = Field(index=True)
+    embedding: list[float] = Field(default_factory=list, sa_column=Column(ARRAY(Float), nullable=False))
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_content_id",
+            "chunk_ordinal",
+            name="uq_conversation_search_chunk_message_content_chunk",
+        ),
+        Index("ix_conversation_search_chunk_user_conversation", "user_id", "conversation_id"),
+    )
+
+
+class ConversationSearchProjection(SQLModel, table=True):
+    __tablename__ = "conversation_search_projection"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    conversation_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("conversation.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    projection_text: str
+    summary_source: str = Field(default="recent_visible_transcript")
+    embedding: list[float] = Field(default_factory=list, sa_column=Column(ARRAY(Float), nullable=False))
+    last_indexed_message_id: Optional[uuid.UUID] = Field(default=None, nullable=True)
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", name="uq_conversation_search_projection_conversation"),
+        Index("ix_conversation_search_projection_user_conversation", "user_id", "conversation_id"),
+    )
+
+
+class ConversationSearchJob(SQLModel, table=True):
+    __tablename__ = "conversation_search_job"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    job_type: str = Field(index=True)
+    conversation_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("conversation.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    message_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(ForeignKey("message.id", ondelete="CASCADE"), nullable=True, index=True),
+    )
+    status: str = Field(default="pending", index=True)
+    dedupe_key: str = Field(index=True)
+    attempt_count: int = Field(default=0)
+    run_after: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    locked_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True, index=True))
+    error_message: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, onupdate=utcnow_naive))
+
+    __table_args__ = (
+        Index("ix_conversation_search_job_status_run_after", "status", "run_after"),
     )
 
 

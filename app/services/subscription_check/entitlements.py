@@ -124,10 +124,27 @@ async def get_active_usage_packs(
 
 
 async def get_active_tier(session: AsyncSession, user_id: uuid.UUID) -> SubscriptionTier | None:
-    sub = await get_current_subscription(session, user_id)
-    if not sub:
-        return None
-    return sub.tier
+    q = (
+        select(SubscriptionTier)
+        .join(UserSubscription, UserSubscription.tier_id == SubscriptionTier.id)
+        .where(
+            UserSubscription.user_id == user_id,
+            UserSubscription.status == SubscriptionStatus.active,
+            (UserSubscription.expires_at.is_(None))
+            | (UserSubscription.expires_at > func.now())
+            | (
+                UserSubscription.renewal_grace_until.is_not(None)
+                & (UserSubscription.renewal_grace_until > func.now())
+            ),
+        )
+        .order_by(
+            SubscriptionTier.price_cents.desc(),
+            SubscriptionTier.index.desc(),
+            UserSubscription.started_at.desc(),
+        )
+        .limit(1)
+    )
+    return (await session.exec(q)).first()
 
 
 def _tier_usage_filter(tier_id: uuid.UUID):
@@ -1116,14 +1133,15 @@ async def select_image_entitlement(
 
 async def reserve_request(session, *, user_id, conversation_id, assistant_message_id,
                           request_id, model_name, feature, cost, tool_choice=None, tier_id=None,
-                          usage_pack_id=None):
+                          usage_pack_id=None, access_path=None):
 
     # try insert; on duplicate (same request_id), just return the existing row
 
     rl = RequestLedger(user_id=user_id, tier_id=tier_id, usage_pack_id=usage_pack_id, conversation_id=conversation_id,
                        assistant_message_id=assistant_message_id,
                        request_id=request_id, model_name=model_name,
-                       feature=feature, tool_choice=tool_choice, state="reserved", cost=cost)
+                       feature=feature, tool_choice=tool_choice, state="reserved", cost=cost,
+                       access_path=access_path)
     session.add(rl)
     try:
         await session.commit()

@@ -13,14 +13,20 @@ class TBankService:
         """
         Generates the TBank signature (Token).
         Rules:
-        1. Exclude 'Token', 'DATA', 'Receipt'.
+        1. Exclude 'Token' and any nested objects/arrays.
         2. Add 'Password'.
         3. Sort keys.
         4. Convert values to strings (Booleans must be lowercased!).
         5. Concatenate and Hash.
         """
-        # 1. Filter params
-        safe_params = {k: v for k, v in params.items() if k not in ["Token", "Receipt", "DATA"]}
+        # Only root-level scalar fields participate in the signature.
+        # T-Bank docs explicitly exclude nested objects like DATA/Receipt and
+        # the SBP binding flow uses the camel-cased Data field.
+        safe_params = {
+            k: v
+            for k, v in params.items()
+            if k != "Token" and not isinstance(v, (dict, list, tuple))
+        }
 
         # 2. Add Password
         safe_params["Password"] = self.password
@@ -68,9 +74,20 @@ class TBankService:
         )
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{self.base_url}/{endpoint}", json=payload)
-        data = resp.json()
+
+        try:
+            data = resp.json()
+        except Exception as exc:
+            body_preview = (resp.text or "")[:400]
+            raise Exception(
+                f"TBank {endpoint} Invalid JSON: status={resp.status_code}, body={body_preview}"
+            ) from exc
+
         if not data.get("Success", False):
-            raise Exception(f"TBank {endpoint} Failed: {data.get('Message')} {data.get('Details', '')}")
+            raise Exception(
+                f"TBank {endpoint} Failed: status={resp.status_code}, "
+                f"{data.get('Message')} {data.get('Details', '')}"
+            )
         return data
 
     async def init_payment(
