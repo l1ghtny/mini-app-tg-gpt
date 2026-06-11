@@ -4,12 +4,13 @@ import uuid
 import pytest
 from fastapi import BackgroundTasks
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import app.api.chat_helpers as chat_helpers
 import app.api.helpers as api_helpers
 from app.api.routes import create_message
-from app.db.models import AppUser, Conversation
+from app.db.models import AppUser, Conversation, RequestLedger
 from app.schemas.chat import MessageContent, NewMessageRequest
 
 
@@ -64,6 +65,7 @@ async def test_create_message_returns_user_and_assistant_ids(monkeypatch):
             "gpt-image-1.5",
             "low",
             "1k",
+            None,
         )
 
     async def _fake_build_history(*_args, **_kwargs):
@@ -139,6 +141,7 @@ async def test_create_message_idempotent_response_includes_both_ids(monkeypatch)
             "gpt-image-1.5",
             "low",
             "1k",
+            None,
         )
 
     async def _fake_build_history(*_args, **_kwargs):
@@ -198,6 +201,96 @@ async def test_create_message_idempotent_response_includes_both_ids(monkeypatch)
     assert second.assistant_message_id == first.assistant_message_id
     assert second.message_id == second.assistant_message_id
     assert str(second.stream_url).endswith(f"/messages/{second.assistant_message_id}/stream")
+
+
+@pytest.mark.asyncio
+async def test_create_message_persists_premium_sample_access_path(monkeypatch):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=721000203)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        conversation = Conversation(user_id=user.id, title="Premium sample route IDs")
+        session.add(conversation)
+        await session.commit()
+        await session.refresh(conversation)
+
+    async def _fake_check_entitlements(*_args, **_kwargs):
+        return (
+            chat_helpers.TextEntitlementSelection(
+                remaining=1,
+                tier_id=None,
+                usage_pack_id=None,
+                access_path="premium_sample:flagship_text",
+            ),
+            chat_helpers.ImageEntitlementSelection(
+                allowed=True,
+                tier_id=None,
+                usage_pack_id=None,
+                cost=1.0,
+                throttle_reason=None,
+                wait_time=None,
+            ),
+            [],
+            "gpt-image-1.5",
+            "low",
+            "1k",
+            "premium_sample:flagship_text",
+        )
+
+    async def _fake_build_history(*_args, **_kwargs):
+        return []
+
+    def _fake_queue_generation(*_args, **_kwargs):
+        return None
+
+    async def _fake_track_metrics(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_helpers, "_check_entitlements", _fake_check_entitlements)
+    monkeypatch.setattr(chat_helpers, "_build_history_for_openai", _fake_build_history)
+    monkeypatch.setattr(chat_helpers, "_queue_generation", _fake_queue_generation)
+    monkeypatch.setattr(chat_helpers, "_track_message_metrics", _fake_track_metrics)
+
+    request = NewMessageRequest(
+        client_request_id=str(uuid.uuid4()),
+        role="user",
+        content=[MessageContent(type="text", value="hello")],
+        model="gpt-5.5",
+        tool_choice="auto",
+        premium_sample_kind="flagship_text",
+    )
+    redis = _DummyRedis()
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        response = await create_message(
+            conversation_id=conversation.id,
+            request=request,
+            background_tasks=BackgroundTasks(),
+            session=session,
+            current_user=user,
+            bus=redis,
+            _rate_limit_ok=True,
+        )
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        row = (
+            await session.exec(
+                select(RequestLedger).where(
+                    RequestLedger.user_id == user.id,
+                    RequestLedger.request_id == request.client_request_id,
+                )
+            )
+        ).first()
+
+    assert response.assistant_message_id is not None
+    assert row is not None
+    assert row.access_path == "premium_sample:flagship_text"
 
 
 class _DummyBus:

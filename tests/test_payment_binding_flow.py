@@ -13,6 +13,9 @@ from app.schemas.subscriptions import BoundSubscriptionChargeRequest, Subscripti
 
 
 class _FakeTbankService:
+    def __init__(self):
+        self.last_init_kwargs = None
+
     async def add_card(self, **_kwargs):
         return {
             "Success": True,
@@ -47,6 +50,7 @@ class _FakeTbankService:
         }
 
     async def init_payment(self, **_kwargs):
+        self.last_init_kwargs = dict(_kwargs)
         return "https://pay.example.test/charge", "TBANK-PAY-1"
 
     async def charge(self, *_args, **_kwargs):
@@ -234,6 +238,59 @@ async def test_sbp_binding_status_persists_active_saved_method(monkeypatch):
         assert method.account_token == "ACCOUNT-TOKEN-1"
         assert method.phone == "+79990001122"
         assert method.is_default is True
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sbp_bound_charge_uses_qr_recurrent_init(monkeypatch):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    fake_tbank = _FakeTbankService()
+    monkeypatch.setattr(payment_helpers, "tbank_service", fake_tbank, raising=True)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=791000109)
+        tier = SubscriptionTier(
+            name="Advanced",
+            name_ru="Advanced",
+            description="",
+            description_ru="",
+            price_cents=100,
+            is_active=True,
+            is_public=True,
+            is_recurring=True,
+        )
+        session.add(user)
+        session.add(tier)
+        await session.commit()
+        await session.refresh(user)
+
+        binding = await payment_helpers.init_subscription_binding(
+            session,
+            user,
+            SubscriptionBindingInitRequest(
+                tier_name="Advanced",
+                email="user@example.com",
+                method_type="sbp",
+            ),
+        )
+
+        await payment_helpers.charge_bound_subscription(
+            session,
+            user,
+            BoundSubscriptionChargeRequest(
+                tier_name="Advanced",
+                email="user@example.com",
+                binding_id=binding.binding_id,
+            ),
+        )
+
+        assert fake_tbank.last_init_kwargs is not None
+        assert fake_tbank.last_init_kwargs["recurrent"] is True
+        assert fake_tbank.last_init_kwargs["data"] == {"QR": "true"}
+        assert fake_tbank.last_init_kwargs["operation_initiator_type"] is None
 
     await engine.dispose()
 

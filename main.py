@@ -11,6 +11,7 @@ from app.api.admin_broadcast import admin_broadcast
 from app.api.auth import auth
 from app.api.chat_folders import router as chat_folders_router
 from app.api.chat_starters import chat_starters
+from app.api.conversion import conversion
 from app.api.documents import documents
 from app.api.images import images
 from app.api.metrics import metrics
@@ -144,3 +145,4 @@ app.include_router(whats_new, prefix="/api/v1")
 app.include_router(admin_broadcast, prefix="/api/v1")
 app.include_router(personalization, prefix="/api/v1")
 app.include_router(chat_starters, prefix="/api/v1")
+app.include_router(conversion, prefix="/api/v1")

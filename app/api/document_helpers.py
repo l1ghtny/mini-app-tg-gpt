@@ -10,6 +10,7 @@ from typing import Optional
 
 from fastapi import BackgroundTasks, HTTPException, UploadFile
 from openai import AsyncOpenAI
+from sqlalchemy import case
 from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -396,41 +397,23 @@ async def get_document_capabilities(
     tier = await get_active_tier(session, user.id)
     limits = _tier_doc_limits(tier)
 
-    active_count = (
+    active_count, pinned_count, used_storage = (
         await session.exec(
-            select(func.count())
-            .select_from(UserDocument)
+            select(
+                func.count(UserDocument.id),
+                func.coalesce(
+                    func.sum(case((UserDocument.is_pinned == True, 1), else_=0)),
+                    0,
+                ),
+                func.coalesce(func.sum(UserDocument.usage_bytes), 0),
+            )
             .where(
                 UserDocument.user_id == user.id,
                 UserDocument.deleted_at.is_(None),
                 UserDocument.status != DOCUMENT_STATUS_DELETED,
             )
         )
-    ).one() or 0
-
-    pinned_count = (
-        await session.exec(
-            select(func.count())
-            .select_from(UserDocument)
-            .where(
-                UserDocument.user_id == user.id,
-                UserDocument.deleted_at.is_(None),
-                UserDocument.status != DOCUMENT_STATUS_DELETED,
-                UserDocument.is_pinned == True,
-            )
-        )
-    ).one() or 0
-
-    used_storage = (
-        await session.exec(
-            select(func.coalesce(func.sum(UserDocument.usage_bytes), 0))
-            .where(
-                UserDocument.user_id == user.id,
-                UserDocument.deleted_at.is_(None),
-                UserDocument.status != DOCUMENT_STATUS_DELETED,
-            )
-        )
-    ).one() or 0
+    ).one()
 
     return DocumentCapabilitiesResponse(
         status="active",

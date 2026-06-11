@@ -29,6 +29,41 @@ async def test_require_text_entitlement_allows_infinite_remaining(monkeypatch):
     assert entitlement.remaining == -1
     assert entitlement.tier_id is None
     assert entitlement.usage_pack_id is None
+    assert entitlement.access_path is None
+
+
+@pytest.mark.asyncio
+async def test_require_text_entitlement_allows_premium_sample_when_regular_quota_is_empty(monkeypatch):
+    user = SimpleNamespace(id=uuid.uuid4())
+
+    async def _fake_select_text_entitlement(_session, _user_id, _model):
+        return {
+            "remaining": 0,
+            "tier_id": None,
+            "usage_pack_id": None,
+        }
+
+    async def _fake_assert_premium_sample_can_be_used(*_args, **_kwargs):
+        return None
+
+    async def _unexpected_get_available_models(*_args, **_kwargs):
+        raise AssertionError("get_available_models must not be called when premium sample is valid")
+
+    monkeypatch.setattr(chat_helpers, "select_text_entitlement", _fake_select_text_entitlement)
+    monkeypatch.setattr(chat_helpers, "assert_premium_sample_can_be_used", _fake_assert_premium_sample_can_be_used)
+    monkeypatch.setattr(chat_helpers, "get_available_models", _unexpected_get_available_models)
+
+    entitlement = await chat_helpers._require_text_entitlement(
+        None,
+        user,
+        "gpt-5.5",
+        premium_sample_kind="flagship_text",
+    )
+
+    assert entitlement.remaining == 1
+    assert entitlement.tier_id is None
+    assert entitlement.usage_pack_id is None
+    assert entitlement.access_path == "premium_sample:flagship_text"
 
 
 @pytest.mark.asyncio
