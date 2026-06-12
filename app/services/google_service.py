@@ -1,7 +1,9 @@
 import base64
+import importlib.util
 import uuid
 import logging
 from typing import Any, AsyncGenerator, Iterable, Optional
+from urllib.parse import urlparse
 
 import httpx
 from google import genai
@@ -11,7 +13,7 @@ from openai.types.responses.tool import CodeInterpreter, ImageGeneration
 
 from app.core.config import settings
 from app.services.background.save_openai_usage import log_usage
-from app.services.model_registry import GOOGLE_THINKING_MODELS, IMAGE_MODEL_PROVIDER
+from app.services.model_registry import GOOGLE_THINKING_MODELS, IMAGE_MODEL_PROVIDER, canonicalize_image_model
 from app.db.database import engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.models import Message
@@ -29,6 +31,9 @@ STYLE_GUIDE = (
 
 GOOGLE_UPSTREAM_ERROR_CODE = "GOOGLE_UPSTREAM_UNAVAILABLE"
 GOOGLE_UPSTREAM_USER_MESSAGE = "Sorry, Google Gemini has some issues on their end. Please try again in a moment."
+GOOGLE_PROXY_ERROR_CODE = "GEMINI_PROXY_MISCONFIGURED"
+GOOGLE_PROXY_USER_MESSAGE = "Gemini proxy is configured incorrectly on the server."
+_SOCKS_PROXY_SCHEMES = {"socks4", "socks4a", "socks5", "socks5h"}
 
 
 def _extract_tool_type(tool: Any) -> str | None:
@@ -201,6 +206,105 @@ def _generation_config_for_request(
     return config
 
 
+def _module_available(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def _build_google_aiohttp_client(proxy_url: str) -> Any:
+    import aiohttp
+
+    proxy_scheme = urlparse(proxy_url).scheme.lower()
+    session_kwargs: dict[str, Any] = {
+        "trust_env": True,
+    }
+
+    if proxy_scheme in _SOCKS_PROXY_SCHEMES:
+        if not _module_available("aiohttp_socks"):
+            raise RuntimeError(
+                "SOCKS proxy support for Gemini aiohttp transport requires the "
+                "`aiohttp-socks` package."
+            )
+        from aiohttp_socks import ProxyConnector
+
+        session_kwargs["connector"] = ProxyConnector.from_url(proxy_url)
+    else:
+        session_kwargs["proxy"] = proxy_url
+
+    return aiohttp.ClientSession(**session_kwargs)
+
+
+def _build_google_http_options() -> types.HttpOptions | None:
+    proxy_url = (settings.GEMINI_PROXY_URL or "").strip()
+    if not proxy_url:
+        return None
+
+    proxy_scheme = urlparse(proxy_url).scheme.lower()
+    if proxy_scheme in _SOCKS_PROXY_SCHEMES and not _module_available("socksio"):
+        raise RuntimeError(
+            "SOCKS proxy support for Gemini requires the `socksio` package. "
+            "Install `httpx[socks]` or add `socksio` directly."
+        )
+
+    client_args = {
+        "proxy": proxy_url,
+        "trust_env": True,
+    }
+    return types.HttpOptions(
+        client_args=client_args.copy(),
+        async_client_args=client_args.copy(),
+        aiohttp_client=_build_google_aiohttp_client(proxy_url),
+    )
+
+
+def _build_google_client() -> genai.Client:
+    http_options = _build_google_http_options()
+    if http_options is None:
+        return genai.Client(api_key=settings.GEMINI_API_KEY)
+    client = genai.Client(api_key=settings.GEMINI_API_KEY, http_options=http_options)
+    custom_aiohttp_client = getattr(http_options, "aiohttp_client", None)
+    if custom_aiohttp_client is not None:
+        setattr(client, "_codex_custom_aiohttp_client", custom_aiohttp_client)
+    return client
+
+
+async def _close_google_client(client: genai.Client) -> None:
+    try:
+        aio_client = getattr(client, "aio", None)
+        aclose = getattr(aio_client, "aclose", None)
+        if callable(aclose):
+            await aclose()
+    finally:
+        custom_aiohttp_client = getattr(client, "_codex_custom_aiohttp_client", None)
+        if custom_aiohttp_client is not None and not getattr(custom_aiohttp_client, "closed", False):
+            await custom_aiohttp_client.close()
+
+
+async def _log_google_error_usage(
+    *,
+    user_id: Optional[uuid.UUID],
+    conversation_id: Optional[uuid.UUID],
+    request_id: str,
+    model_name: str,
+    error_message: str,
+) -> None:
+    async with AsyncSession(engine, expire_on_commit=False) as db_session:
+        await log_usage(
+            db_session,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            request_id=request_id,
+            provider="google",
+            model_name=model_name,
+            status="error",
+            error_message=error_message,
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            web_search_calls=0,
+            images_generated=0,
+        )
+
+
 async def stream_normalized_google_response(
     messages: list[dict[str, Any]],
     model: str,
@@ -234,10 +338,10 @@ async def stream_normalized_google_response(
     image_enabled = bool(image_tool and _tool_choice_requests_image_generation(tool_choice))
     if image_enabled:
         if isinstance(image_tool, dict):
-            request_model = image_tool.get("model") or model
+            request_model = canonicalize_image_model(image_tool.get("model") or model)
             image_size = image_tool.get("image_size")
         else:
-            request_model = getattr(image_tool, "model", None) or model
+            request_model = canonicalize_image_model(getattr(image_tool, "model", None) or model)
 
     yield {
         "type": "status",
@@ -248,7 +352,23 @@ async def stream_normalized_google_response(
         "source_event": "google.interactions",
     }
 
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    try:
+        client = _build_google_client()
+    except Exception as exc:
+        logger.exception("Google client initialization failed request_id=%s model=%s", corr_id, request_model)
+        yield {
+            "type": "error",
+            "code": GOOGLE_PROXY_ERROR_CODE,
+            "data": GOOGLE_PROXY_USER_MESSAGE,
+        }
+        await _log_google_error_usage(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            request_id=corr_id,
+            model_name=request_model,
+            error_message=str(exc),
+        )
+        return
 
     if previous_interaction_id:
         input_val = await _single_turn_input_from_history(messages)
@@ -496,22 +616,13 @@ async def stream_normalized_google_response(
                     "code": GOOGLE_UPSTREAM_ERROR_CODE,
                     "data": GOOGLE_UPSTREAM_USER_MESSAGE,
                 }
-                async with AsyncSession(engine, expire_on_commit=False) as db_session:
-                    await log_usage(
-                        db_session,
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        request_id=corr_id,
-                        provider="google",
-                        model_name=request_model,
-                        status="error",
-                        error_message=err_msg,
-                        input_tokens=0,
-                        output_tokens=0,
-                        reasoning_tokens=0,
-                        web_search_calls=0,
-                        images_generated=0,
-                    )
+                await _log_google_error_usage(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    request_id=corr_id,
+                    model_name=request_model,
+                    error_message=err_msg,
+                )
                 return
 
     except Exception as exc:
@@ -521,20 +632,13 @@ async def stream_normalized_google_response(
             "code": GOOGLE_UPSTREAM_ERROR_CODE,
             "data": GOOGLE_UPSTREAM_USER_MESSAGE,
         }
-        async with AsyncSession(engine, expire_on_commit=False) as db_session:
-            await log_usage(
-                db_session,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                request_id=corr_id,
-                provider="google",
-                model_name=request_model,
-                status="error",
-                error_message=str(exc),
-                input_tokens=0,
-                output_tokens=0,
-                reasoning_tokens=0,
-                web_search_calls=0,
-                images_generated=0,
-            )
+        await _log_google_error_usage(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            request_id=corr_id,
+            model_name=request_model,
+            error_message=str(exc),
+        )
         return
+    finally:
+        await _close_google_client(client)

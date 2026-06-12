@@ -4,6 +4,10 @@ This repo now defines the backend deployment flow in checked-in scripts under `s
 
 ## Standard release modes
 
+- `RELEASE_MODE=auto`
+  - resolves to `hotfix` when the TeamCity source build contains exactly one VCS change
+  - also resolves to `hotfix` when the latest shipped commit message includes `[hotfix]` or `#hotfix`
+  - otherwise resolves to `normal`
 - `RELEASE_MODE=normal`
   - runs the migration job
   - updates `deployment/tg-mini-backend`
@@ -28,7 +32,12 @@ Use `hotfix` only for production fixes that need to move past the paused canary 
   - renders and runs the Kubernetes migration job from `k8s/migrate-job.yaml.tpl`
 - `scripts/release/deploy_backend.sh`
   - updates the backend deployment image
-  - auto-promotes only when `RELEASE_MODE=hotfix`
+  - resolves `RELEASE_MODE=auto` via `scripts/release/resolve_release_mode.sh`
+  - auto-promotes only when the resolved mode is `hotfix`
+- `scripts/release/resolve_release_mode.sh`
+  - reads TeamCity runtime properties from `TEAMCITY_BUILD_PROPERTIES_FILE` when available
+  - queries TeamCity for the source build change count and latest change comment
+  - falls back to the latest local git commit message when TeamCity metadata is unavailable
 - `scripts/release/promote_backend_rollout.sh`
   - manual promotion helper for normal canary releases
   - set `PROMOTE_FULL=true` to skip remaining canary pauses
@@ -59,14 +68,21 @@ Recommended build parameters for `MiniAppTgGpt_Migration`:
 - `env.IMAGE_NAME=tg-mini-app-backend`
 - `env.SECRET_NAME=backend-env`
 - `env.IMAGE_TAG=%dep.MiniAppTgGpt_BuildBackend.BUILD_NUMBER%`
-- `env.RELEASE_MODE=normal`
+- `env.RELEASE_MODE=auto`
 - `env.ROLLOUT_TIMEOUT=300s`
 
 Operational use:
 
-- normal deploy: run with default `env.RELEASE_MODE=normal`
-- hotfix deploy: run with `env.RELEASE_MODE=hotfix`
+- default deploy: run with `env.RELEASE_MODE=auto`
+- force normal deploy: run with `env.RELEASE_MODE=normal`
+- force hotfix deploy: run with `env.RELEASE_MODE=hotfix`
 
 ## Notes on frontend TeamCity
 
-The frontend TeamCity deploy config `TelegramMiniAppProject_TgMiniFrontendLovable_Deploy` already updates the stable deployment directly. It does not currently use the checked-in frontend canary scripts, so no extra change is required there for "bypass canary" behavior.
+The newer deploy config `TelegramMiniAppProject_TgMiniFrontendNewUI_Deploy` already has a snapshot dependency on `TelegramMiniAppProject_TgMiniFrontendNewUI_Build`.
+
+To mirror the backend auto-hotfix logic there, the frontend deploy entrypoint should resolve its source build id from:
+
+- `RELEASE_MODE_SOURCE_BUILD_ID_PROPERTY=dep.TelegramMiniAppProject_TgMiniFrontendNewUI_Build.teamcity.build.id`
+
+That lets the deploy script inspect the build step's source commit set even though the deploy build itself has no direct VCS checkout.

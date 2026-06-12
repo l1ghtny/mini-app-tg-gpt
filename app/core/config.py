@@ -4,6 +4,12 @@ from dotenv import load_dotenv, find_dotenv
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]  # repo root
+_PROXY_ENV_ALIASES = (
+    ("http_proxy", "HTTP_PROXY"),
+    ("https_proxy", "HTTPS_PROXY"),
+    ("all_proxy", "ALL_PROXY"),
+    ("no_proxy", "NO_PROXY"),
+)
 
 TEST_ENV = os.getenv("TEST_ENV", "False").lower() in ("true", "1")
 
@@ -13,10 +19,29 @@ else:
     load_dotenv(find_dotenv(), override=True)
 
 
+def _normalize_proxy_env_aliases() -> None:
+    for lower_name, upper_name in _PROXY_ENV_ALIASES:
+        value = os.getenv(lower_name) or os.getenv(upper_name)
+        if not value:
+            continue
+        os.environ[lower_name] = value
+        os.environ[upper_name] = value
+
+
+_normalize_proxy_env_aliases()
+
+
 class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     GEMINI_API_BASE_URL: str = os.getenv("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
+    GEMINI_PROXY_URL: str = (
+        os.getenv("GEMINI_PROXY_URL")
+        or os.getenv("GOOGLE_PROXY_URL")
+        or os.getenv("https_proxy")
+        or os.getenv("all_proxy")
+        or os.getenv("http_proxy")
+    )
     DATABASE_URL: str = os.getenv("TEST_DATABASE_URL") if TEST_ENV else os.getenv("DATABASE_URL")
     DATABASE_READ_URL: str = (
         os.getenv("TEST_DATABASE_URL")

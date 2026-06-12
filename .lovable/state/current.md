@@ -2,31 +2,35 @@
 
 ## Current objective
 
-Repair the Alembic revision graph on `main` so production migrations stop failing with the duplicate revision id and cycle between `r1a2b3c4d5e6` and `dca1ce1aecc2`.
+Add automatic TeamCity hotfix-mode resolution so deploys can bypass paused canary steps when the shipped change set is a single commit or the shipped merge/commit is explicitly flagged as a hotfix.
 
 ## In progress
 
-- None.
+- Update the checked-in backend deploy flow to resolve `RELEASE_MODE=auto` from TeamCity build metadata and git commit markers.
+- Document the exact TeamCity parameter changes needed for backend and frontend deploy configs.
+- Verify whether the currently exposed TeamCity MCP can mutate live build configuration settings or only inspect them.
 
 ## Completed
 
-- Read the local project state and the durable note for the retired Google image model cleanup.
-- Confirmed the production failure is caused by two separate files using revision id `r1a2b3c4d5e6`.
-- Confirmed the cycle path was:
-  - `r1a2b3c4d5e6_release_readiness_schema_compat` -> `dca1ce1aecc2_add_release_readiness_backend_schema`
-  - `r1a2b3c4d5e6_remove_retired_google_image_model` mistakenly reused `r1a2b3c4d5e6` while revising `dca1ce1aecc2`
-- Renamed the Google image cleanup revision id to `u1a2b3c4d5e6`.
-- Updated the merge revision `z1a2b3c4d5e6` to depend on `u1a2b3c4d5e6` instead of `dca1ce1aecc2`, preserving a single merged head.
-- Verified `poetry run alembic heads` now reports a single head: `z1a2b3c4d5e6`.
-- Verified `poetry run alembic history` traverses `r1a2b3c4d5e6 -> dca1ce1aecc2 -> u1a2b3c4d5e6 -> z1a2b3c4d5e6` without duplicate-revision warnings or cycle errors.
-- Compile-checked the repaired migration files with `poetry run python -m py_compile`.
+- Read the current backend rollout and TeamCity hotfix docs in the repo.
+- Inspected the live TeamCity deploy configs:
+  - `MiniAppTgGpt_Migration`
+  - `TelegramMiniAppProject_TgMiniFrontendNewUI_Deploy`
+- Confirmed both deploy configs are still server-side inline shell rather than versioned settings in git.
+- Confirmed the backend deploy build has a VCS root and TeamCity change metadata on the deploy build itself.
+- Confirmed the frontend deploy build has no direct VCS checkout, but it does have a snapshot dependency on `TelegramMiniAppProject_TgMiniFrontendNewUI_Build`.
+- Confirmed TeamCity runtime properties expose the data needed for script-side detection through `TEAMCITY_BUILD_PROPERTIES_FILE`, including current build ids and dependency build metadata.
 
 ## Blockers and risks
 
-- The revision graph is fixed, but this session did not run a full `alembic upgrade` against a disposable database.
-- If any external environment was manually stamped to the invalid duplicate revision id from the Google cleanup file, it may need manual stamp remediation; Alembic could not have traversed that state from this branch cleanly.
+- The TeamCity MCP exposed in this session does not currently provide a direct build-configuration update tool; available actions are read endpoints, personal build queueing, and log inspection.
+- Because the frontend deploy build has no own VCS checkout, auto-detection there depends on resolving the source build id from the snapshot dependency metadata.
+- The new resolver has not yet been exercised on a real TeamCity agent in this session.
 
 ## Next steps
 
-- Run the migration chain against a disposable local/test database if you want end-to-end DDL confirmation in addition to graph validation.
-- Share the exact revision-id change (`r1a2b3c4d5e6` cleanup file -> `u1a2b3c4d5e6`) in the handoff so operators know what changed if they inspected the broken branch earlier.
+- Syntax-check the new release resolver and backend deploy script locally if the shell environment supports `bash`.
+- Apply the documented TeamCity parameter and step updates through a TeamCity write-capable surface or the UI:
+  - backend: replace inline steps with repo entrypoints and default `env.RELEASE_MODE=auto`
+  - frontend: default `env.RELEASE_MODE=auto` and set `env.RELEASE_MODE_SOURCE_BUILD_ID_PROPERTY=dep.TelegramMiniAppProject_TgMiniFrontendNewUI_Build.teamcity.build.id`
+- Run one normal deploy and one flagged/single-change deploy to confirm the resolver switches modes as expected.

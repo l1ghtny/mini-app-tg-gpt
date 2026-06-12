@@ -1,6 +1,7 @@
 import os
 import uuid
 import pytest
+import aiohttp
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -76,8 +77,11 @@ class MockAioClient:
     def __init__(self):
         self.interactions = MockInteractionsResource()
 
+    async def aclose(self):
+        return None
+
 class MockGenaiClient:
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, http_options=None):
         self.aio = MockAioClient()
 
 @pytest.mark.asyncio
@@ -90,6 +94,7 @@ async def test_google_interactions_stream_normalization(monkeypatch):
     
     # Enable API Key and mock Client
     monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
+    monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", None)
     monkeypatch.setattr(google_service.genai, "Client", MockGenaiClient)
     
     # Create test user/convo
@@ -148,6 +153,7 @@ async def test_google_interactions_stream_normalization(monkeypatch):
 @pytest.mark.asyncio
 async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
     monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
+    monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", None)
 
     interactions = MockInteractionsResource()
 
@@ -156,7 +162,7 @@ async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
             self.interactions = interactions
 
     class CapturingGenaiClient:
-        def __init__(self, api_key=None):
+        def __init__(self, api_key=None, http_options=None):
             self.aio = CapturingAioClient()
 
     monkeypatch.setattr(google_service.genai, "Client", CapturingGenaiClient)
@@ -187,6 +193,7 @@ async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
 @pytest.mark.asyncio
 async def test_google_explicit_image_generation_uses_image_model(monkeypatch):
     monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
+    monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", None)
 
     interactions = MockInteractionsResource()
 
@@ -195,7 +202,7 @@ async def test_google_explicit_image_generation_uses_image_model(monkeypatch):
             self.interactions = interactions
 
     class CapturingGenaiClient:
-        def __init__(self, api_key=None):
+        def __init__(self, api_key=None, http_options=None):
             self.aio = CapturingAioClient()
 
     monkeypatch.setattr(google_service.genai, "Client", CapturingGenaiClient)
@@ -217,9 +224,70 @@ async def test_google_explicit_image_generation_uses_image_model(monkeypatch):
         pass
 
     assert interactions.calls
-    assert interactions.calls[0]["model"] == "gemini-2.5-flash-image"
+    assert interactions.calls[0]["model"] == "gemini-3.1-flash-image-preview"
     assert interactions.calls[0]["response_modalities"] == ["text", "image"]
     assert interactions.calls[0]["generation_config"]["image_config"] == {"image_size": "2K"}
+
+
+@pytest.mark.asyncio
+async def test_google_proxy_is_forwarded_to_genai_http_options(monkeypatch):
+    monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
+    monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", "socks5h://warp-proxy:1080")
+    monkeypatch.setattr(google_service, "_module_available", lambda name: True)
+    aiohttp_client = aiohttp.ClientSession()
+    monkeypatch.setattr(google_service, "_build_google_aiohttp_client", lambda proxy_url: aiohttp_client)
+
+    interactions = MockInteractionsResource()
+    captured = {}
+
+    class CapturingAioClient:
+        def __init__(self):
+            self.interactions = interactions
+
+    class CapturingGenaiClient:
+        def __init__(self, api_key=None, http_options=None):
+            captured["api_key"] = api_key
+            captured["http_options"] = http_options
+            self.aio = CapturingAioClient()
+
+    monkeypatch.setattr(google_service.genai, "Client", CapturingGenaiClient)
+
+    async for _ in stream_normalized_google_response(
+        [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+        model="gemini-3.1-flash-lite",
+        instructions="You are a helpful assistant",
+        tool_choice="auto",
+        tools=[],
+        user_id=None,
+        conversation_id=None,
+        request_id=str(uuid.uuid4()),
+        assistant_message_id=None,
+    ):
+        pass
+
+    assert captured["api_key"] == "test_key"
+    assert captured["http_options"] is not None
+    assert captured["http_options"].client_args["proxy"] == "socks5h://warp-proxy:1080"
+    assert captured["http_options"].async_client_args["proxy"] == "socks5h://warp-proxy:1080"
+    assert captured["http_options"].async_client_args["trust_env"] is True
+    assert captured["http_options"].aiohttp_client is aiohttp_client
+    assert aiohttp_client.closed is True
+
+
+def test_google_socks_proxy_requires_socksio(monkeypatch):
+    monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", "socks5h://warp-proxy:1080")
+    monkeypatch.setattr(google_service, "_module_available", lambda name: False)
+
+    with pytest.raises(RuntimeError, match="socksio"):
+        google_service._build_google_http_options()
+
+
+def test_google_socks_proxy_requires_aiohttp_socks(monkeypatch):
+    monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", "socks5h://warp-proxy:1080")
+    monkeypatch.setattr(google_service, "_module_available", lambda name: name == "socksio")
+
+    with pytest.raises(RuntimeError, match="aiohttp-socks"):
+        google_service._build_google_http_options()
 
 
 def test_google_image_models_map_low_thinking_to_minimal():
@@ -230,6 +298,6 @@ def test_google_image_models_map_low_thinking_to_minimal():
         image_size="1k",
     )
 
-    assert config["thinking_level"] == "minimal"
+    assert config["thinking_level"] == "low"
     assert config["thinking_summaries"] == "auto"
     assert config["image_config"] == {"image_size": "1K"}

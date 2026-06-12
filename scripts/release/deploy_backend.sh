@@ -9,21 +9,17 @@ DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-tg-mini-backend}"
 CONTAINER_NAME="${CONTAINER_NAME:-api}"
 ROLLOUT_NAME="${ROLLOUT_NAME:-tg-mini-backend}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-300s}"
-RELEASE_MODE="$(printf '%s' "${RELEASE_MODE:-normal}" | tr '[:upper:]' '[:lower:]')"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/resolve_release_mode.sh"
 
 if [[ -z "${IMAGE_TAG}" ]]; then
   echo "ERROR: IMAGE_TAG is required (or BUILD_NUMBER)." >&2
   exit 1
 fi
 
-case "${RELEASE_MODE}" in
-  normal|hotfix)
-    ;;
-  *)
-    echo "ERROR: RELEASE_MODE must be 'normal' or 'hotfix'." >&2
-    exit 1
-    ;;
-esac
+resolve_release_mode
+RELEASE_MODE="${RESOLVED_RELEASE_MODE}"
+echo "Resolved release mode: ${RELEASE_MODE} (${RESOLVED_RELEASE_MODE_REASON})"
 
 image_ref="${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
 
