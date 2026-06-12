@@ -26,6 +26,8 @@ from app.services.subscription_check.entitlements import reserve_request, finali
 from app.services.subscription_check.pacing import get_image_quality_cost
 
 logger = logging.getLogger(__name__)
+IMAGE_STORAGE_ERROR_CODE = "IMAGE_STORAGE_UNAVAILABLE"
+IMAGE_STORAGE_ERROR_MESSAGE = "Generated image could not be stored."
 
 
 async def load_conversation(session: AsyncSession, conversation_id: uuid.UUID) -> Conversation | None:
@@ -65,6 +67,7 @@ async def generate_and_publish(
             "text_request_finalized": False,
             "stream_failed": False,
             "last_error_message": None,
+            "last_error_code": None,
         }
         assistant_message_id_str = str(assistant_message_id)
 
@@ -110,9 +113,16 @@ async def generate_and_publish(
                 )
 
         except Exception as e:
+            logger.exception(
+                "Generate/publish pipeline failed request_id=%s conversation_id=%s assistant_message_id=%s",
+                request_id,
+                str(conversation_id),
+                str(assistant_message_id),
+            )
             await _cleanup_partial_images(partial_image_keys)
             await bus.publish(assistant_message_id_str, {
                 "type": "error",
+                "code": lifecycle.get("last_error_code"),
                 "error": lifecycle.get("last_error_message") or str(e),
             })
             await bus.mark_done(
@@ -186,7 +196,19 @@ async def _handle_stream_event(
 
     if event_type == "image.ready":
         ordinal = ev.get("index", 0)
-        url, _ = await upload_openai_image_to_r2_with_key(ev["data"], prefix="gen")
+        try:
+            url, _ = await upload_openai_image_to_r2_with_key(ev["data"], prefix="gen")
+        except Exception:
+            lifecycle["last_error_code"] = IMAGE_STORAGE_ERROR_CODE
+            lifecycle["last_error_message"] = IMAGE_STORAGE_ERROR_MESSAGE
+            logger.exception(
+                "Failed to persist final generated image request_id=%s conversation_id=%s assistant_message_id=%s index=%s",
+                request_id,
+                str(conversation_id),
+                str(assistant_message_id),
+                ordinal,
+            )
+            raise
         await save_image_url_to_db(url, ordinal, assistant_message_id, session=session)
         await bus.publish(str(assistant_message_id), {
             "type": "image.url",
@@ -221,11 +243,24 @@ async def _handle_stream_event(
 
     if event_type == "image.partial":
         ordinal = ev.get("index", 0)
-        partial_url, partial_key = await upload_openai_image_to_r2_with_key(
-            ev["data"],
-            prefix="gen-partial",
-            suffix=f"{ordinal}-{ev.get('partial_index', 0)}-{ev.get('sequence_number', 0)}",
-        )
+        try:
+            partial_url, partial_key = await upload_openai_image_to_r2_with_key(
+                ev["data"],
+                prefix="gen-partial",
+                suffix=f"{ordinal}-{ev.get('partial_index', 0)}-{ev.get('sequence_number', 0)}",
+            )
+        except Exception:
+            logger.warning(
+                "Skipping partial generated image persistence failure request_id=%s conversation_id=%s assistant_message_id=%s index=%s partial_index=%s sequence_number=%s",
+                request_id,
+                str(conversation_id),
+                str(assistant_message_id),
+                ordinal,
+                ev.get("partial_index", 0),
+                ev.get("sequence_number", 0),
+                exc_info=True,
+            )
+            return
         partial_image_keys.setdefault(ordinal, []).append(partial_key)
         await bus.publish(str(assistant_message_id), {
             "type": "image.partial",
