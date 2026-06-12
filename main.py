@@ -2,7 +2,6 @@ import fastapi_swagger_dark as fsd
 import sentry_sdk
 from fastapi import FastAPI, APIRouter, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sentry_sdk.integrations.openai import OpenAIIntegration
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 import os
 
@@ -26,6 +25,7 @@ from app.api.user_usage import user_usage
 from app.api.user_settings import user_settings
 from app.api.whats_new import whats_new
 from app.core.config import settings
+from app.core.sentry_setup import build_sentry_openai_integrations
 from app.core.version import APP_VERSION
 
 logger = settings.custom_logger
@@ -68,11 +68,7 @@ if settings.SENTRY_DSN:
         traces_sample_rate=0.1 if settings.ENVIRONMENT in ("production", "production_main_server") else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
         send_default_pii=True, # send info about http calls (includes AI, currently using for openAI costs)
-        integrations=[
-            OpenAIIntegration(
-                include_prompts=True,
-                tiktoken_encoding_name="o200k_base"
-            )],
+        integrations=build_sentry_openai_integrations(logger),
         enable_logs=True,
         stream_gen_ai_spans=True,
         _experiments={
