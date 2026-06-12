@@ -389,6 +389,56 @@ async def test_google_explicit_image_generation_routes_only_the_function_tool(mo
 
 
 @pytest.mark.asyncio
+async def test_google_auto_image_handoff_converts_create_failure_to_error_event(monkeypatch):
+    monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
+    monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", None)
+
+    captured_usage_errors = []
+
+    async def fake_log_error_usage(**kwargs):
+        captured_usage_errors.append(kwargs)
+
+    monkeypatch.setattr(google_service, "_log_google_error_usage", fake_log_error_usage)
+
+    class FailingInteractions:
+        async def create(self, **kwargs):
+            raise RuntimeError("google blocked the request upstream")
+
+    class CapturingAioClient:
+        def __init__(self):
+            self.interactions = FailingInteractions()
+
+        async def aclose(self):
+            return None
+
+    class CapturingGenaiClient:
+        def __init__(self, api_key=None, http_options=None):
+            self.aio = CapturingAioClient()
+
+    monkeypatch.setattr(google_service.genai, "Client", CapturingGenaiClient)
+
+    events = []
+    async for event in stream_normalized_google_response(
+        [{"role": "user", "content": [{"type": "input_text", "text": "draw a cat"}]}],
+        model="gemini-3.1-flash-lite",
+        instructions="You are a helpful assistant",
+        tool_choice="auto",
+        tools=[
+            {"type": "image_generation", "model": "gemini-2.5-flash-image", "image_size": "1k"},
+        ],
+        user_id=None,
+        conversation_id=None,
+        request_id=str(uuid.uuid4()),
+        assistant_message_id=None,
+    ):
+        events.append(event)
+
+    assert any(ev.get("type") == "error" and ev.get("code") == google_service.GOOGLE_UPSTREAM_ERROR_CODE for ev in events)
+    assert captured_usage_errors
+    assert "google blocked the request upstream" in captured_usage_errors[0]["error_message"]
+
+
+@pytest.mark.asyncio
 async def test_google_proxy_is_forwarded_to_genai_http_options(monkeypatch):
     monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
     monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", "socks5h://warp-proxy:1080")

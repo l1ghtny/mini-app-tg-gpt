@@ -305,6 +305,25 @@ async def _stream_google_response_with_function_handoff(
     total_images_generated = 0
     max_function_rounds = 2
 
+    async def _emit_google_stream_error(error_message: str) -> AsyncGenerator[dict[str, Any], None]:
+        logger.exception(
+            "Google interactions handoff stream failed request_id=%s model=%s",
+            request_id,
+            model,
+        )
+        yield {
+            "type": "error",
+            "code": GOOGLE_UPSTREAM_ERROR_CODE,
+            "data": GOOGLE_UPSTREAM_USER_MESSAGE,
+        }
+        await _log_google_error_usage(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            request_id=request_id,
+            model_name=model,
+            error_message=error_message,
+        )
+
     for _ in range(max_function_rounds + 1):
         kwargs: dict[str, Any] = {
             "model": model,
@@ -318,7 +337,12 @@ async def _stream_google_response_with_function_handoff(
         if current_previous_interaction_id:
             kwargs["previous_interaction_id"] = current_previous_interaction_id
 
-        stream = await client.aio.interactions.create(**kwargs)
+        try:
+            stream = await client.aio.interactions.create(**kwargs)
+        except Exception as exc:
+            async for error_event in _emit_google_stream_error(str(exc)):
+                yield error_event
+            return
 
         response_meta_sent = False
         thinking_started = False
@@ -328,65 +352,26 @@ async def _stream_google_response_with_function_handoff(
         pending_function_call: dict[str, Any] | None = None
         latest_interaction_id = current_previous_interaction_id
 
-        async for event in stream:
-            et = event.event_type
+        try:
+            async for event in stream:
+                et = event.event_type
 
-            if et == "interaction.created":
-                if event.interaction and event.interaction.id:
-                    latest_interaction_id = event.interaction.id
-                    if not response_meta_sent:
-                        yield {
-                            "type": "response.meta",
-                            "provider": "google",
-                            "interaction_id": latest_interaction_id,
-                        }
-                        response_meta_sent = True
+                if et == "interaction.created":
+                    if event.interaction and event.interaction.id:
+                        latest_interaction_id = event.interaction.id
+                        if not response_meta_sent:
+                            yield {
+                                "type": "response.meta",
+                                "provider": "google",
+                                "interaction_id": latest_interaction_id,
+                            }
+                            response_meta_sent = True
 
-            elif et == "step.start":
-                if not event.step:
-                    continue
-                step_types[event.index] = event.step.type
-                if event.step.type == "thought":
-                    yield {
-                        "type": "status",
-                        "stage": "thinking",
-                        "phase": "thinking",
-                        "status": "active",
-                        "label": "Thinking",
-                        "source_event": "google.thinking",
-                    }
-                    thinking_started = True
-                elif event.step.type == "google_search_call":
-                    total_web_search_calls += 1
-                    yield {
-                        "type": "status",
-                        "stage": "web_search.in_progress",
-                        "phase": "tool.web_search.searching",
-                        "status": "active",
-                        "label": "Searching the web",
-                        "source_event": "google.google_search",
-                    }
-                elif event.step.type == "function_call":
-                    pending_function_call = {
-                        "id": event.step.id,
-                        "name": event.step.name,
-                        "arguments": dict(event.step.arguments or {}),
-                        "signature": getattr(event.step, "signature", None),
-                    }
-
-            elif et == "step.delta":
-                delta = event.delta
-                if not delta:
-                    continue
-
-                if delta.type == "text":
-                    if event.index not in text_part_started:
-                        yield {"type": "part.start", "index": event.index, "content_type": "text"}
-                        text_part_started[event.index] = True
-                    yield {"type": "text.delta", "index": event.index, "text": delta.text}
-
-                elif delta.type == "thought_summary":
-                    if not thinking_started:
+                elif et == "step.start":
+                    if not event.step:
+                        continue
+                    step_types[event.index] = event.step.type
+                    if event.step.type == "thought":
                         yield {
                             "type": "status",
                             "stage": "thinking",
@@ -396,89 +381,133 @@ async def _stream_google_response_with_function_handoff(
                             "source_event": "google.thinking",
                         }
                         thinking_started = True
+                    elif event.step.type == "google_search_call":
+                        total_web_search_calls += 1
+                        yield {
+                            "type": "status",
+                            "stage": "web_search.in_progress",
+                            "phase": "tool.web_search.searching",
+                            "status": "active",
+                            "label": "Searching the web",
+                            "source_event": "google.google_search",
+                        }
+                    elif event.step.type == "function_call":
+                        pending_function_call = {
+                            "id": event.step.id,
+                            "name": event.step.name,
+                            "arguments": dict(event.step.arguments or {}),
+                            "signature": getattr(event.step, "signature", None),
+                        }
 
-                    thought_text = ""
-                    if delta.content and hasattr(delta.content, "text"):
-                        thought_text = delta.content.text or ""
-                    elif isinstance(delta.content, str):
-                        thought_text = delta.content
+                elif et == "step.delta":
+                    delta = event.delta
+                    if not delta:
+                        continue
 
-                    accumulated_thoughts += thought_text
+                    if delta.type == "text":
+                        if event.index not in text_part_started:
+                            yield {"type": "part.start", "index": event.index, "content_type": "text"}
+                            text_part_started[event.index] = True
+                        yield {"type": "text.delta", "index": event.index, "text": delta.text}
+
+                    elif delta.type == "thought_summary":
+                        if not thinking_started:
+                            yield {
+                                "type": "status",
+                                "stage": "thinking",
+                                "phase": "thinking",
+                                "status": "active",
+                                "label": "Thinking",
+                                "source_event": "google.thinking",
+                            }
+                            thinking_started = True
+
+                        thought_text = ""
+                        if delta.content and hasattr(delta.content, "text"):
+                            thought_text = delta.content.text or ""
+                        elif isinstance(delta.content, str):
+                            thought_text = delta.content
+
+                        accumulated_thoughts += thought_text
+                        yield {
+                            "type": "reasoning.summary.delta",
+                            "delta": thought_text,
+                            "output_index": 0,
+                            "summary_index": 0,
+                            "item_id": "google-thought-0",
+                        }
+
+                    elif delta.type == "text_annotation_delta":
+                        if delta.annotations:
+                            for ann in delta.annotations:
+                                url = getattr(ann, "url", None)
+                                title = getattr(ann, "title", None) or getattr(ann, "uri", url) or "Source"
+                                if url and not any(c["url"] == url for c in citations):
+                                    citations.append({"title": title, "url": url})
+
+                elif et == "step.stop":
+                    st = step_types.get(event.index)
+                    if st == "thought":
+                        yield {
+                            "type": "reasoning.summary.done",
+                            "text": accumulated_thoughts,
+                            "output_index": 0,
+                            "summary_index": 0,
+                            "item_id": "google-thought-0",
+                        }
+                        yield {
+                            "type": "status",
+                            "stage": "thinking",
+                            "phase": "thinking",
+                            "status": "done",
+                            "label": "Thinking complete",
+                            "source_event": "google.thinking",
+                        }
+                    elif st == "model_output":
+                        if citations:
+                            sources_text = "\n\n**Sources:**\n" + "\n".join(
+                                f"[{i + 1}] [{c['title']}]({c['url']})"
+                                for i, c in enumerate(citations)
+                            )
+                            yield {"type": "text.delta", "index": event.index, "text": sources_text}
+                        if event.index in text_part_started:
+                            yield {"type": "text.done", "index": event.index}
+                    elif st == "google_search_result":
+                        yield {
+                            "type": "status",
+                            "stage": "web_search.completed",
+                            "phase": "tool.web_search.completed",
+                            "status": "done",
+                            "label": "Web search complete",
+                            "source_event": "google.google_search",
+                        }
+
+                elif et == "interaction.completed":
+                    usage_meta = event.interaction.usage if event.interaction else None
+                    total_input_tokens += usage_meta.total_input_tokens if usage_meta else 0
+                    total_output_tokens += usage_meta.total_output_tokens if usage_meta else 0
+                    total_reasoning_tokens += usage_meta.total_thought_tokens if usage_meta else 0
+
+                elif et == "error":
+                    err_msg = event.error.message if event.error else "Unknown upstream Google error"
+                    logger.error("Interactions stream ErrorEvent: %s", err_msg)
                     yield {
-                        "type": "reasoning.summary.delta",
-                        "delta": thought_text,
-                        "output_index": 0,
-                        "summary_index": 0,
-                        "item_id": "google-thought-0",
+                        "type": "error",
+                        "code": GOOGLE_UPSTREAM_ERROR_CODE,
+                        "data": GOOGLE_UPSTREAM_USER_MESSAGE,
                     }
-
-                elif delta.type == "text_annotation_delta":
-                    if delta.annotations:
-                        for ann in delta.annotations:
-                            url = getattr(ann, "url", None)
-                            title = getattr(ann, "title", None) or getattr(ann, "uri", url) or "Source"
-                            if url and not any(c["url"] == url for c in citations):
-                                citations.append({"title": title, "url": url})
-
-            elif et == "step.stop":
-                st = step_types.get(event.index)
-                if st == "thought":
-                    yield {
-                        "type": "reasoning.summary.done",
-                        "text": accumulated_thoughts,
-                        "output_index": 0,
-                        "summary_index": 0,
-                        "item_id": "google-thought-0",
-                    }
-                    yield {
-                        "type": "status",
-                        "stage": "thinking",
-                        "phase": "thinking",
-                        "status": "done",
-                        "label": "Thinking complete",
-                        "source_event": "google.thinking",
-                    }
-                elif st == "model_output":
-                    if citations:
-                        sources_text = "\n\n**Sources:**\n" + "\n".join(
-                            f"[{i + 1}] [{c['title']}]({c['url']})"
-                            for i, c in enumerate(citations)
-                        )
-                        yield {"type": "text.delta", "index": event.index, "text": sources_text}
-                    if event.index in text_part_started:
-                        yield {"type": "text.done", "index": event.index}
-                elif st == "google_search_result":
-                    yield {
-                        "type": "status",
-                        "stage": "web_search.completed",
-                        "phase": "tool.web_search.completed",
-                        "status": "done",
-                        "label": "Web search complete",
-                        "source_event": "google.google_search",
-                    }
-
-            elif et == "interaction.completed":
-                usage_meta = event.interaction.usage if event.interaction else None
-                total_input_tokens += usage_meta.total_input_tokens if usage_meta else 0
-                total_output_tokens += usage_meta.total_output_tokens if usage_meta else 0
-                total_reasoning_tokens += usage_meta.total_thought_tokens if usage_meta else 0
-
-            elif et == "error":
-                err_msg = event.error.message if event.error else "Unknown upstream Google error"
-                logger.error("Interactions stream ErrorEvent: %s", err_msg)
-                yield {
-                    "type": "error",
-                    "code": GOOGLE_UPSTREAM_ERROR_CODE,
-                    "data": GOOGLE_UPSTREAM_USER_MESSAGE,
-                }
-                await _log_google_error_usage(
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    request_id=request_id,
-                    model_name=model,
-                    error_message=err_msg,
-                )
-                return
+                    await _log_google_error_usage(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        request_id=request_id,
+                        model_name=model,
+                        error_message=err_msg,
+                    )
+                    return
+        except Exception as exc:
+            async for error_event in _emit_google_stream_error(str(exc)):
+                yield error_event
+            return
 
         if not pending_function_call:
             await _log_google_success_usage(
