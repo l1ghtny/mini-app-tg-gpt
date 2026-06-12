@@ -77,8 +77,9 @@ GOOGLE_IMAGE_ROWS_TO_DISABLE = (
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
     for image_model, quality, credit_cost, description, description_ru in GOOGLE_IMAGE_ROWS:
-        op.execute(
+        bind.execute(
             sa.text(
                 """
                 UPDATE image_quality_pricing
@@ -99,7 +100,7 @@ def upgrade() -> None:
             },
         )
     for image_model, quality in GOOGLE_IMAGE_ROWS_TO_DISABLE:
-        op.execute(
+        bind.execute(
             sa.text(
                 """
                 UPDATE image_quality_pricing
@@ -116,6 +117,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
     rollback_rows = (
         ("gemini-2.5-flash-image", "512", 1.0, "512 resolution"),
         ("gemini-2.5-flash-image", "1k", 2.0, "1k resolution"),
@@ -128,7 +130,7 @@ def downgrade() -> None:
         ("gemini-3-pro-image-preview", "2k", 4.0, "2k resolution"),
     )
     for image_model, quality, credit_cost, description in rollback_rows:
-        op.execute(
+        bind.execute(
             sa.text(
                 """
                 UPDATE image_quality_pricing
@@ -148,7 +150,7 @@ def downgrade() -> None:
             },
         )
     for image_model, quality in GOOGLE_IMAGE_ROWS_TO_DISABLE:
-        op.execute(
+        bind.execute(
             sa.text(
                 """
                 UPDATE image_quality_pricing
