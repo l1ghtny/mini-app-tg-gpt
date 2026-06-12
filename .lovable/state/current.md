@@ -2,39 +2,31 @@
 
 ## Current objective
 
-Support the conversion-focused backend rollout by keeping the TBank recurring-payment contract verified and aligning first-touch bot messaging with the premium Telegram positioning.
+Repair the Alembic revision graph on `main` so production migrations stop failing with the duplicate revision id and cycle between `r1a2b3c4d5e6` and `dca1ce1aecc2`.
 
 ## In progress
 
-- Break down the next backend conversion work: payment-confidence support APIs, premium-sample support, and attribution-aware post-purchase flows.
+- None.
 
 ## Completed
 
-- Read the existing recurring-payment handoff doc and TBank compliance memory note.
-- Verified the backend exposes bind-first recurring endpoints under `/api/v1/payments/tbank`.
-- Confirmed card binding uses `AddCard` / `GetAddCardState` and persists `RebillId` as the saved method token.
-- Confirmed SBP account binding uses `AddAccountQr` / `GetAddAccountQrState` and persists `AccountToken` as the saved method token.
-- Confirmed binding itself does not activate the subscription; activation only starts after `POST /activate-bound`.
-- Confirmed saved payment methods support list, set default, detach, and retry-renewal flows.
-- Verified focused payment and subscription tests locally: `15 passed` across `test_payment_binding_flow.py`, `test_payment_discounts.py`, and `test_user_subscription_active.py`.
-- Added a local-testing note to the frontend handoff doc explaining that bind completion can be tested locally via polling, but final payment confirmation still depends on webhook delivery.
-- Added a durable tech memory note for the TBank local webhook testing constraint.
-- Rewrote the bot `/start` and fallback nudge copy in `app/bot/bot_main.py` to match the current positioning:
-  - premium AI inside Telegram;
-  - GPT + Gemini, images, and file workflows;
-  - pay in rubles / no VPN friction;
-  - stronger ad-entry copy for campaign traffic.
-- Verified the updated bot message file compiles with `poetry run python -c "import py_compile; py_compile.compile('app/bot/bot_main.py', doraise=True)"`.
+- Read the local project state and the durable note for the retired Google image model cleanup.
+- Confirmed the production failure is caused by two separate files using revision id `r1a2b3c4d5e6`.
+- Confirmed the cycle path was:
+  - `r1a2b3c4d5e6_release_readiness_schema_compat` -> `dca1ce1aecc2_add_release_readiness_backend_schema`
+  - `r1a2b3c4d5e6_remove_retired_google_image_model` mistakenly reused `r1a2b3c4d5e6` while revising `dca1ce1aecc2`
+- Renamed the Google image cleanup revision id to `u1a2b3c4d5e6`.
+- Updated the merge revision `z1a2b3c4d5e6` to depend on `u1a2b3c4d5e6` instead of `dca1ce1aecc2`, preserving a single merged head.
+- Verified `poetry run alembic heads` now reports a single head: `z1a2b3c4d5e6`.
+- Verified `poetry run alembic history` traverses `r1a2b3c4d5e6 -> dca1ce1aecc2 -> u1a2b3c4d5e6 -> z1a2b3c4d5e6` without duplicate-revision warnings or cycle errors.
+- Compile-checked the repaired migration files with `poetry run python -m py_compile`.
 
 ## Blockers and risks
 
-- Full localhost activation still needs the TBank webhook to reach the backend; otherwise payment status will stay in the backend's pending state.
-- The frontend repo is not writable from this workspace, so UI implementation itself remains a follow-up for the frontend team.
+- The revision graph is fixed, but this session did not run a full `alembic upgrade` against a disposable database.
+- If any external environment was manually stamped to the invalid duplicate revision id from the Google cleanup file, it may need manual stamp remediation; Alembic could not have traversed that state from this branch cleanly.
 
 ## Next steps
 
-- Hand the verified API contract and localhost testing caveat to the UI team.
-- Define the backend `conversion-state` payload needed by the new frontend paywall/onboarding plan.
-- Design the v1 premium-sample backend flow with explicit daily eligibility and auditable consumption.
-- If full local end-to-end activation is needed, provide a public tunnel or replay path for `/api/v1/payments/tbank/webhook`.
-- After frontend integration, run one real bind -> activate -> webhook -> active-subscription flow against the TBank demo terminal.
+- Run the migration chain against a disposable local/test database if you want end-to-end DDL confirmation in addition to graph validation.
+- Share the exact revision-id change (`r1a2b3c4d5e6` cleanup file -> `u1a2b3c4d5e6`) in the handoff so operators know what changed if they inspected the broken branch earlier.
