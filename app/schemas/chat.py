@@ -26,8 +26,10 @@ class ImageUrlContent(BaseModel):
 
 # --- A schema for content when creating history for openAI API ---
 class MessageContent(BaseModel):
+    id: Optional[uuid.UUID] = None
     type: str
     value: str
+    data: Optional[dict] = None
     model_config = ConfigDict(
         from_attributes=True,
         extra="forbid",

@@ -1,4 +1,4 @@
-﻿import aioboto3
+import aioboto3
 from botocore.config import Config
 
 from app.r2.settings import Settings
@@ -19,7 +19,11 @@ def _client_kwargs():
         endpoint_url=R2_ENDPOINT,
         aws_access_key_id=R2_ACCESS_KEY_ID,
         aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-        config=Config(signature_version="s3v4", retries={"max_attempts": 5, "mode": "standard"}),
+        config=Config(
+            signature_version="s3v4",
+            retries={"max_attempts": 5, "mode": "standard"},
+            proxies={},
+        ),
     )
 
 # Lightweight factory: `async with s3_client() as s3: ...`
