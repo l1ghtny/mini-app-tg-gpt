@@ -1,7 +1,10 @@
 import os
+import sys
+import types as pytypes
 import uuid
 import pytest
 import aiohttp
+from python_socks import ProxyType
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -288,6 +291,44 @@ def test_google_socks_proxy_requires_aiohttp_socks(monkeypatch):
 
     with pytest.raises(RuntimeError, match="aiohttp-socks"):
         google_service._build_google_http_options()
+
+
+@pytest.mark.parametrize(
+    ("proxy_url", "expected_proxy_type", "expected_rdns"),
+    [
+        ("socks5://warp-proxy:1080", ProxyType.SOCKS5, False),
+        ("socks5h://warp-proxy:1080", ProxyType.SOCKS5, True),
+        ("socks4://warp-proxy:1080", ProxyType.SOCKS4, False),
+        ("socks4a://warp-proxy:1080", ProxyType.SOCKS4, True),
+    ],
+)
+def test_google_aiohttp_socks_aliases_map_to_connector_kwargs(
+    monkeypatch,
+    proxy_url,
+    expected_proxy_type,
+    expected_rdns,
+):
+    monkeypatch.setattr(google_service, "_module_available", lambda name: True)
+
+    class FakeProxyConnector:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeClientSession:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setitem(sys.modules, "aiohttp", pytypes.SimpleNamespace(ClientSession=FakeClientSession))
+    monkeypatch.setitem(sys.modules, "aiohttp_socks", pytypes.SimpleNamespace(ProxyConnector=FakeProxyConnector))
+
+    client_session = google_service._build_google_aiohttp_client(proxy_url)
+
+    connector = client_session.kwargs["connector"]
+    assert client_session.kwargs["trust_env"] is True
+    assert connector.kwargs["proxy_type"] == expected_proxy_type
+    assert connector.kwargs["host"] == "warp-proxy"
+    assert connector.kwargs["port"] == 1080
+    assert connector.kwargs["rdns"] is expected_rdns
 
 
 def test_google_image_models_map_low_thinking_to_minimal():

@@ -3,7 +3,7 @@ import importlib.util
 import uuid
 import logging
 from typing import Any, AsyncGenerator, Iterable, Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 from google import genai
@@ -34,6 +34,7 @@ GOOGLE_UPSTREAM_USER_MESSAGE = "Sorry, Google Gemini has some issues on their en
 GOOGLE_PROXY_ERROR_CODE = "GEMINI_PROXY_MISCONFIGURED"
 GOOGLE_PROXY_USER_MESSAGE = "Gemini proxy is configured incorrectly on the server."
 _SOCKS_PROXY_SCHEMES = {"socks4", "socks4a", "socks5", "socks5h"}
+_REMOTE_DNS_SOCKS_PROXY_SCHEMES = {"socks4a", "socks5h"}
 
 
 def _extract_tool_type(tool: Any) -> str | None:
@@ -210,6 +211,25 @@ def _module_available(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
 
 
+def _build_google_socks_connector_kwargs(proxy_url: str) -> dict[str, Any]:
+    parsed = urlparse(proxy_url)
+    scheme = parsed.scheme.lower()
+    if scheme not in _SOCKS_PROXY_SCHEMES:
+        raise ValueError(f"Unsupported SOCKS proxy scheme: {scheme}")
+    if not parsed.hostname or parsed.port is None:
+        raise ValueError("SOCKS proxy URL must include host and port")
+
+    proxy_type_name = "SOCKS5" if scheme.startswith("socks5") else "SOCKS4"
+    return {
+        "proxy_type_name": proxy_type_name,
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "username": unquote(parsed.username) if parsed.username else None,
+        "password": unquote(parsed.password) if parsed.password else None,
+        "rdns": scheme in _REMOTE_DNS_SOCKS_PROXY_SCHEMES,
+    }
+
+
 def _build_google_aiohttp_client(proxy_url: str) -> Any:
     import aiohttp
 
@@ -225,8 +245,14 @@ def _build_google_aiohttp_client(proxy_url: str) -> Any:
                 "`aiohttp-socks` package."
             )
         from aiohttp_socks import ProxyConnector
+        from python_socks import ProxyType
 
-        session_kwargs["connector"] = ProxyConnector.from_url(proxy_url)
+        connector_kwargs = _build_google_socks_connector_kwargs(proxy_url)
+        proxy_type_name = connector_kwargs.pop("proxy_type_name")
+        session_kwargs["connector"] = ProxyConnector(
+            proxy_type=getattr(ProxyType, proxy_type_name),
+            **connector_kwargs,
+        )
     else:
         session_kwargs["proxy"] = proxy_url
 
