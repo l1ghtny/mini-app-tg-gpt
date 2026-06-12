@@ -1,3 +1,4 @@
+import base64
 import os
 import sys
 import types as pytypes
@@ -87,6 +88,26 @@ class MockGenaiClient:
     def __init__(self, api_key=None, http_options=None):
         self.aio = MockAioClient()
 
+
+class MockImage:
+    def __init__(self, image_bytes: bytes):
+        self.image_bytes = image_bytes
+
+
+class MockGeneratedImage:
+    def __init__(self, image_bytes: bytes | None = None, rai_filtered_reason: str | None = None):
+        self.image = MockImage(image_bytes) if image_bytes is not None else None
+        self.rai_filtered_reason = rai_filtered_reason
+
+
+class MockGenerateImagesResponse:
+    def __init__(self, image_bytes: bytes):
+        self.generated_images = [MockGeneratedImage(image_bytes=image_bytes)]
+
+
+async def _noop_async(**kwargs):
+    return None
+
 @pytest.mark.asyncio
 async def test_google_interactions_stream_normalization(monkeypatch):
     # Setup test DB engine
@@ -157,6 +178,7 @@ async def test_google_interactions_stream_normalization(monkeypatch):
 async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
     monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
     monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", None)
+    monkeypatch.setattr(google_service, "_log_google_success_usage", _noop_async)
 
     interactions = MockInteractionsResource()
 
@@ -194,9 +216,141 @@ async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_google_explicit_image_generation_uses_image_model(monkeypatch):
+async def test_google_auto_tool_choice_hands_off_image_generation_via_function_call(monkeypatch):
     monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
     monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", None)
+    monkeypatch.setattr(google_service, "_log_google_success_usage", _noop_async)
+
+    fake_png = b"\x89PNG\r\n\x1a\n\x00\x00fake"
+
+    class FunctionCallStream:
+        def __init__(self):
+            self.events = [
+                MockEvent("interaction.created", interaction=MockInteraction("router_intr")),
+                MockEvent(
+                    "step.start",
+                    index=0,
+                    step=pytypes.SimpleNamespace(
+                        type="function_call",
+                        id="call-1",
+                        name="generate_image",
+                        arguments={"prompt": "cinematic cyberpunk cat poster, neon lighting"},
+                        signature="sig-1",
+                    ),
+                ),
+                MockEvent("step.stop", index=0),
+                MockEvent("interaction.completed", interaction=MockInteraction("router_intr", MockUsage(10, 3, 0))),
+            ]
+
+        def __aiter__(self):
+            self.index = 0
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.events):
+                raise StopAsyncIteration
+            event = self.events[self.index]
+            self.index += 1
+            return event
+
+    class FollowupStream:
+        def __init__(self):
+            self.events = [
+                MockEvent("interaction.created", interaction=MockInteraction("followup_intr")),
+                MockEvent("step.start", index=1, step=MockStep("model_output")),
+                MockEvent("step.delta", index=1, delta=MockDelta("text", text="Done.")),
+                MockEvent("step.stop", index=1),
+                MockEvent("interaction.completed", interaction=MockInteraction("followup_intr", MockUsage(4, 2, 0))),
+            ]
+
+        def __aiter__(self):
+            self.index = 0
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.events):
+                raise StopAsyncIteration
+            event = self.events[self.index]
+            self.index += 1
+            return event
+
+    class CapturingInteractions:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return FunctionCallStream()
+            return FollowupStream()
+
+    class CapturingModels:
+        def __init__(self):
+            self.generate_images_calls = []
+
+        async def generate_images(self, **kwargs):
+            self.generate_images_calls.append(kwargs)
+            return MockGenerateImagesResponse(fake_png)
+
+    interactions = CapturingInteractions()
+    image_models = CapturingModels()
+
+    class CapturingAioClient:
+        def __init__(self):
+            self.interactions = interactions
+            self.models = image_models
+
+        async def aclose(self):
+            return None
+
+    class CapturingGenaiClient:
+        def __init__(self, api_key=None, http_options=None):
+            self.aio = CapturingAioClient()
+
+    monkeypatch.setattr(google_service.genai, "Client", CapturingGenaiClient)
+
+    events = []
+    async for event in stream_normalized_google_response(
+        [{"role": "user", "content": [{"type": "input_text", "text": "Draw a cinematic poster of a cat astronaut"}]}],
+        model="gemini-3.1-flash-lite",
+        instructions="You are a helpful assistant",
+        tool_choice="auto",
+        tools=[
+            {"type": "web_search"},
+            {"type": "image_generation", "model": "gemini-2.5-flash-image", "image_size": "2k"},
+        ],
+        user_id=None,
+        conversation_id=None,
+        request_id=str(uuid.uuid4()),
+        assistant_message_id=None,
+    ):
+        events.append(event)
+
+    assert interactions.calls
+    assert interactions.calls[0]["model"] == "gemini-3.1-flash-lite"
+    assert interactions.calls[0]["tools"][0]["type"] == "google_search"
+    assert interactions.calls[0]["tools"][1]["type"] == "function"
+    assert interactions.calls[1]["previous_interaction_id"] == "router_intr"
+    assert interactions.calls[1]["input"][0]["type"] == "function_result"
+    assert interactions.calls[1]["input"][0]["call_id"] == "call-1"
+
+    assert image_models.generate_images_calls
+    assert image_models.generate_images_calls[0]["model"] == "gemini-3.1-flash-image-preview"
+    assert image_models.generate_images_calls[0]["prompt"] == "cinematic cyberpunk cat poster, neon lighting"
+    assert image_models.generate_images_calls[0]["config"].image_size == "2K"
+
+    assert any(ev.get("type") == "image.ready" for ev in events)
+    assert any(ev.get("type") == "text.delta" and ev.get("text") == "Done." for ev in events)
+    assert any(ev.get("type") == "done" for ev in events)
+    image_ready = next(ev for ev in events if ev.get("type") == "image.ready")
+    assert image_ready["data"] == base64.b64encode(fake_png).decode("ascii")
+
+
+@pytest.mark.asyncio
+async def test_google_explicit_image_generation_routes_only_the_function_tool(monkeypatch):
+    monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
+    monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", None)
+    monkeypatch.setattr(google_service, "_log_google_success_usage", _noop_async)
 
     interactions = MockInteractionsResource()
 
@@ -210,7 +364,8 @@ async def test_google_explicit_image_generation_uses_image_model(monkeypatch):
 
     monkeypatch.setattr(google_service.genai, "Client", CapturingGenaiClient)
 
-    async for _ in stream_normalized_google_response(
+    events = []
+    async for event in stream_normalized_google_response(
         [{"role": "user", "content": [{"type": "input_text", "text": "draw a cat"}]}],
         model="gemini-3.1-flash-lite",
         instructions="You are a helpful assistant",
@@ -224,12 +379,13 @@ async def test_google_explicit_image_generation_uses_image_model(monkeypatch):
         request_id=str(uuid.uuid4()),
         assistant_message_id=None,
     ):
-        pass
+        events.append(event)
 
     assert interactions.calls
-    assert interactions.calls[0]["model"] == "gemini-3.1-flash-image-preview"
-    assert interactions.calls[0]["response_modalities"] == ["text", "image"]
-    assert interactions.calls[0]["generation_config"]["image_config"] == {"image_size": "2K"}
+    assert interactions.calls[0]["model"] == "gemini-3.1-flash-lite"
+    assert len(interactions.calls[0]["tools"]) == 1
+    assert interactions.calls[0]["tools"][0]["type"] == "function"
+    assert any(ev.get("type") == "done" for ev in events)
 
 
 @pytest.mark.asyncio

@@ -35,9 +35,18 @@ GOOGLE_PROXY_ERROR_CODE = "GEMINI_PROXY_MISCONFIGURED"
 GOOGLE_PROXY_USER_MESSAGE = "Gemini proxy is configured incorrectly on the server."
 _SOCKS_PROXY_SCHEMES = {"socks4", "socks4a", "socks5", "socks5h"}
 _REMOTE_DNS_SOCKS_PROXY_SCHEMES = {"socks4a", "socks5h"}
+_GOOGLE_IMAGE_FUNCTION_NAME = "generate_image"
+_GOOGLE_IMAGE_SIZE_MAP = {
+    "512": "1K",
+    "1k": "1K",
+    "2k": "2K",
+}
 
 
 def _extract_tool_type(tool: Any) -> str | None:
+    if isinstance(tool, dict):
+        tool_type = tool.get("type")
+        return tool_type if isinstance(tool_type, str) and tool_type else None
     tool_type = getattr(tool, "type", None)
     return tool_type if isinstance(tool_type, str) and tool_type else None
 
@@ -84,6 +93,528 @@ def _tool_choice_requests_image_generation(tool_choice: Any) -> bool:
             }
             return "image_generation" in requested
     return False
+
+
+def _normalize_tool_name(tool_name: Any) -> str | None:
+    if not isinstance(tool_name, str):
+        return None
+    normalized = tool_name.strip().lower()
+    return normalized or None
+
+
+def _requested_tool_names(tool_choice: Any) -> set[str] | None:
+    if isinstance(tool_choice, list):
+        names = {
+            normalized
+            for item in tool_choice
+            for normalized in [_normalize_tool_name(item)]
+            if normalized
+        }
+        return names
+
+    if isinstance(tool_choice, dict):
+        tools_list = tool_choice.get("tools")
+        if isinstance(tools_list, list):
+            names = {
+                normalized
+                for tool in tools_list
+                for normalized in [_normalize_tool_name(tool.get("type")) if isinstance(tool, dict) else None]
+                if normalized
+            }
+            return names
+        return None
+
+    normalized = _normalize_tool_name(tool_choice)
+    if normalized is None:
+        return None
+    if normalized in {"auto", "required"}:
+        return None
+    if normalized == "none":
+        return set()
+    return {normalized}
+
+
+def _build_google_image_function_tool() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": _GOOGLE_IMAGE_FUNCTION_NAME,
+        "description": (
+            "Generate an image for the user. Rewrite and optimize the user's request into "
+            "a production-ready image prompt before calling this function."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Optimized prompt to send to the downstream Google image model.",
+                },
+            },
+            "required": ["prompt"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _google_image_tool_config(
+    image_tool: ImageGeneration | dict[str, Any] | None,
+    fallback_model: str,
+) -> tuple[str, str | None]:
+    if isinstance(image_tool, dict):
+        return (
+            canonicalize_image_model(image_tool.get("model") or fallback_model),
+            str(image_tool.get("image_size") or "").strip().lower() or None,
+        )
+    if image_tool is not None:
+        return canonicalize_image_model(getattr(image_tool, "model", None) or fallback_model), None
+    return canonicalize_image_model(fallback_model), None
+
+
+def _build_google_generate_images_config(
+    *,
+    image_model: str,
+    image_size: str | None,
+) -> types.GenerateImagesConfig:
+    config_kwargs: dict[str, Any] = {
+        "number_of_images": 1,
+        "include_rai_reason": True,
+        "output_mime_type": "image/png",
+    }
+    mapped_size = _GOOGLE_IMAGE_SIZE_MAP.get((image_size or "").strip().lower())
+    if mapped_size and not image_model.startswith("imagen-3."):
+        config_kwargs["image_size"] = mapped_size
+    return types.GenerateImagesConfig(**config_kwargs)
+
+
+async def _log_google_success_usage(
+    *,
+    user_id: Optional[uuid.UUID],
+    conversation_id: Optional[uuid.UUID],
+    request_id: str,
+    model_name: str,
+    assistant_message_id: Optional[uuid.UUID],
+    accumulated_thoughts: str,
+    input_tokens: int,
+    output_tokens: int,
+    reasoning_tokens: int,
+    web_search_calls: int,
+    images_generated: int,
+) -> None:
+    async with AsyncSession(engine, expire_on_commit=False) as db_session:
+        if accumulated_thoughts and assistant_message_id:
+            message = await db_session.get(Message, assistant_message_id)
+            if message:
+                message.reasoning_summary = accumulated_thoughts
+                db_session.add(message)
+                await db_session.commit()
+        await log_usage(
+            db_session,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            request_id=request_id,
+            provider="google",
+            model_name=model_name,
+            status="success",
+            error_message=None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            reasoning_tokens=reasoning_tokens,
+            web_search_calls=web_search_calls,
+            images_generated=images_generated,
+        )
+
+
+async def _generate_google_image_via_tool_call(
+    *,
+    client: genai.Client,
+    request_model: str,
+    image_size: str | None,
+    optimized_prompt: str,
+) -> list[dict[str, Any]]:
+    response = await client.aio.models.generate_images(
+        model=request_model,
+        prompt=optimized_prompt,
+        config=_build_google_generate_images_config(
+            image_model=request_model,
+            image_size=image_size,
+        ),
+    )
+
+    payloads: list[dict[str, Any]] = []
+    filtered_reasons: list[str] = []
+    for generated in response.generated_images or []:
+        image = generated.image
+        if image and image.image_bytes:
+            payloads.append(
+                {
+                    "type": "image.ready",
+                    "index": len(payloads),
+                    "format": "b64",
+                    "data": base64.b64encode(image.image_bytes).decode("ascii"),
+                }
+            )
+        elif generated.rai_filtered_reason:
+            filtered_reasons.append(generated.rai_filtered_reason)
+
+    if payloads:
+        return payloads
+
+    if filtered_reasons:
+        raise RuntimeError(filtered_reasons[0])
+
+    raise RuntimeError("Google image generation returned no images.")
+
+
+async def _stream_google_response_with_function_handoff(
+    *,
+    client: genai.Client,
+    messages: list[dict[str, Any]],
+    model: str,
+    tools_payload: list[dict[str, Any]],
+    instructions: Optional[str],
+    user_id: Optional[uuid.UUID],
+    conversation_id: Optional[uuid.UUID],
+    request_id: str,
+    assistant_message_id: Optional[uuid.UUID],
+    previous_interaction_id: Optional[str],
+    thinking_enabled: bool | None,
+    reasoning_effort: str | None,
+    image_model: str,
+    image_size: str | None,
+    web_search_enabled: bool,
+) -> AsyncGenerator[dict[str, Any], None]:
+    current_input: Any
+    if previous_interaction_id:
+        current_input = await _single_turn_input_from_history(messages)
+    else:
+        current_input = await _interactions_steps_from_history(messages)
+
+    current_previous_interaction_id = previous_interaction_id
+    system_text = ((instructions or "").strip() + "\n\n" + STYLE_GUIDE).strip()
+    generation_config = _generation_config_for_request(
+        model=model,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=reasoning_effort,
+    )
+
+    accumulated_thoughts = ""
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_reasoning_tokens = 0
+    total_web_search_calls = 0
+    total_images_generated = 0
+    max_function_rounds = 2
+
+    for _ in range(max_function_rounds + 1):
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "input": current_input,
+            "stream": True,
+            "system_instruction": system_text,
+            "tools": tools_payload,
+        }
+        if generation_config:
+            kwargs["generation_config"] = generation_config
+        if current_previous_interaction_id:
+            kwargs["previous_interaction_id"] = current_previous_interaction_id
+
+        stream = await client.aio.interactions.create(**kwargs)
+
+        response_meta_sent = False
+        thinking_started = False
+        text_part_started: dict[int, bool] = {}
+        step_types: dict[int, str] = {}
+        citations: list[dict[str, str]] = []
+        pending_function_call: dict[str, Any] | None = None
+        latest_interaction_id = current_previous_interaction_id
+
+        async for event in stream:
+            et = event.event_type
+
+            if et == "interaction.created":
+                if event.interaction and event.interaction.id:
+                    latest_interaction_id = event.interaction.id
+                    if not response_meta_sent:
+                        yield {
+                            "type": "response.meta",
+                            "provider": "google",
+                            "interaction_id": latest_interaction_id,
+                        }
+                        response_meta_sent = True
+
+            elif et == "step.start":
+                if not event.step:
+                    continue
+                step_types[event.index] = event.step.type
+                if event.step.type == "thought":
+                    yield {
+                        "type": "status",
+                        "stage": "thinking",
+                        "phase": "thinking",
+                        "status": "active",
+                        "label": "Thinking",
+                        "source_event": "google.thinking",
+                    }
+                    thinking_started = True
+                elif event.step.type == "google_search_call":
+                    total_web_search_calls += 1
+                    yield {
+                        "type": "status",
+                        "stage": "web_search.in_progress",
+                        "phase": "tool.web_search.searching",
+                        "status": "active",
+                        "label": "Searching the web",
+                        "source_event": "google.google_search",
+                    }
+                elif event.step.type == "function_call":
+                    pending_function_call = {
+                        "id": event.step.id,
+                        "name": event.step.name,
+                        "arguments": dict(event.step.arguments or {}),
+                        "signature": getattr(event.step, "signature", None),
+                    }
+
+            elif et == "step.delta":
+                delta = event.delta
+                if not delta:
+                    continue
+
+                if delta.type == "text":
+                    if event.index not in text_part_started:
+                        yield {"type": "part.start", "index": event.index, "content_type": "text"}
+                        text_part_started[event.index] = True
+                    yield {"type": "text.delta", "index": event.index, "text": delta.text}
+
+                elif delta.type == "thought_summary":
+                    if not thinking_started:
+                        yield {
+                            "type": "status",
+                            "stage": "thinking",
+                            "phase": "thinking",
+                            "status": "active",
+                            "label": "Thinking",
+                            "source_event": "google.thinking",
+                        }
+                        thinking_started = True
+
+                    thought_text = ""
+                    if delta.content and hasattr(delta.content, "text"):
+                        thought_text = delta.content.text or ""
+                    elif isinstance(delta.content, str):
+                        thought_text = delta.content
+
+                    accumulated_thoughts += thought_text
+                    yield {
+                        "type": "reasoning.summary.delta",
+                        "delta": thought_text,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "item_id": "google-thought-0",
+                    }
+
+                elif delta.type == "text_annotation_delta":
+                    if delta.annotations:
+                        for ann in delta.annotations:
+                            url = getattr(ann, "url", None)
+                            title = getattr(ann, "title", None) or getattr(ann, "uri", url) or "Source"
+                            if url and not any(c["url"] == url for c in citations):
+                                citations.append({"title": title, "url": url})
+
+            elif et == "step.stop":
+                st = step_types.get(event.index)
+                if st == "thought":
+                    yield {
+                        "type": "reasoning.summary.done",
+                        "text": accumulated_thoughts,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "item_id": "google-thought-0",
+                    }
+                    yield {
+                        "type": "status",
+                        "stage": "thinking",
+                        "phase": "thinking",
+                        "status": "done",
+                        "label": "Thinking complete",
+                        "source_event": "google.thinking",
+                    }
+                elif st == "model_output":
+                    if citations:
+                        sources_text = "\n\n**Sources:**\n" + "\n".join(
+                            f"[{i + 1}] [{c['title']}]({c['url']})"
+                            for i, c in enumerate(citations)
+                        )
+                        yield {"type": "text.delta", "index": event.index, "text": sources_text}
+                    if event.index in text_part_started:
+                        yield {"type": "text.done", "index": event.index}
+                elif st == "google_search_result":
+                    yield {
+                        "type": "status",
+                        "stage": "web_search.completed",
+                        "phase": "tool.web_search.completed",
+                        "status": "done",
+                        "label": "Web search complete",
+                        "source_event": "google.google_search",
+                    }
+
+            elif et == "interaction.completed":
+                usage_meta = event.interaction.usage if event.interaction else None
+                total_input_tokens += usage_meta.total_input_tokens if usage_meta else 0
+                total_output_tokens += usage_meta.total_output_tokens if usage_meta else 0
+                total_reasoning_tokens += usage_meta.total_thought_tokens if usage_meta else 0
+
+            elif et == "error":
+                err_msg = event.error.message if event.error else "Unknown upstream Google error"
+                logger.error("Interactions stream ErrorEvent: %s", err_msg)
+                yield {
+                    "type": "error",
+                    "code": GOOGLE_UPSTREAM_ERROR_CODE,
+                    "data": GOOGLE_UPSTREAM_USER_MESSAGE,
+                }
+                await _log_google_error_usage(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    request_id=request_id,
+                    model_name=model,
+                    error_message=err_msg,
+                )
+                return
+
+        if not pending_function_call:
+            await _log_google_success_usage(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+                model_name=model,
+                assistant_message_id=assistant_message_id,
+                accumulated_thoughts=accumulated_thoughts,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                reasoning_tokens=total_reasoning_tokens,
+                web_search_calls=total_web_search_calls if web_search_enabled else 0,
+                images_generated=total_images_generated,
+            )
+            yield {
+                "type": "status",
+                "stage": "completed",
+                "phase": "response.completed",
+                "status": "done",
+                "label": "Completed",
+                "source_event": "google.interactions",
+            }
+            yield {"type": "done"}
+            return
+
+        if pending_function_call["name"] != _GOOGLE_IMAGE_FUNCTION_NAME:
+            yield {
+                "type": "error",
+                "code": GOOGLE_UPSTREAM_ERROR_CODE,
+                "data": GOOGLE_UPSTREAM_USER_MESSAGE,
+            }
+            await _log_google_error_usage(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+                model_name=model,
+                error_message=f"Unexpected Google function call: {pending_function_call['name']}",
+            )
+            return
+
+        optimized_prompt = str(pending_function_call["arguments"].get("prompt") or "").strip()
+        if not optimized_prompt:
+            optimized_prompt = str(
+                pending_function_call["arguments"].get("image_prompt")
+                or pending_function_call["arguments"].get("description")
+                or ""
+            ).strip()
+        if not optimized_prompt:
+            yield {
+                "type": "error",
+                "code": GOOGLE_UPSTREAM_ERROR_CODE,
+                "data": GOOGLE_UPSTREAM_USER_MESSAGE,
+            }
+            await _log_google_error_usage(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+                model_name=model,
+                error_message="Google image function call returned no prompt argument.",
+            )
+            return
+
+        yield {
+            "type": "status",
+            "stage": "image_generation.in_progress",
+            "phase": "tool.image_generation.in_progress",
+            "status": "active",
+            "label": "Generating image",
+            "source_event": "google.function_call",
+        }
+
+        try:
+            image_events = await _generate_google_image_via_tool_call(
+                client=client,
+                request_model=image_model,
+                image_size=image_size,
+                optimized_prompt=optimized_prompt,
+            )
+        except Exception as exc:
+            logger.exception("Google image handoff failed request_id=%s model=%s", request_id, image_model)
+            yield {
+                "type": "error",
+                "code": GOOGLE_UPSTREAM_ERROR_CODE,
+                "data": GOOGLE_UPSTREAM_USER_MESSAGE,
+            }
+            await _log_google_error_usage(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+                model_name=image_model,
+                error_message=str(exc),
+            )
+            return
+
+        for image_event in image_events:
+            yield {"type": "part.start", "index": image_event["index"], "content_type": "image"}
+            yield image_event
+            yield {
+                "type": "status",
+                "stage": "image_generation.completed",
+                "phase": "tool.image_generation.completed",
+                "status": "done",
+                "label": "Image generated",
+                "source_event": "google.function_call",
+                "index": image_event["index"],
+            }
+
+        total_images_generated += len(image_events)
+        current_input = [
+            {
+                "type": "function_result",
+                "call_id": pending_function_call["id"],
+                "name": pending_function_call["name"],
+                "result": {
+                    "status": "success",
+                    "prompt": optimized_prompt,
+                    "images_generated": len(image_events),
+                },
+                "signature": pending_function_call.get("signature"),
+            }
+        ]
+        current_previous_interaction_id = latest_interaction_id
+
+    yield {
+        "type": "error",
+        "code": GOOGLE_UPSTREAM_ERROR_CODE,
+        "data": GOOGLE_UPSTREAM_USER_MESSAGE,
+    }
+    await _log_google_error_usage(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        request_id=request_id,
+        model_name=model,
+        error_message="Google image function call loop exceeded the maximum number of rounds.",
+    )
 
 
 async def _inline_image_part_from_url(url: str) -> dict[str, Any] | None:
@@ -359,15 +890,21 @@ async def stream_normalized_google_response(
     image_tool = _extract_image_tool(tools)
     request_model = model
     image_size = None
-    # Keep ordinary Gemini chats on the selected text model. Only switch to the
-    # image model when the request explicitly asks for image generation.
-    image_enabled = bool(image_tool and _tool_choice_requests_image_generation(tool_choice))
-    if image_enabled:
-        if isinstance(image_tool, dict):
-            request_model = canonicalize_image_model(image_tool.get("model") or model)
-            image_size = image_tool.get("image_size")
-        else:
-            request_model = canonicalize_image_model(getattr(image_tool, "model", None) or model)
+    requested_tool_names = _requested_tool_names(tool_choice)
+    image_function_enabled = bool(
+        image_tool and (
+            requested_tool_names is None
+            or "image_generation" in requested_tool_names
+        )
+    )
+    if image_function_enabled:
+        request_model, image_size = _google_image_tool_config(image_tool, model)
+    web_search_enabled = bool(
+        enabled_web_search and (
+            requested_tool_names is None
+            or "web_search" in requested_tool_names
+        )
+    )
 
     yield {
         "type": "status",
@@ -396,6 +933,33 @@ async def stream_normalized_google_response(
         )
         return
 
+    if image_function_enabled:
+        tools_payload: list[dict[str, Any]] = [_build_google_image_function_tool()]
+        if web_search_enabled:
+            tools_payload.insert(0, {"type": "google_search"})
+        try:
+            async for event in _stream_google_response_with_function_handoff(
+                client=client,
+                messages=messages,
+                model=model,
+                tools_payload=tools_payload,
+                instructions=instructions,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=corr_id,
+                assistant_message_id=assistant_message_id,
+                previous_interaction_id=previous_interaction_id,
+                thinking_enabled=thinking_enabled,
+                reasoning_effort=reasoning_effort,
+                image_model=request_model,
+                image_size=image_size,
+                web_search_enabled=web_search_enabled,
+            ):
+                yield event
+            return
+        finally:
+            await _close_google_client(client)
+
     if previous_interaction_id:
         input_val = await _single_turn_input_from_history(messages)
     else:
@@ -409,7 +973,7 @@ async def stream_normalized_google_response(
     )
 
     tools_payload = []
-    if enabled_web_search:
+    if web_search_enabled:
         tools_payload.append({"type": "google_search"})
 
     system_text = ((instructions or "").strip() + "\n\n" + STYLE_GUIDE).strip()
@@ -420,11 +984,6 @@ async def stream_normalized_google_response(
         "stream": True,
         "system_instruction": system_text,
     }
-    if image_enabled:
-        # Keep both modalities in auto/required modes so Gemini can decide
-        # whether to answer with text, image, or a mix.
-        # Interactions API expects lowercase modality values.
-        kwargs["response_modalities"] = ["text", "image"]
     if tools_payload:
         kwargs["tools"] = tools_payload
     if generation_config:
