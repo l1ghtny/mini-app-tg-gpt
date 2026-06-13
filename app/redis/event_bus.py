@@ -1,5 +1,8 @@
-﻿from typing import AsyncIterator, Optional
+import json
+from typing import Any, AsyncIterator, Optional
+
 from redis.asyncio import Redis
+
 from .settings import settings
 
 
@@ -11,11 +14,32 @@ class RedisEventBus:
     def key_for_message(mid: str) -> str:
         return f"msg:{mid}"
 
+    @staticmethod
+    def _normalize_event_value(value: Any) -> str | int | float:
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if value is None:
+            raise TypeError("None values must be filtered before publishing")
+        if isinstance(value, (dict, list, tuple)):
+            return json.dumps(value, separators=(",", ":"))
+        return str(value)
+
+    @classmethod
+    def _normalize_event(cls, event: dict[str, Any]) -> dict[str, str | int | float]:
+        normalized: dict[str, str | int | float] = {}
+        for key, value in event.items():
+            if value is None:
+                continue
+            normalized[str(key)] = cls._normalize_event_value(value)
+        return normalized
+
     async def publish(self, mid: str, event: dict) -> str:
         """Append an event to the stream; returns Redis stream entry ID."""
         key = self.key_for_message(mid)
         entry_id = await self.r.xadd(
-            key, event, maxlen=settings.STREAM_MAXLEN, approximate=True
+            key, self._normalize_event(event), maxlen=settings.STREAM_MAXLEN, approximate=True
         )
         # refresh TTL on each write so short streams don’t expire mid-generation
         await self.r.expire(key, settings.STREAM_TTL_SECONDS)

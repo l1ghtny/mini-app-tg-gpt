@@ -54,7 +54,10 @@ from app.services.subscription_check.entitlements import (
 )
 from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
-from app.services.image_assets import link_content_to_existing_asset_by_url
+from app.services.image_assets import (
+    detach_assets_from_message_content_ids,
+    link_content_to_existing_asset_by_url,
+)
 from app.services.premium_samples import (
     assert_premium_sample_can_be_used,
     premium_sample_access_path,
@@ -387,6 +390,9 @@ async def handle_delete_message(
     if target_index is None:
         raise HTTPException(status_code=404, detail="Message not found")
 
+    await _detach_linked_assets_for_messages(session, messages[target_index:])
+    await session.flush()
+
     for message in messages[target_index:]:
         await session.delete(message)
 
@@ -438,6 +444,9 @@ async def handle_edit_message(
             ),
         )
     )).all()
+
+    await _detach_linked_assets_for_messages(session, messages_to_delete)
+    await session.flush()
 
     for message in messages_to_delete:
         await session.delete(message)
@@ -1162,6 +1171,12 @@ async def _replace_message_content(
     if not has_text and not image_values:
         raise HTTPException(status_code=400, detail="Edited message must include text or images")
 
+    await detach_assets_from_message_content_ids(
+        session,
+        [part.id for part in message.content if part.type == "image_url"],
+    )
+    await session.flush()
+
     for part in list(message.content):
         await session.delete(part)
 
@@ -1193,6 +1208,25 @@ async def _replace_message_content(
             conversation_id=message.conversation_id,
         )
         ordinal += 1
+
+
+async def _detach_linked_assets_for_messages(
+    session: AsyncSession,
+    messages: Sequence[Message],
+) -> None:
+    message_ids = [message.id for message in messages]
+    if not message_ids:
+        return
+
+    content_ids = (
+        await session.exec(
+            select(models.MessageContent.id).where(
+                models.MessageContent.message_id.in_(message_ids),
+                models.MessageContent.type == "image_url",
+            )
+        )
+    ).all()
+    await detach_assets_from_message_content_ids(session, content_ids)
 
 
 def _resolve_image_settings(

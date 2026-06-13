@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -263,6 +264,23 @@ async def link_content_to_existing_asset_by_url(
     session.add(asset)
     session.add(content)
     return asset
+
+
+async def detach_assets_from_message_content_ids(
+    session: AsyncSession,
+    content_ids: Sequence[uuid.UUID],
+) -> None:
+    if not content_ids:
+        return
+
+    assets = (
+        await session.exec(
+            select(ImageAsset).where(ImageAsset.message_content_id.in_(list(content_ids)))
+        )
+    ).all()
+    for asset in assets:
+        asset.message_content_id = None
+        session.add(asset)
 
 
 async def mark_asset_status(

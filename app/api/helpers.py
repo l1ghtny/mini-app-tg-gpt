@@ -128,11 +128,13 @@ async def generate_and_publish(
                 str(assistant_message_id),
             )
             await _cleanup_partial_images(partial_image_keys)
-            await bus.publish(assistant_message_id_str, {
+            error_event = {
                 "type": "error",
-                "code": lifecycle.get("last_error_code"),
                 "error": lifecycle.get("last_error_message") or str(e),
-            })
+            }
+            if lifecycle.get("last_error_code"):
+                error_event["code"] = lifecycle["last_error_code"]
+            await bus.publish(assistant_message_id_str, error_event)
             await bus.mark_done(
                 assistant_message_id_str,
                 ok=False,
