@@ -973,7 +973,9 @@ def _build_google_http_options() -> types.HttpOptions | None:
     return types.HttpOptions(
         client_args=client_args.copy(),
         async_client_args=client_args.copy(),
-        aiohttp_client=_build_google_aiohttp_client(proxy_url),
+
+        # 👇 REMOVE OR COMMENT OUT THIS LINE 👇
+        # aiohttp_client=_build_google_aiohttp_client(proxy_url),
     )
 
 
