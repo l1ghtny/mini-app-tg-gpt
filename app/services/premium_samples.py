@@ -14,6 +14,7 @@ FLAGSHIP_TEXT_SAMPLE_MODELS = ("gpt-5.5", "gemini-3.1-pro-preview")
 _ACTIVE_SAMPLE_STATES = ("reserved", "consumed")
 PREMIUM_SAMPLE_REASON_AVAILABLE = "available"
 PREMIUM_SAMPLE_REASON_ALREADY_SUBSCRIBED = "already_subscribed"
+PREMIUM_SAMPLE_REASON_ALREADY_HAS_ACTIVE_SUBSCRIPTION = "already_has_active_subscription"
 PREMIUM_SAMPLE_REASON_ALREADY_USED_TODAY = "already_used_today"
 PREMIUM_SAMPLE_REASON_ALREADY_HAS_USABLE_ACCESS = "already_has_usable_access"
 
@@ -110,11 +111,15 @@ async def get_premium_sample_state(
     kind = FLAGSHIP_TEXT_SAMPLE_KIND
     models = list(premium_sample_models(kind))
     current_subscription = await get_current_subscription(session, user_id)
-    if current_subscription is not None and _is_paid_subscription(current_subscription):
+    if current_subscription is not None:
         return PremiumSampleStateResponse(
             status="ineligible",
             eligible=False,
-            reason=PREMIUM_SAMPLE_REASON_ALREADY_SUBSCRIBED,
+            reason=(
+                PREMIUM_SAMPLE_REASON_ALREADY_SUBSCRIBED
+                if _is_paid_subscription(current_subscription)
+                else PREMIUM_SAMPLE_REASON_ALREADY_HAS_ACTIVE_SUBSCRIPTION
+            ),
             kinds=[],
             available_models=[],
             default_model=None,
@@ -190,13 +195,17 @@ async def assert_premium_sample_can_be_used(
         )
 
     current_subscription = await get_current_subscription(session, user_id)
-    if current_subscription is not None and _is_paid_subscription(current_subscription):
+    if current_subscription is not None:
         raise HTTPException(
             status_code=409,
             detail={
                 "error": "premium_sample_not_applicable",
                 "kind": kind,
-                "reason": PREMIUM_SAMPLE_REASON_ALREADY_SUBSCRIBED,
+                "reason": (
+                    PREMIUM_SAMPLE_REASON_ALREADY_SUBSCRIBED
+                    if _is_paid_subscription(current_subscription)
+                    else PREMIUM_SAMPLE_REASON_ALREADY_HAS_ACTIVE_SUBSCRIPTION
+                ),
             },
         )
 

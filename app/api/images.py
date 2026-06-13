@@ -13,10 +13,22 @@ from starlette.responses import StreamingResponse
 
 from app.api.dependencies import get_current_user
 from app.db.database import get_session
-from app.db.models import AppUser, MessageContent
+from app.db.models import AppUser
 from app.r2.methods import upload_fileobject
 from app.r2.settings import Settings
-from app.schemas.images import ImageUploaded, ImagePrepareShareResponse
+from app.schemas.images import ImageUploaded, ImagePrepareShareResponse, ImageAssetResponse
+from app.services.image_assets import (
+    IMAGE_SOURCE_UPLOADED,
+    IMAGE_STATUS_EXPIRED,
+    IMAGE_STATUS_MISSING,
+    create_image_asset,
+    effective_image_status,
+    find_asset_by_id_or_content_id,
+    find_asset_by_url,
+    mark_asset_status,
+    object_prefix_for_user,
+    serialize_image_asset,
+)
 
 images = APIRouter(tags=["images"], prefix="/images")
 logger = logging.getLogger(__name__)
@@ -128,7 +140,8 @@ async def upload_image(
         image.filename = file_name
 
     ext = image.filename.rsplit(".", 1)[-1].lower() if "." in image.filename else "png"
-    key = f"{time.strftime('%Y/%m/%d')}/{uuid.uuid4()}.{ext}"
+    prefix = await object_prefix_for_user(session, app_user.id, IMAGE_SOURCE_UPLOADED)
+    key = f"{prefix}/{time.strftime('%Y/%m/%d')}/{uuid.uuid4()}.{ext}"
     # 1. Save the image to the R2 bucket
     bucket, key = await upload_fileobject(
         key,
@@ -136,11 +149,33 @@ async def upload_image(
         content_type=image.content_type,
         extra_metadata={"author": str(app_user.id), "type": "image"},
     )
-    return ImageUploaded(key=key, url=f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}")
+    url = f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}"
+    asset = await create_image_asset(
+        session,
+        user_id=app_user.id,
+        public_url=url,
+        bucket=bucket,
+        key=key,
+        source=IMAGE_SOURCE_UPLOADED,
+    )
+    await session.commit()
+    await session.refresh(asset)
+    image_payload = serialize_image_asset(asset) or {}
+    return ImageUploaded(
+        key=key,
+        url=url,
+        image_id=str(asset.id),
+        expires_at=image_payload.get("expires_at"),
+        status=image_payload.get("status"),
+        retention_policy=image_payload.get("retention_policy"),
+    )
 
 
 @images.get("/proxy")
-async def proxy_image(url: str = Query(..., min_length=8, description="Public image URL")):
+async def proxy_image(
+    url: str = Query(..., min_length=8, description="Public image URL"),
+    session: AsyncSession = Depends(get_session),
+):
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise HTTPException(status_code=400, detail="Invalid image URL")
@@ -150,6 +185,16 @@ async def proxy_image(url: str = Query(..., min_length=8, description="Public im
         raise HTTPException(status_code=500, detail=f"Image proxy hosts are not configured ({_PROXY_ALLOWED_HOSTS_ENV})")
     if not _is_allowed_proxy_host(parsed.hostname, allowed_hosts):
         raise HTTPException(status_code=403, detail="Host is not allowed for image proxy")
+
+    asset = await find_asset_by_url(session, url)
+    if asset:
+        status = effective_image_status(asset)
+        if status == IMAGE_STATUS_EXPIRED:
+            if asset.status != IMAGE_STATUS_EXPIRED:
+                await mark_asset_status(session, asset, IMAGE_STATUS_EXPIRED)
+            raise HTTPException(status_code=410, detail="Image expired")
+        if status != "active":
+            raise HTTPException(status_code=410, detail="Image unavailable")
 
     client = httpx.AsyncClient(timeout=_PROXY_TIMEOUT, follow_redirects=True, max_redirects=_PROXY_MAX_REDIRECTS)
     try:
@@ -173,6 +218,8 @@ async def proxy_image(url: str = Query(..., min_length=8, description="Public im
             status_code = upstream.status_code
         else:
             status_code = 502
+        if asset and upstream.status_code in {404, 410}:
+            await mark_asset_status(session, asset, IMAGE_STATUS_MISSING)
         await upstream.aclose()
         await client.aclose()
         raise HTTPException(status_code=status_code, detail="Upstream image fetch failed")
@@ -220,18 +267,42 @@ async def _get_bot_username() -> str:
     return "bot"
 
 
+@images.get("/{id}", response_model=ImageAssetResponse)
+async def get_image_asset(
+    id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    asset, _content = await find_asset_by_id_or_content_id(session, id, user_id=current_user.id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    payload = serialize_image_asset(asset)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return ImageAssetResponse(**payload)
+
+
 @images.post("/{id}/prepare-share", response_model=ImagePrepareShareResponse)
 async def prepare_image_share(
     id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
-    # Find the image message content
-    content = await session.get(MessageContent, id)
-    if not content or content.type != "image_url":
+    asset, content = await find_asset_by_id_or_content_id(session, id, user_id=current_user.id)
+    if not content and not asset:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    image_url = content.value
+    status = effective_image_status(asset) if asset else "active"
+    if status == IMAGE_STATUS_EXPIRED:
+        if asset and asset.status != IMAGE_STATUS_EXPIRED:
+            await mark_asset_status(session, asset, IMAGE_STATUS_EXPIRED)
+        raise HTTPException(status_code=410, detail="Image expired")
+    if status != "active":
+        raise HTTPException(status_code=410, detail="Image unavailable")
+
+    image_url = asset.public_url if asset else content.value
+    result_id = str(asset.id if asset else content.id)
 
     # Call Telegram savePreparedInlineMessage
     token = os.getenv("BOT_TOKEN")
@@ -245,7 +316,7 @@ async def prepare_image_share(
         "user_id": current_user.telegram_id,
         "result": {
             "type": "photo",
-            "id": str(content.id),
+            "id": result_id,
             "photo_url": image_url,
             "thumbnail_url": image_url,
             "reply_markup": {
@@ -280,7 +351,7 @@ async def prepare_image_share(
                 "Telegram savePreparedInlineMessage failed status=%s body=%s image_id=%s user_id=%s",
                 resp.status_code,
                 resp.text[:1000],
-                str(content.id),
+                result_id,
                 str(current_user.id),
             )
             raise HTTPException(status_code=502, detail="Telegram prepare-share failed")
@@ -289,7 +360,7 @@ async def prepare_image_share(
     except Exception as exc:
         logger.exception(
             "Telegram prepare-share request failed image_id=%s user_id=%s",
-            str(content.id),
+            result_id,
             str(current_user.id),
         )
         raise HTTPException(status_code=502, detail="Telegram prepare-share unavailable") from exc

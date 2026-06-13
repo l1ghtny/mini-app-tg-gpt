@@ -212,7 +212,7 @@ async def test_conversion_state_reports_consumed_premium_sample():
 
 
 @pytest.mark.asyncio
-async def test_conversion_state_keeps_premium_sample_available_for_free_welcome_tier():
+async def test_conversion_state_disables_premium_sample_for_free_welcome_tier():
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url
     engine = create_async_engine(test_db_url, future=True, echo=False)
@@ -258,13 +258,14 @@ async def test_conversion_state_keeps_premium_sample_available_for_free_welcome_
 
     assert payload["primary_subscription"] is not None
     assert payload["primary_subscription"]["tier_name"] == "welcoming-bonus-free"
-    assert payload["premium_sample"]["status"] == "available"
-    assert payload["premium_sample"]["eligible"] is True
-    assert payload["premium_sample"]["reason"] == "available"
+    assert payload["premium_sample"]["status"] == "ineligible"
+    assert payload["premium_sample"]["eligible"] is False
+    assert payload["premium_sample"]["reason"] == "already_has_active_subscription"
+    assert payload["offer_summary"]["premium_sample_available"] is False
 
 
 @pytest.mark.asyncio
-async def test_conversion_state_keeps_premium_sample_available_when_free_tier_has_zero_flagship_cap():
+async def test_conversion_state_disables_premium_sample_when_free_tier_has_zero_flagship_cap():
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url
     engine = create_async_engine(test_db_url, future=True, echo=False)
@@ -311,9 +312,10 @@ async def test_conversion_state_keeps_premium_sample_available_when_free_tier_ha
 
     assert payload["primary_subscription"] is not None
     assert payload["primary_subscription"]["tier_name"] == "welcoming-bonus-zero-flagship"
-    assert payload["premium_sample"]["status"] == "available"
-    assert payload["premium_sample"]["eligible"] is True
-    assert payload["premium_sample"]["reason"] == "available"
+    assert payload["premium_sample"]["status"] == "ineligible"
+    assert payload["premium_sample"]["eligible"] is False
+    assert payload["premium_sample"]["reason"] == "already_has_active_subscription"
+    assert payload["offer_summary"]["premium_sample_available"] is False
 
 
 @pytest.mark.asyncio

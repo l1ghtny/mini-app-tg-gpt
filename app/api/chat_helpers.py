@@ -54,6 +54,10 @@ from app.services.subscription_check.entitlements import (
 )
 from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
+from app.services.image_assets import (
+    detach_assets_from_message_content_ids,
+    link_content_to_existing_asset_by_url,
+)
 from app.services.premium_samples import (
     assert_premium_sample_can_be_used,
     premium_sample_access_path,
@@ -386,6 +390,9 @@ async def handle_delete_message(
     if target_index is None:
         raise HTTPException(status_code=404, detail="Message not found")
 
+    await _detach_linked_assets_for_messages(session, messages[target_index:])
+    await session.flush()
+
     for message in messages[target_index:]:
         await session.delete(message)
 
@@ -420,7 +427,7 @@ async def handle_edit_message(
     if target_message.role != "user":
         raise HTTPException(status_code=409, detail="Only user messages can be edited")
 
-    await _replace_message_content(session, target_message, request)
+    await _replace_message_content(session, target_message, request, user_id=current_user.id)
 
     # Delete every message that comes after the edited one, regardless of role.
     # Use timestamp boundary instead of slice order so user+assistant messages
@@ -437,6 +444,9 @@ async def handle_edit_message(
             ),
         )
     )).all()
+
+    await _detach_linked_assets_for_messages(session, messages_to_delete)
+    await session.flush()
 
     for message in messages_to_delete:
         await session.delete(message)
@@ -515,6 +525,22 @@ async def handle_get_conversation_messages(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     conversation.messages.sort(key=lambda m: (m.created_at is None, m.created_at))
+    linked_assets = False
+    for message in conversation.messages:
+        for content in message.content:
+            if content.type != "image_url":
+                continue
+            if isinstance(content.data, dict) and content.data.get("image"):
+                continue
+            asset = await link_content_to_existing_asset_by_url(
+                session,
+                content,
+                user_id=current_user.id,
+                conversation_id=conversation.id,
+            )
+            linked_assets = linked_assets or bool(asset)
+    if linked_assets:
+        await session.commit()
     return conversation
 
 
@@ -1136,12 +1162,20 @@ async def _replace_message_content(
     session: AsyncSession,
     message: Message,
     request: EditMessageRequest,
+    *,
+    user_id: uuid.UUID,
 ) -> None:
     text_value = request.content
     has_text = bool(text_value and text_value.strip())
     image_values = [image for image in (request.images or []) if image]
     if not has_text and not image_values:
         raise HTTPException(status_code=400, detail="Edited message must include text or images")
+
+    await detach_assets_from_message_content_ids(
+        session,
+        [part.id for part in message.content if part.type == "image_url"],
+    )
+    await session.flush()
 
     for part in list(message.content):
         await session.delete(part)
@@ -1159,15 +1193,40 @@ async def _replace_message_content(
         ordinal += 1
 
     for image_url in image_values:
-        session.add(
-            models.MessageContent(
-                message_id=message.id,
-                ordinal=ordinal,
-                type="image_url",
-                value=image_url,
-            )
+        content = models.MessageContent(
+            message_id=message.id,
+            ordinal=ordinal,
+            type="image_url",
+            value=image_url,
+        )
+        session.add(content)
+        await session.flush()
+        await link_content_to_existing_asset_by_url(
+            session,
+            content,
+            user_id=user_id,
+            conversation_id=message.conversation_id,
         )
         ordinal += 1
+
+
+async def _detach_linked_assets_for_messages(
+    session: AsyncSession,
+    messages: Sequence[Message],
+) -> None:
+    message_ids = [message.id for message in messages]
+    if not message_ids:
+        return
+
+    content_ids = (
+        await session.exec(
+            select(models.MessageContent.id).where(
+                models.MessageContent.message_id.in_(message_ids),
+                models.MessageContent.type == "image_url",
+            )
+        )
+    ).all()
+    await detach_assets_from_message_content_ids(session, content_ids)
 
 
 def _resolve_image_settings(
@@ -1370,6 +1429,14 @@ async def _create_user_message(
     for part in request.content:
         mc = models.MessageContent(message_id=user_msg.id, type=part.type, value=part.value)
         session.add(mc)
+        await session.flush()
+        if part.type == "image_url":
+            await link_content_to_existing_asset_by_url(
+                session,
+                mc,
+                user_id=conversation.user_id,
+                conversation_id=conversation.id,
+            )
         if part.type == "text":
             background_tasks.add_task(generate_and_save_title, conversation.id, part.value)
 

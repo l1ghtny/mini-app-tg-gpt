@@ -207,6 +207,32 @@ class MessageContent(SQLModel, table=True):
     message: Message = Relationship(back_populates="content")
 
 
+class ImageAsset(SQLModel, table=True):
+    __tablename__ = "image_asset"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    conversation_id: Optional[uuid.UUID] = Field(default=None, foreign_key="conversation.id", index=True)
+    message_content_id: Optional[uuid.UUID] = Field(default=None, foreign_key="messagecontent.id", index=True)
+
+    bucket: str = Field(index=True)
+    key: str = Field(index=True)
+    public_url: str = Field(index=True)
+    source: str = Field(default="generated", index=True)  # generated | uploaded | derived
+    retention_policy: str = Field(default="free_30d", index=True)
+    status: str = Field(default="active", index=True)  # active | expired | missing | deleted
+
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    deleted_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    last_checked_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+
+    __table_args__ = (
+        Index("ix_image_asset_user_status_expires", "user_id", "status", "expires_at"),
+        Index("ix_image_asset_content", "message_content_id"),
+    )
+
+
 class AiModelPricing(SQLModel, table=True):
     """
     Pricing per 1,000,000 tokens for text/reasoning; per-call for search; per-image for image gen.

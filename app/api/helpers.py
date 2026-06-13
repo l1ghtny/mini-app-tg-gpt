@@ -15,7 +15,15 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.models import Conversation, MessageContent
 from app.api.document_helpers import touch_conversation_documents_last_used_in_search
 from app.r2.methods import delete_object, put_bytes
+from app.r2.client import R2_BUCKET
 from app.r2.settings import Settings
+from app.services.image_assets import (
+    IMAGE_SOURCE_GENERATED,
+    create_image_asset,
+    object_prefix_for_user,
+    partial_object_prefix,
+    serialize_image_asset,
+)
 from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
 from app.services.ai_service import stream_normalized_ai_response
@@ -26,6 +34,8 @@ from app.services.subscription_check.entitlements import reserve_request, finali
 from app.services.subscription_check.pacing import get_image_quality_cost
 
 logger = logging.getLogger(__name__)
+IMAGE_STORAGE_ERROR_CODE = "IMAGE_STORAGE_UNAVAILABLE"
+IMAGE_STORAGE_ERROR_MESSAGE = "Generated image could not be stored."
 
 
 async def load_conversation(session: AsyncSession, conversation_id: uuid.UUID) -> Conversation | None:
@@ -65,6 +75,7 @@ async def generate_and_publish(
             "text_request_finalized": False,
             "stream_failed": False,
             "last_error_message": None,
+            "last_error_code": None,
         }
         assistant_message_id_str = str(assistant_message_id)
 
@@ -110,11 +121,20 @@ async def generate_and_publish(
                 )
 
         except Exception as e:
+            logger.exception(
+                "Generate/publish pipeline failed request_id=%s conversation_id=%s assistant_message_id=%s",
+                request_id,
+                str(conversation_id),
+                str(assistant_message_id),
+            )
             await _cleanup_partial_images(partial_image_keys)
-            await bus.publish(assistant_message_id_str, {
+            error_event = {
                 "type": "error",
                 "error": lifecycle.get("last_error_message") or str(e),
-            })
+            }
+            if lifecycle.get("last_error_code"):
+                error_event["code"] = lifecycle["last_error_code"]
+            await bus.publish(assistant_message_id_str, error_event)
             await bus.mark_done(
                 assistant_message_id_str,
                 ok=False,
@@ -186,12 +206,43 @@ async def _handle_stream_event(
 
     if event_type == "image.ready":
         ordinal = ev.get("index", 0)
-        url, _ = await upload_openai_image_to_r2_with_key(ev["data"], prefix="gen")
-        await save_image_url_to_db(url, ordinal, assistant_message_id, session=session)
+        prefix = await object_prefix_for_user(session, user_id, IMAGE_SOURCE_GENERATED)
+        try:
+            url, image_key = await upload_openai_image_to_r2_with_key(ev["data"], prefix=prefix)
+        except Exception:
+            lifecycle["last_error_code"] = IMAGE_STORAGE_ERROR_CODE
+            lifecycle["last_error_message"] = IMAGE_STORAGE_ERROR_MESSAGE
+            logger.exception(
+                "Failed to persist final generated image request_id=%s conversation_id=%s assistant_message_id=%s index=%s",
+                request_id,
+                str(conversation_id),
+                str(assistant_message_id),
+                ordinal,
+            )
+            raise
+        save_result = await save_image_url_to_db(
+            url,
+            ordinal,
+            assistant_message_id,
+            session=session,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bucket=R2_BUCKET,
+            key=image_key,
+            source=IMAGE_SOURCE_GENERATED,
+        )
+        if isinstance(save_result, tuple):
+            image_content, image_asset = save_result
+        else:
+            image_content, image_asset = None, None
         await bus.publish(str(assistant_message_id), {
             "type": "image.url",
             "index": ordinal,
             "url": url,
+            "image_id": str(image_asset.id) if image_asset else (str(image_content.id) if image_content else None),
+            "expires_at": image_asset.expires_at.isoformat(timespec="seconds") if image_asset and image_asset.expires_at else None,
+            "status": image_asset.status if image_asset else "active",
+            "image": serialize_image_asset(image_asset),
         })
 
         image_model = _extract_image_model_name(tools) or "unknown"
@@ -221,11 +272,24 @@ async def _handle_stream_event(
 
     if event_type == "image.partial":
         ordinal = ev.get("index", 0)
-        partial_url, partial_key = await upload_openai_image_to_r2_with_key(
-            ev["data"],
-            prefix="gen-partial",
-            suffix=f"{ordinal}-{ev.get('partial_index', 0)}-{ev.get('sequence_number', 0)}",
-        )
+        try:
+            partial_url, partial_key = await upload_openai_image_to_r2_with_key(
+                ev["data"],
+                prefix=partial_object_prefix(),
+                suffix=f"{ordinal}-{ev.get('partial_index', 0)}-{ev.get('sequence_number', 0)}",
+            )
+        except Exception:
+            logger.warning(
+                "Skipping partial generated image persistence failure request_id=%s conversation_id=%s assistant_message_id=%s index=%s partial_index=%s sequence_number=%s",
+                request_id,
+                str(conversation_id),
+                str(assistant_message_id),
+                ordinal,
+                ev.get("partial_index", 0),
+                ev.get("sequence_number", 0),
+                exc_info=True,
+            )
+            return
         partial_image_keys.setdefault(ordinal, []).append(partial_key)
         await bus.publish(str(assistant_message_id), {
             "type": "image.partial",
@@ -305,6 +369,7 @@ async def _handle_stream_event(
 
     if event_type == "error":
         lifecycle["stream_failed"] = True
+        lifecycle["last_error_code"] = ev.get("code")
         lifecycle["last_error_message"] = ev.get("data") or ev.get("error") or "OpenAI stream error"
         if not lifecycle.get("text_request_finalized"):
             await finalize_request(session, request_id=request_id, user_id=user_id, success=False)
@@ -485,16 +550,46 @@ async def save_image_url_to_db(
         message_id: uuid.UUID,
         *,
         session: AsyncSession | None = None,
-):
+        user_id: uuid.UUID | None = None,
+        conversation_id: uuid.UUID | None = None,
+        bucket: str | None = None,
+        key: str | None = None,
+        source: str = IMAGE_SOURCE_GENERATED,
+) -> tuple[MessageContent, object | None]:
     if session is None:
         async with AsyncSession(engine, expire_on_commit=False) as session:
-            await save_image_url_to_db(image_url, ordinal, message_id, session=session)
-        return
+            return await save_image_url_to_db(
+                image_url,
+                ordinal,
+                message_id,
+                session=session,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                bucket=bucket,
+                key=key,
+                source=source,
+            )
 
     addition = MessageContent(message_id=message_id, ordinal=ordinal, type="image_url", value=image_url)
     session.add(addition)
+    await session.flush()
+    asset = None
+    if user_id is not None:
+        asset = await create_image_asset(
+            session,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            message_content=addition,
+            public_url=image_url,
+            bucket=bucket,
+            key=key,
+            source=source,
+        )
     await session.commit()
     await session.refresh(addition)
+    if asset:
+        await session.refresh(asset)
+    return addition, asset
 
 
 async def update_request_ledger_image(session: AsyncSession, request_id: str, user_id: uuid.UUID, ordinal: int,

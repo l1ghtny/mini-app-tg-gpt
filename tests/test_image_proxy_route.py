@@ -48,9 +48,24 @@ class _FakeAsyncClient:
         self.closed = True
 
 
+class _EmptyResult:
+    def first(self):
+        return None
+
+
+class _NoAssetSession:
+    async def exec(self, *_args, **_kwargs):
+        return _EmptyResult()
+
+
 def _build_test_client() -> TestClient:
     app = FastAPI()
     app.include_router(image_api.images, prefix="/api/v1")
+
+    async def _fake_get_session():
+        yield _NoAssetSession()
+
+    app.dependency_overrides[get_session] = _fake_get_session
     return TestClient(app)
 
 

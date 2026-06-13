@@ -1,5 +1,6 @@
 import base64
 import importlib.util
+import json
 import uuid
 import logging
 from typing import Any, AsyncGenerator, Iterable, Optional
@@ -13,12 +14,17 @@ from openai.types.responses.tool import CodeInterpreter, ImageGeneration
 
 from app.core.config import settings
 from app.services.background.save_openai_usage import log_usage
-from app.services.model_registry import GOOGLE_THINKING_MODELS, IMAGE_MODEL_PROVIDER, canonicalize_image_model
+from app.services.model_registry import (
+    GOOGLE_THINKING_MODELS,
+    IMAGE_MODEL_PROVIDER,
+    canonicalize_image_model,
+)
 from app.db.database import engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.models import Message
 
 logger = logging.getLogger(__name__)
+runtime_logger = logging.getLogger("uvicorn")
 
 STYLE_GUIDE = (
     "Format replies in Markdown:\n"
@@ -41,6 +47,21 @@ _GOOGLE_IMAGE_SIZE_MAP = {
     "1k": "1K",
     "2k": "2K",
 }
+
+
+def _google_debug_enabled() -> bool:
+    return bool(settings.DEBUG_MODE or settings.ENVIRONMENT == "local")
+
+
+def _google_error_event(debug_message: str | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": "error",
+        "code": GOOGLE_UPSTREAM_ERROR_CODE,
+        "data": GOOGLE_UPSTREAM_USER_MESSAGE,
+    }
+    if debug_message and _google_debug_enabled():
+        payload["debug_message"] = debug_message
+    return payload
 
 
 def _extract_tool_type(tool: Any) -> str | None:
@@ -100,6 +121,41 @@ def _normalize_tool_name(tool_name: Any) -> str | None:
         return None
     normalized = tool_name.strip().lower()
     return normalized or None
+
+
+def _normalize_google_function_call_name(function_name: Any) -> str | None:
+    normalized = _normalize_tool_name(function_name)
+    if not normalized:
+        return None
+    if ":" in normalized:
+        normalized = normalized.rsplit(":", 1)[-1].strip()
+    return normalized or None
+
+
+def _coerce_google_function_call_arguments(arguments: Any) -> dict[str, Any]:
+    if arguments is None:
+        return {}
+    if isinstance(arguments, dict):
+        return dict(arguments)
+    if isinstance(arguments, str):
+        stripped = arguments.strip()
+        if not stripped:
+            return {}
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+        raise TypeError("Google function call arguments JSON must decode to an object.")
+    if hasattr(arguments, "items"):
+        return dict(arguments.items())
+    return dict(arguments)
+
+
+def _extract_google_arguments_delta_chunk(delta: Any) -> str | None:
+    for attr_name in ("arguments", "arguments_delta", "partial_json", "data", "text", "content"):
+        value = getattr(delta, attr_name, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _requested_tool_names(tool_choice: Any) -> set[str] | None:
@@ -170,20 +226,18 @@ def _google_image_tool_config(
     return canonicalize_image_model(fallback_model), None
 
 
-def _build_google_generate_images_config(
+def _build_google_image_generate_content_config(
     *,
     image_model: str,
     image_size: str | None,
-) -> types.GenerateImagesConfig:
+) -> dict[str, Any]:
     config_kwargs: dict[str, Any] = {
-        "number_of_images": 1,
-        "include_rai_reason": True,
-        "output_mime_type": "image/png",
+        "response_modalities": ["IMAGE"],
     }
     mapped_size = _GOOGLE_IMAGE_SIZE_MAP.get((image_size or "").strip().lower())
-    if mapped_size and not image_model.startswith("imagen-3."):
-        config_kwargs["image_size"] = mapped_size
-    return types.GenerateImagesConfig(**config_kwargs)
+    if mapped_size:
+        config_kwargs["image_config"] = {"image_size": mapped_size}
+    return config_kwargs
 
 
 async def _log_google_success_usage(
@@ -231,38 +285,55 @@ async def _generate_google_image_via_tool_call(
     image_size: str | None,
     optimized_prompt: str,
 ) -> list[dict[str, Any]]:
-    response = await client.aio.models.generate_images(
+    if _google_debug_enabled():
+        runtime_logger.warning(
+            "Google image handoff request request_model=%s image_size=%s prompt_chars=%s",
+            request_model,
+            image_size,
+            len(optimized_prompt),
+        )
+    response = await client.aio.models.generate_content(
         model=request_model,
-        prompt=optimized_prompt,
-        config=_build_google_generate_images_config(
+        contents=optimized_prompt,
+        config=_build_google_image_generate_content_config(
             image_model=request_model,
             image_size=image_size,
         ),
     )
 
     payloads: list[dict[str, Any]] = []
-    filtered_reasons: list[str] = []
-    for generated in response.generated_images or []:
-        image = generated.image
-        if image and image.image_bytes:
+    candidate_parts: list[Any] = []
+    for candidate in response.candidates or []:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or []
+        candidate_parts.extend(parts)
+
+    for part in candidate_parts:
+        inline_data = getattr(part, "inline_data", None)
+        image_bytes = getattr(inline_data, "data", None) if inline_data is not None else None
+        if image_bytes:
             payloads.append(
                 {
                     "type": "image.ready",
                     "index": len(payloads),
                     "format": "b64",
-                    "data": base64.b64encode(image.image_bytes).decode("ascii"),
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
                 }
             )
-        elif generated.rai_filtered_reason:
-            filtered_reasons.append(generated.rai_filtered_reason)
 
     if payloads:
         return payloads
 
-    if filtered_reasons:
-        raise RuntimeError(filtered_reasons[0])
+    prompt_feedback = getattr(response, "prompt_feedback", None)
+    block_reason = getattr(prompt_feedback, "block_reason", None) if prompt_feedback is not None else None
+    if block_reason:
+        raise RuntimeError(str(block_reason))
 
-    raise RuntimeError("Google image generation returned no images.")
+    response_text = getattr(response, "text", None)
+    if response_text:
+        raise RuntimeError(str(response_text))
+
+    raise RuntimeError("Google image generateContent returned no images.")
 
 
 async def _stream_google_response_with_function_handoff(
@@ -306,16 +377,18 @@ async def _stream_google_response_with_function_handoff(
     max_function_rounds = 2
 
     async def _emit_google_stream_error(error_message: str) -> AsyncGenerator[dict[str, Any], None]:
+        runtime_logger.error(
+            "Google interactions handoff stream failed request_id=%s model=%s error=%s",
+            request_id,
+            model,
+            error_message,
+        )
         logger.exception(
             "Google interactions handoff stream failed request_id=%s model=%s",
             request_id,
             model,
         )
-        yield {
-            "type": "error",
-            "code": GOOGLE_UPSTREAM_ERROR_CODE,
-            "data": GOOGLE_UPSTREAM_USER_MESSAGE,
-        }
+        yield _google_error_event(error_message)
         await _log_google_error_usage(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -355,6 +428,16 @@ async def _stream_google_response_with_function_handoff(
         try:
             async for event in stream:
                 et = event.event_type
+                if _google_debug_enabled():
+                    runtime_logger.warning(
+                        "Google stream event request_id=%s model=%s event_type=%s index=%s step_type=%s delta_type=%s",
+                        request_id,
+                        model,
+                        et,
+                        getattr(event, "index", None),
+                        getattr(getattr(event, "step", None), "type", None),
+                        getattr(getattr(event, "delta", None), "type", None),
+                    )
 
                 if et == "interaction.created":
                     if event.interaction and event.interaction.id:
@@ -392,10 +475,30 @@ async def _stream_google_response_with_function_handoff(
                             "source_event": "google.google_search",
                         }
                     elif event.step.type == "function_call":
+                        normalized_function_name = _normalize_google_function_call_name(event.step.name)
+                        function_arguments = _coerce_google_function_call_arguments(event.step.arguments)
+                        runtime_logger.warning(
+                            "Google function call detected request_id=%s model=%s raw_name=%s normalized_name=%s argument_keys=%s",
+                            request_id,
+                            model,
+                            event.step.name,
+                            normalized_function_name,
+                            sorted(function_arguments.keys()),
+                        )
+                        logger.info(
+                            "Google function call detected request_id=%s model=%s raw_name=%s normalized_name=%s argument_keys=%s",
+                            request_id,
+                            model,
+                            event.step.name,
+                            normalized_function_name,
+                            sorted(function_arguments.keys()),
+                        )
                         pending_function_call = {
                             "id": event.step.id,
+                            "index": event.index,
                             "name": event.step.name,
-                            "arguments": dict(event.step.arguments or {}),
+                            "arguments": function_arguments,
+                            "arguments_json_buffer": "",
                             "signature": getattr(event.step, "signature", None),
                         }
 
@@ -444,6 +547,27 @@ async def _stream_google_response_with_function_handoff(
                                 title = getattr(ann, "title", None) or getattr(ann, "uri", url) or "Source"
                                 if url and not any(c["url"] == url for c in citations):
                                     citations.append({"title": title, "url": url})
+                    elif (
+                        delta.type == "arguments_delta"
+                        and pending_function_call is not None
+                        and event.index == pending_function_call.get("index")
+                    ):
+                        chunk = _extract_google_arguments_delta_chunk(delta)
+                        if chunk:
+                            pending_function_call["arguments_json_buffer"] += chunk
+                            try:
+                                pending_function_call["arguments"] = _coerce_google_function_call_arguments(
+                                    pending_function_call["arguments_json_buffer"]
+                                )
+                            except Exception:
+                                if _google_debug_enabled():
+                                    runtime_logger.warning(
+                                        "Google function call arguments incomplete request_id=%s model=%s raw_name=%s buffered_length=%s",
+                                        request_id,
+                                        model,
+                                        pending_function_call["name"],
+                                        len(pending_function_call["arguments_json_buffer"]),
+                                    )
 
                 elif et == "step.stop":
                     st = step_types.get(event.index)
@@ -490,12 +614,15 @@ async def _stream_google_response_with_function_handoff(
 
                 elif et == "error":
                     err_msg = event.error.message if event.error else "Unknown upstream Google error"
+                    runtime_logger.error(
+                        "Google interactions stream ErrorEvent request_id=%s model=%s error=%s raw_error=%r",
+                        request_id,
+                        model,
+                        err_msg,
+                        event.error,
+                    )
                     logger.error("Interactions stream ErrorEvent: %s", err_msg)
-                    yield {
-                        "type": "error",
-                        "code": GOOGLE_UPSTREAM_ERROR_CODE,
-                        "data": GOOGLE_UPSTREAM_USER_MESSAGE,
-                    }
+                    yield _google_error_event(err_msg)
                     await _log_google_error_usage(
                         user_id=user_id,
                         conversation_id=conversation_id,
@@ -534,7 +661,15 @@ async def _stream_google_response_with_function_handoff(
             yield {"type": "done"}
             return
 
-        if pending_function_call["name"] != _GOOGLE_IMAGE_FUNCTION_NAME:
+        normalized_function_name = _normalize_google_function_call_name(pending_function_call["name"])
+        if normalized_function_name != _GOOGLE_IMAGE_FUNCTION_NAME:
+            logger.error(
+                "Unexpected Google function call request_id=%s model=%s raw_name=%s normalized_name=%s",
+                request_id,
+                model,
+                pending_function_call["name"],
+                normalized_function_name,
+            )
             yield {
                 "type": "error",
                 "code": GOOGLE_UPSTREAM_ERROR_CODE,
@@ -1240,12 +1375,14 @@ async def stream_normalized_google_response(
                 return
 
     except Exception as exc:
+        runtime_logger.error(
+            "Google interactions stream failed request_id=%s model=%s exception=%r",
+            corr_id,
+            request_model,
+            exc,
+        )
         logger.exception("Google interactions stream failed request_id=%s model=%s", corr_id, request_model)
-        yield {
-            "type": "error",
-            "code": GOOGLE_UPSTREAM_ERROR_CODE,
-            "data": GOOGLE_UPSTREAM_USER_MESSAGE,
-        }
+        yield _google_error_event(str(exc))
         await _log_google_error_usage(
             user_id=user_id,
             conversation_id=conversation_id,
