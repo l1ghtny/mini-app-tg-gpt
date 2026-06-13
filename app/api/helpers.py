@@ -506,7 +506,7 @@ async def upload_openai_image_to_r2_with_key(
     filename = f"{sha}-{suffix}.png" if suffix else f"{sha}.png"
     key = f"{prefix}/{sha[:2]}/{filename}"
     bucket, key = await put_bytes(key, data, content_type="image/png", metadata={"source": "openai"})
-    return f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}", key
+    return f"{Settings.R2_PUBLIC_BASE_URL}/{key}", key
 
 
 async def _cleanup_partial_images(partial_keys_by_index: dict[int, list[str]]) -> None:
