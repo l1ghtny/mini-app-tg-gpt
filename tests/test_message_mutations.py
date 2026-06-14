@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.api.chat_helpers import handle_delete_message, handle_edit_message
+from app.api.chat_helpers import (
+    handle_delete_conversation,
+    handle_delete_message,
+    handle_edit_message,
+)
 from app.db import models as m
 from app.schemas.chat import EditMessageRequest
 
@@ -127,6 +131,60 @@ async def test_delete_message_detaches_linked_image_assets():
         detached_asset = await session.get(m.ImageAsset, asset.id)
         assert detached_asset is not None
         assert detached_asset.message_content_id is None
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_detaches_linked_image_assets():
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        owner = m.AppUser(telegram_id=721000037)
+        session.add(owner)
+        await session.commit()
+        await session.refresh(owner)
+        conversation, _, assistant_one, _, _ = await _seed_conversation_with_messages(session, owner.id)
+
+        image_content = m.MessageContent(
+            message_id=assistant_one.id,
+            ordinal=1,
+            type="image_url",
+            value="https://cdn.example/delete-conversation.png",
+        )
+        session.add(image_content)
+        await session.commit()
+        await session.refresh(image_content)
+
+        asset = m.ImageAsset(
+            user_id=owner.id,
+            conversation_id=conversation.id,
+            message_content_id=image_content.id,
+            bucket="bucket",
+            key="images/free/generated/aa/delete-conversation.png",
+            public_url=image_content.value,
+            source="generated",
+            retention_policy="free_30d",
+            status="active",
+        )
+        session.add(asset)
+        await session.commit()
+        await session.refresh(asset)
+
+        await handle_delete_conversation(
+            conversation_id=conversation.id,
+            session=session,
+            current_user=owner,
+        )
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        deleted_conversation = await session.get(m.Conversation, conversation.id)
+        assert deleted_conversation is None
+
+        detached_asset = await session.get(m.ImageAsset, asset.id)
+        assert detached_asset is not None
+        assert detached_asset.message_content_id is None
+        assert detached_asset.conversation_id is None
 
 
 @pytest.mark.asyncio

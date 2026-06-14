@@ -596,6 +596,14 @@ async def handle_delete_conversation(
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    messages = await _load_messages_for_conversation(
+        session,
+        conversation_id,
+        include_content=False,
+    )
+    await _detach_linked_assets_for_messages(session, messages)
+    await session.flush()
+
     await session.delete(conversation)
     await session.commit()
 
