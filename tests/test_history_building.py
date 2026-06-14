@@ -204,8 +204,8 @@ async def test_history_keeps_stored_user_image_url_when_openai_url_differs(monke
         await session.commit()
         await session.refresh(user_message)
 
-        proxied_url = "https://lightny.ru/images/tg-bot-images/images/free/uploaded/2026/06/14/test.png"
-        openai_url = "https://tg-bot-images.lightny.pro/tg-bot-images/images/free/uploaded/2026/06/14/test.png"
+        proxied_url = "https://lightny.ru/images/images/free/uploaded/2026/06/14/test.png"
+        openai_url = "https://tg-bot-images.lightny.pro/images/free/uploaded/2026/06/14/test.png"
 
         session.add(m.MessageContent(message_id=user_message.id, ordinal=0, type="image_url", value=proxied_url))
         await session.commit()

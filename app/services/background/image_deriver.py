@@ -5,7 +5,6 @@ import io
 import hashlib
 import random
 from typing import Optional, Tuple
-from urllib.parse import urlsplit
 
 import httpx
 from sqlmodel import select
@@ -56,27 +55,21 @@ def _known_public_base_urls() -> tuple[str, ...]:
     return tuple(known)
 
 
-def _uses_bucket_host_style(base_url: str) -> bool:
-    host = (urlsplit(base_url).hostname or "").lower()
-    bucket = R2_BUCKET.lower()
-    return host == bucket or host.startswith(f"{bucket}.")
-
-
-def _public_url_prefix(base_url: str) -> str:
-    if _uses_bucket_host_style(base_url):
-        return base_url
-    return f"{base_url}{R2_BUCKET}/"
+def _strip_legacy_bucket_prefix(path: str) -> str:
+    bucket_prefix = f"{R2_BUCKET}/"
+    if path.startswith(bucket_prefix):
+        return path[len(bucket_prefix):]
+    return path
 
 
 def _public_url(key: str, *, for_openai: bool = False) -> str:
     base_url = _openai_public_base_url() if for_openai else _user_public_base_url()
-    return f"{_public_url_prefix(base_url)}{key}"
+    return f"{base_url}{key}"
 
 def _key_from_public_url(url: str) -> Optional[str]:
     for public_base_url in _known_public_base_urls():
-        base = _public_url_prefix(public_base_url)
-        if url.startswith(base):
-            return url[len(base):]
+        if url.startswith(public_base_url):
+            return _strip_legacy_bucket_prefix(url[len(public_base_url):])
     return None  # external URL or a different domain → pass through as-is
 
 def _decide_target(mime: str, has_alpha: bool) -> str:

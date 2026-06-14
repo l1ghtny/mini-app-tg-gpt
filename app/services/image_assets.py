@@ -96,24 +96,45 @@ def partial_object_prefix() -> str:
     return "images/partial"
 
 
+def _normalize_public_base_url(base_url: str | None) -> str:
+    if not base_url:
+        return ""
+    return base_url if base_url.endswith("/") else f"{base_url}/"
+
+
+def _strip_legacy_bucket_prefix(path: str) -> str:
+    bucket_prefix = f"{R2_BUCKET}/"
+    if path.startswith(bucket_prefix):
+        return path[len(bucket_prefix):]
+    return path
+
+
 def public_url_for_key(bucket: str, key: str) -> str:
-    return f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}"
+    _ = bucket
+    return f"{_normalize_public_base_url(Settings.R2_PUBLIC_BASE_URL)}{key}"
 
 
 def key_from_public_url(url: str | None) -> str | None:
     if not url:
         return None
-    base = f"{Settings.R2_PUBLIC_BASE_URL}{R2_BUCKET}/"
+    base = _normalize_public_base_url(Settings.R2_PUBLIC_BASE_URL)
+    if not base:
+        return None
     if url.startswith(base):
-        return url[len(base):]
+        return _strip_legacy_bucket_prefix(url[len(base):])
 
     parsed_base = urlsplit(base)
     parsed = urlsplit(url)
     if parsed.scheme in {"http", "https"} and parsed.hostname and parsed.hostname == parsed_base.hostname:
         path = parsed.path.lstrip("/")
-        bucket_prefix = f"{R2_BUCKET}/"
-        if path.startswith(bucket_prefix):
-            return path[len(bucket_prefix):]
+        base_path = parsed_base.path.lstrip("/")
+        if base_path:
+            if not path.startswith(base_path):
+                return None
+            path = path[len(base_path):].lstrip("/")
+        path = _strip_legacy_bucket_prefix(path)
+        if path:
+            return path
     return None
 
 

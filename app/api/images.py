@@ -27,6 +27,7 @@ from app.services.image_assets import (
     find_asset_by_url,
     mark_asset_status,
     object_prefix_for_user,
+    public_url_for_key,
     serialize_image_asset,
 )
 
@@ -149,7 +150,7 @@ async def upload_image(
         content_type=image.content_type,
         extra_metadata={"author": str(app_user.id), "type": "image"},
     )
-    url = f"{Settings.R2_PUBLIC_BASE_URL}{bucket}/{key}"
+    url = public_url_for_key(bucket, key)
     asset = await create_image_asset(
         session,
         user_id=app_user.id,
