@@ -9,7 +9,7 @@ def test_key_from_public_url_accepts_user_and_openai_bases(monkeypatch):
 
     key = "images/free/uploaded/2026/06/14/test.png"
     proxied_url = f"https://lightny.ru/images/tg-bot-images/{key}"
-    openai_url = f"https://tg-bot-images.lightny.pro/tg-bot-images/{key}"
+    openai_url = f"https://tg-bot-images.lightny.pro/{key}"
 
     assert image_deriver._key_from_public_url(proxied_url) == key
     assert image_deriver._key_from_public_url(openai_url) == key
@@ -23,4 +23,4 @@ def test_public_url_uses_openai_base_only_for_openai_requests(monkeypatch):
     key = "images/free/uploaded/2026/06/14/test.png"
 
     assert image_deriver._public_url(key) == f"https://lightny.ru/images/tg-bot-images/{key}"
-    assert image_deriver._public_url(key, for_openai=True) == f"https://tg-bot-images.lightny.pro/tg-bot-images/{key}"
+    assert image_deriver._public_url(key, for_openai=True) == f"https://tg-bot-images.lightny.pro/{key}"
