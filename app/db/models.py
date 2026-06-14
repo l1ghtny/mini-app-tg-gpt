@@ -212,8 +212,14 @@ class ImageAsset(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
-    conversation_id: Optional[uuid.UUID] = Field(default=None, foreign_key="conversation.id", index=True)
-    message_content_id: Optional[uuid.UUID] = Field(default=None, foreign_key="messagecontent.id", index=True)
+    conversation_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(ForeignKey("conversation.id", ondelete="SET NULL"), nullable=True, index=True)
+    )
+    message_content_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(ForeignKey("messagecontent.id", ondelete="SET NULL"), nullable=True, index=True)
+    )
 
     bucket: str = Field(index=True)
     key: str = Field(index=True)

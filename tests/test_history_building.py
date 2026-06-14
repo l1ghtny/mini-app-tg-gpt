@@ -3,7 +3,7 @@ import uuid
 
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import chat_helpers
@@ -177,6 +177,55 @@ async def test_history_small_dialogue_has_no_summary(monkeypatch):
         {"role": "assistant", "content": [{"type": "output_text", "text": "hi there"}]},
     ]
     assert conversation.history_summary is None
+
+
+@pytest.mark.asyncio
+async def test_history_keeps_stored_user_image_url_when_openai_url_differs(monkeypatch):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = m.AppUser(telegram_id=721000204)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        conversation = m.Conversation(user_id=user.id, title=f"conv-{uuid.uuid4()}")
+        session.add(conversation)
+        await session.commit()
+        await session.refresh(conversation)
+
+        user_message = m.Message(conversation_id=conversation.id, role="user")
+        session.add(user_message)
+        await session.commit()
+        await session.refresh(user_message)
+
+        proxied_url = "https://lightny.ru/images/tg-bot-images/images/free/uploaded/2026/06/14/test.png"
+        openai_url = "https://tg-bot-images.lightny.pro/tg-bot-images/images/free/uploaded/2026/06/14/test.png"
+
+        session.add(m.MessageContent(message_id=user_message.id, ordinal=0, type="image_url", value=proxied_url))
+        await session.commit()
+
+        async def fake_ensure_image_url(_session, url, max_size=2048):
+            assert url == proxied_url
+            return openai_url
+
+        monkeypatch.setattr(chat_helpers, "ensure_openai_compatible_image_url", fake_ensure_image_url, raising=True)
+
+        history = await chat_helpers._build_history_for_openai(session, conversation.id)
+        content = (
+            await session.exec(
+                select(m.MessageContent).where(m.MessageContent.message_id == user_message.id)
+            )
+        ).first()
+
+    assert history == [{"role": "user", "content": [{"type": "input_image", "image_url": openai_url}]}]
+    assert content is not None
+    assert content.value == proxied_url
 
 
 def test_resolve_system_prompt_includes_main_and_folder_prompts():
