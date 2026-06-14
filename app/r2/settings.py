@@ -8,5 +8,6 @@ class Settings:
     R2_ACCESS_KEY_ID = os.environ["R2_ACCESS_KEY_ID"]
     R2_SECRET_ACCESS_KEY = os.environ["R2_SECRET_ACCESS_KEY"]
     R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL")  # optional
+    R2_OPENAI_PUBLIC_BASE_URL = os.getenv("R2_OPENAI_PUBLIC_BASE_URL") or R2_PUBLIC_BASE_URL
 
 

@@ -2,6 +2,7 @@ import os
 import uuid
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -155,4 +156,64 @@ async def test_search_worker_processes_jobs_and_stores_user_scoped_rows(monkeypa
     assert all(row.user_id == owner.id for row in chunks)
     assert projection is not None
     assert projection.user_id == owner.id
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reindex_conversation_handles_null_message_timestamps(monkeypatch):
+    monkeypatch.setattr(conversation_search, "get_conversation_search_embedder", lambda: FakeEmbedder())
+
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        owner = AppUser(telegram_id=721111102)
+        session.add(owner)
+        await session.commit()
+        await session.refresh(owner)
+
+        conversation = Conversation(title="Legacy timestamps", user_id=owner.id)
+        session.add(conversation)
+        await session.commit()
+        await session.refresh(conversation)
+
+        older_message = Message(conversation_id=conversation.id, role="user")
+        newer_message = Message(conversation_id=conversation.id, role="assistant")
+        session.add(older_message)
+        session.add(newer_message)
+        await session.commit()
+        await session.refresh(older_message)
+        await session.refresh(newer_message)
+
+        session.add(MessageContent(message_id=older_message.id, ordinal=0, type="text", value="release checklist"))
+        session.add(MessageContent(message_id=newer_message.id, ordinal=0, type="text", value="deploy notes"))
+        await session.commit()
+
+        await session.execute(
+            text("UPDATE message SET created_at = NULL WHERE id = :message_id"),
+            {"message_id": str(older_message.id)},
+        )
+        await session.commit()
+
+        await conversation_search.reindex_conversation(session, conversation_id=conversation.id)
+        await session.commit()
+
+        chunks = (
+            await session.exec(
+                select(ConversationSearchChunk).where(
+                    ConversationSearchChunk.conversation_id == conversation.id
+                )
+            )
+        ).all()
+        projection = (
+            await session.exec(
+                select(ConversationSearchProjection).where(
+                    ConversationSearchProjection.conversation_id == conversation.id
+                )
+            )
+        ).first()
+
+    assert len(chunks) == 2
+    assert projection is not None
     await engine.dispose()
