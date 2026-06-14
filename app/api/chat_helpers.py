@@ -36,7 +36,6 @@ from app.schemas.chat import (
 )
 from app.services.background.image_deriver import (
     ensure_openai_compatible_image_url,
-    rewrite_message_image_url,
 )
 from app.services.model_registry import (
     GOOGLE_THINKING_MODELS,
@@ -1607,8 +1606,6 @@ async def _finalize_history_payload(
             continue
         compatible_url = await ensure_openai_compatible_image_url(session, source_url, max_size=2048)
         payload["content"].append({"type": "input_image", "image_url": compatible_url})
-        if compatible_url != source_url:
-            await rewrite_message_image_url(session, source_url, compatible_url, message_id=candidate.message_id)
 
     return payload
 

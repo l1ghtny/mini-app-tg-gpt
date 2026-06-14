@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 from app.r2.settings import Settings
 from app.r2.client import R2_BUCKET
 from app.r2.methods import head_object, get_bytes, put_bytes
-from app.db.models import DerivedImage, MessageContent
+from app.db.models import DerivedImage
 from app.core.config import settings
 
 
@@ -32,14 +32,38 @@ except Exception:
 
 SUPPORTED_DIRECT = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
-def _public_url(key: str) -> str:
-    # Your existing pattern: {R2_PUBLIC_BASE_URL}{bucket}/{key}
-    return f"{Settings.R2_PUBLIC_BASE_URL}{R2_BUCKET}/{key}"
+def _normalize_public_base_url(base_url: str | None) -> str | None:
+    if not base_url:
+        return None
+    return base_url if base_url.endswith("/") else f"{base_url}/"
+
+
+def _user_public_base_url() -> str:
+    return _normalize_public_base_url(Settings.R2_PUBLIC_BASE_URL) or ""
+
+
+def _openai_public_base_url() -> str:
+    return _normalize_public_base_url(Settings.R2_OPENAI_PUBLIC_BASE_URL) or _user_public_base_url()
+
+
+def _known_public_base_urls() -> tuple[str, ...]:
+    known: list[str] = []
+    for raw_base_url in (Settings.R2_PUBLIC_BASE_URL, Settings.R2_OPENAI_PUBLIC_BASE_URL):
+        normalized = _normalize_public_base_url(raw_base_url)
+        if normalized and normalized not in known:
+            known.append(normalized)
+    return tuple(known)
+
+
+def _public_url(key: str, *, for_openai: bool = False) -> str:
+    base_url = _openai_public_base_url() if for_openai else _user_public_base_url()
+    return f"{base_url}{R2_BUCKET}/{key}"
 
 def _key_from_public_url(url: str) -> Optional[str]:
-    base = f"{Settings.R2_PUBLIC_BASE_URL}{R2_BUCKET}/"
-    if url.startswith(base):
-        return url[len(base):]
+    for public_base_url in _known_public_base_urls():
+        base = f"{public_base_url}{R2_BUCKET}/"
+        if url.startswith(base):
+            return url[len(base):]
     return None  # external URL or a different domain → pass through as-is
 
 def _decide_target(mime: str, has_alpha: bool) -> str:
@@ -111,13 +135,15 @@ async def ensure_openai_compatible_image_url(
         # Not our bucket / unknown domain → let OpenAI fetch it as-is
         return url_or_key
 
+    openai_url = _public_url(key, for_openai=True)
+
     # HEAD → content-type
     meta = await head_object(key)
     mime = (meta.get("ContentType") or "application/octet-stream").lower()
 
     if mime in SUPPORTED_DIRECT:
-        await _wait_for_public_reachability(_public_url(key))
-        return _public_url(key)
+        await _wait_for_public_reachability(openai_url)
+        return openai_url
 
     # See if we already have a derived variant
     target_guess = "png" if "png" in mime else "jpeg"
@@ -130,8 +156,9 @@ async def ensure_openai_compatible_image_url(
     )
     row = res.first()
     if row:
-        await _wait_for_public_reachability(_public_url(row.derived_key))
-        return _public_url(row.derived_key)
+        derived_openai_url = _public_url(row.derived_key, for_openai=True)
+        await _wait_for_public_reachability(derived_openai_url)
+        return derived_openai_url
 
     # Pull original bytes, transcode, and store.
     # Offload PIL decode/transcode to a worker thread to avoid blocking the event loop.
@@ -156,35 +183,10 @@ async def ensure_openai_compatible_image_url(
     ))
     await session.commit()
 
-    await _wait_for_public_reachability(_public_url(derived_key))
+    derived_openai_url = _public_url(derived_key, for_openai=True)
+    await _wait_for_public_reachability(derived_openai_url)
 
-    return _public_url(derived_key)
-
-
-async def rewrite_message_image_url(
-    session: AsyncSession,
-    old_url: str,
-    new_url: str,
-    message_id: str | None = None,
-) -> int:
-    """
-    Update MessageContent rows where value==old_url to new_url.
-    Optionally scope to a single message to keep the write tiny.
-    Returns number of rows updated.
-    """
-    q = select(MessageContent).where(
-        MessageContent.type == "image_url",
-        MessageContent.value == old_url,
-    )
-    if message_id:
-        q = q.where(MessageContent.message_id == message_id)
-
-    rows = (await session.exec(q)).all()
-    for r in rows:
-        r.value = new_url
-    if rows:
-        await session.commit()
-    return len(rows)
+    return derived_openai_url
 
 
 async def _wait_for_public_reachability(url: str, max_retries: int = 8, delay: float = 0.75) -> None:
