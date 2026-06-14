@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ JOB_REINDEX_CONVERSATION = "reindex_conversation"
 
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+|\n{2,}")
+DEFAULT_FASTEMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 def utcnow_naive() -> datetime:
@@ -59,6 +61,10 @@ def _normalize_text(value: str) -> str:
 
 def _hash_text(value: str) -> str:
     return hashlib.sha256(_normalize_text(value).encode("utf-8")).hexdigest()
+
+
+def _message_sort_key(message: Message) -> tuple[datetime, uuid.UUID]:
+    return (message.created_at or datetime.min, message.id)
 
 
 def _normalize_vector(values: list[float]) -> list[float]:
@@ -110,14 +116,21 @@ class FastEmbedConversationSearchEmbedder(ConversationSearchEmbedder):
     def __init__(self) -> None:
         from fastembed import TextEmbedding
 
-        self._model = TextEmbedding(model_name="intfloat/multilingual-e5-small")
+        self._model_name = os.getenv("CONVERSATION_SEARCH_MODEL", DEFAULT_FASTEMBED_MODEL)
+        self._model = TextEmbedding(model_name=self._model_name)
 
     def embed_query(self, text: str) -> list[float]:
-        return [float(item) for item in next(self._model.embed([f"query: {text}"]))]
+        return [float(item) for item in next(self._model.embed([self._prepare_text(text, is_query=True)]))]
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
-        prefixed = [f"passage: {text}" for text in texts]
+        prefixed = [self._prepare_text(text, is_query=False) for text in texts]
         return [[float(item) for item in row] for row in self._model.embed(prefixed)]
+
+    def _prepare_text(self, text: str, *, is_query: bool) -> str:
+        if "e5" in self._model_name.lower():
+            prefix = "query" if is_query else "passage"
+            return f"{prefix}: {text}"
+        return text
 
 
 @lru_cache(maxsize=1)
@@ -330,7 +343,7 @@ def _build_projection_text(conversation: Conversation) -> tuple[str, str, uuid.U
     selected_lines: list[str] = []
     selected_tokens = estimate_tokens_from_text(title) if title else 0
     last_message_id: uuid.UUID | None = None
-    ordered_messages = sorted(conversation.messages, key=lambda item: (item.created_at, item.id))
+    ordered_messages = sorted(conversation.messages, key=_message_sort_key)
     for message in reversed(ordered_messages):
         text_parts = [
             _normalize_text(part.value)
@@ -402,7 +415,7 @@ async def reindex_conversation(session: AsyncSession, *, conversation_id: uuid.U
         return
 
     await session.exec(delete(ConversationSearchChunk).where(ConversationSearchChunk.conversation_id == conversation_id))
-    for message in sorted(conversation.messages, key=lambda item: (item.created_at, item.id)):
+    for message in sorted(conversation.messages, key=_message_sort_key):
         if message.role not in {"user", "assistant"}:
             continue
         await reindex_message(session, message_id=message.id)
