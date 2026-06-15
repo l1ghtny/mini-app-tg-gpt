@@ -94,6 +94,11 @@ async def get_text_usage(session: AsyncSession, user) -> UserTextUsageResponse:
                 ),
                 "bucket_models": ent.get("bucket_models") or list_text_usage_bucket_models(model_name),
                 "total_remaining": ent["total_remaining"],
+                "next_reset_at": (
+                    ent["selected"].get("next_reset_at")
+                    if isinstance(ent.get("selected"), dict)
+                    else None
+                ),
                 "selected": ent["selected"],
                 "entitlements": ent["entitlements"],
             })
@@ -239,6 +244,14 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
             "entitlements": entitlements,
             "total_remaining_credits": total_remaining_credits,
             "resolutions": resolutions,
+            "next_reset_at": next(
+                (
+                    _next_utc_midnight()
+                    for ent in entitlements
+                    if ent.get("kind") == "tier" and _daily_energy_from_entitlement(ent) > 0
+                ),
+                None,
+            ),
         })
 
     return UserImageUsageResponse(status="active", models=models)
@@ -329,5 +342,6 @@ async def get_image_energy_usage(session: AsyncSession, user) -> UserImageEnergy
         total_available_energy=sum(s["available_energy"] for s in sources),
         total_saved_energy=sum(s["saved_energy"] for s in sources),
         total_used_energy=sum(s["used_energy"] for s in sources),
+        next_reset_at=next((s["next_reset_at"] for s in sources if s.get("next_reset_at")), None),
         sources=sources,
     )

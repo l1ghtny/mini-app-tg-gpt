@@ -91,6 +91,8 @@ def _build_tier_response(tier: SubscriptionTier) -> SubscriptionTierResponse:
     allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
     allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
     daily_energy = int(getattr(tier, "daily_image_energy", 0) or 0)
+    monthly_images = int(getattr(tier, "monthly_images", 0) or 0)
+    image_energy_max = daily_energy * 5 if getattr(tier, "is_recurring", True) else max(daily_energy, monthly_images)
     image_limit_override = -1 if daily_energy > 0 else None
     return SubscriptionTierResponse(
         name=tier.name,
@@ -102,7 +104,11 @@ def _build_tier_response(tier: SubscriptionTier) -> SubscriptionTierResponse:
         price_cents=tier.price_cents,
         monthly_images=tier.monthly_images,
         tier_model_limits=[
-            TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests)
+            TierMonthlyLimits(
+                model_name=l.model_name,
+                requests_limit=l.monthly_requests,
+                daily_requests_limit=int(getattr(l, "daily_requests", 0) or 0),
+            )
             for l in tier.tier_model_limits
         ],
         tier_image_model_limits=[
@@ -114,7 +120,7 @@ def _build_tier_response(tier: SubscriptionTier) -> SubscriptionTierResponse:
         ],
         is_recurring=tier.is_recurring,
         daily_image_energy=daily_energy,
-        image_energy_max=daily_energy * 5,
+        image_energy_max=image_energy_max,
         allowed_image_qualities=allowed_qualities,
         allowed_image_models=allowed_models,
         tier_id=str(tier.id),

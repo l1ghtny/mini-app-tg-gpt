@@ -141,6 +141,54 @@ async def test_active_subscription_recurring_without_expiry_gets_fallback_expiry
 
 
 @pytest.mark.asyncio
+async def test_active_subscription_free_recurring_without_expiry_keeps_null_expiry():
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=7210000031)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        tier_name = f"welcoming-{uuid.uuid4()}"
+        tier = SubscriptionTier(
+            name=tier_name,
+            name_ru=tier_name,
+            description="free recurring",
+            description_ru="free recurring",
+            price_cents=0,
+            index=1,
+            is_recurring=True,
+        )
+        session.add(tier)
+        await session.commit()
+        await session.refresh(tier)
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        session.add(
+            UserSubscription(
+                user_id=user.id,
+                tier_id=tier.id,
+                status=SubscriptionStatus.active,
+                started_at=now - timedelta(days=2),
+                expires_at=None,
+            )
+        )
+        await session.commit()
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        result = await get_active_subscription(session=session, user=user)
+
+    await engine.dispose()
+
+    assert len(result.active_subscriptions) == 1
+    assert result.active_subscriptions[0].tier_name == tier_name
+    assert result.active_subscriptions[0].expires_at is None
+
+
+@pytest.mark.asyncio
 async def test_active_subscription_includes_discounts_and_first_purchase_flag():
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url

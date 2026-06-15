@@ -48,6 +48,7 @@ class ActiveSubscriptionsResponse(BaseModel):
 class TierMonthlyLimits(BaseModel):
     model_name: str
     requests_limit: int
+    daily_requests_limit: int = 0
 
 
 class TierImageModelLimits(BaseModel):

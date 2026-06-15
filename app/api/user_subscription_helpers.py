@@ -102,7 +102,7 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
         is_paid_tier = sub.tier.price_cents > 0
         auto_renew = bool(is_recurring_tier and is_paid_tier and getattr(sub, "auto_renew_enabled", True))
 
-        if is_recurring_tier and expires_at is None:
+        if is_recurring_tier and is_paid_tier and expires_at is None:
             expires_at = _add_one_calendar_month(sub.started_at)
 
         if not is_recurring_tier or not is_paid_tier:

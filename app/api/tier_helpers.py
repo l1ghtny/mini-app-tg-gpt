@@ -29,6 +29,16 @@ def _daily_image_energy(tier: SubscriptionTier) -> int:
     return int(getattr(tier, "daily_image_energy", 0) or 0)
 
 
+def _image_energy_max(tier: SubscriptionTier) -> int:
+    daily_energy = _daily_image_energy(tier)
+    monthly_images = int(getattr(tier, "monthly_images", 0) or 0)
+    if daily_energy <= 0:
+        return monthly_images if (not getattr(tier, "is_recurring", True) and monthly_images > 0) else 0
+    if getattr(tier, "is_recurring", True):
+        return daily_energy * 5
+    return max(daily_energy, monthly_images)
+
+
 async def list_public_tiers(session: AsyncSession, user) -> list[SubscriptionTierResponse]:
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -188,7 +198,11 @@ def _build_tier_response(
         max_pinned_docs=int(getattr(tier, "max_pinned_docs", 0) or 0),
         doc_retention_hours=int(getattr(tier, "doc_retention_hours", 24) or 24),
         tier_model_limits=[
-            TierMonthlyLimits(model_name=l.model_name, requests_limit=l.monthly_requests)
+            TierMonthlyLimits(
+                model_name=l.model_name,
+                requests_limit=l.monthly_requests,
+                daily_requests_limit=int(getattr(l, "daily_requests", 0) or 0),
+            )
             for l in tier.tier_model_limits
         ],
         tier_image_model_limits=[
@@ -201,7 +215,7 @@ def _build_tier_response(
         image_quality_pricing=image_pricing,
         is_recurring=tier.is_recurring,
         daily_image_energy=daily_energy,
-        image_energy_max=daily_energy * 5,
+        image_energy_max=_image_energy_max(tier),
         allowed_image_qualities=allowed_qualities,
         allowed_image_models=allowed_models,
         tier_id=str(tier.id),

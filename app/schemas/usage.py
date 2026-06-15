@@ -27,6 +27,7 @@ class TextModelUsage(BaseModel):
     display_name_ru: str
     bucket_models: list[str] = []
     total_remaining: int
+    next_reset_at: Optional[datetime] = None
     selected: Optional[TextEntitlementEntry] = None
     entitlements: list[TextEntitlementEntry] = []
 
@@ -106,6 +107,7 @@ class ImageModelUsage(BaseModel):
     entitlements: list[ImageEntitlementEntry] = []
     total_remaining_credits: float
     resolutions: list[ImageResolutionUsage] = []
+    next_reset_at: Optional[datetime] = None
 
 
 class UserImageUsageResponse(BaseModel):
