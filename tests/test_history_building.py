@@ -2,12 +2,15 @@ import os
 import uuid
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import chat_helpers
 from app.db import models as m
+from app.r2.settings import Settings
+from app.services.background import image_deriver
 
 
 @pytest.mark.asyncio
@@ -226,6 +229,73 @@ async def test_history_keeps_stored_user_image_url_when_openai_url_differs(monke
     assert history == [{"role": "user", "content": [{"type": "input_image", "image_url": openai_url}]}]
     assert content is not None
     assert content.value == proxied_url
+
+
+@pytest.mark.asyncio
+async def test_history_rejects_processing_user_image_until_ready(monkeypatch):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = m.AppUser(telegram_id=721000205)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        conversation = m.Conversation(user_id=user.id, title=f"conv-{uuid.uuid4()}")
+        session.add(conversation)
+        await session.commit()
+        await session.refresh(conversation)
+
+        user_message = m.Message(conversation_id=conversation.id, role="user")
+        session.add(user_message)
+        await session.commit()
+        await session.refresh(user_message)
+
+        proxied_url = "https://lightny.ru/images/images/free/uploaded/2026/06/15/test.png"
+        key = "images/free/uploaded/2026/06/15/test.png"
+        content = m.MessageContent(message_id=user_message.id, ordinal=0, type="image_url", value=proxied_url)
+        session.add(content)
+        await session.commit()
+        await session.refresh(content)
+
+        session.add(
+            m.ImageAsset(
+                user_id=user.id,
+                conversation_id=conversation.id,
+                message_content_id=content.id,
+                bucket="tg-bot-images",
+                key=key,
+                public_url=proxied_url,
+                source="uploaded",
+                retention_policy="free_30d",
+                status="processing",
+            )
+        )
+        await session.commit()
+
+        monkeypatch.setattr(Settings, "R2_PUBLIC_BASE_URL", "https://lightny.ru/images/", raising=False)
+        monkeypatch.setattr(Settings, "R2_OPENAI_PUBLIC_BASE_URL", "https://tg-bot-images.lightny.pro/", raising=False)
+
+        async def _fake_refresh_processing_image_asset(_session, _asset, **_kwargs):
+            return False
+
+        monkeypatch.setattr(
+            image_deriver,
+            "refresh_processing_image_asset",
+            _fake_refresh_processing_image_asset,
+            raising=True,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await chat_helpers._build_history_for_openai(session, conversation.id)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "image_not_ready"
 
 
 def test_resolve_system_prompt_includes_main_and_folder_prompts():

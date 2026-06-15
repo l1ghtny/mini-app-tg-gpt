@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 import uuid
@@ -5,22 +6,24 @@ import logging
 from urllib.parse import unquote, urlsplit
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile
 from fastapi.params import Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.background import BackgroundTask
 from starlette.responses import StreamingResponse
 
 from app.api.dependencies import get_current_user
-from app.db.database import get_session
-from app.db.models import AppUser
+from app.db.database import engine, get_session
+from app.db.models import AppUser, ImageAsset
 from app.r2.methods import upload_fileobject
 from app.r2.settings import Settings
 from app.schemas.images import ImageUploaded, ImagePrepareShareResponse, ImageAssetResponse
 from app.services.image_assets import (
     IMAGE_SOURCE_UPLOADED,
+    IMAGE_STATUS_ACTIVE,
     IMAGE_STATUS_EXPIRED,
     IMAGE_STATUS_MISSING,
+    IMAGE_STATUS_PROCESSING,
     create_image_asset,
     effective_image_status,
     find_asset_by_id_or_content_id,
@@ -28,6 +31,7 @@ from app.services.image_assets import (
     mark_asset_status,
     object_prefix_for_user,
     public_url_for_key,
+    refresh_processing_image_asset,
     serialize_image_asset,
 )
 
@@ -129,9 +133,29 @@ async def _close_proxy_stream(client: httpx.AsyncClient, upstream_response: http
     await client.aclose()
 
 
+async def _refresh_uploaded_image_readiness(asset_id: uuid.UUID) -> None:
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            asset = await session.get(ImageAsset, asset_id)
+            if not asset:
+                return
+            await refresh_processing_image_asset(
+                session,
+                asset,
+                logger=logger,
+                force=True,
+                max_retries=8,
+                delay=0.75,
+                min_recheck_seconds=0,
+            )
+    except Exception:
+        logger.exception("Background uploaded-image readiness probe failed image_id=%s", asset_id)
+
+
 @images.post("/upload", response_model=ImageUploaded)
 async def upload_image(
     image: UploadFile,
+    background_tasks: BackgroundTasks,
     app_user: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -158,9 +182,11 @@ async def upload_image(
         bucket=bucket,
         key=key,
         source=IMAGE_SOURCE_UPLOADED,
+        initial_status=IMAGE_STATUS_PROCESSING,
     )
     await session.commit()
     await session.refresh(asset)
+    background_tasks.add_task(_refresh_uploaded_image_readiness, asset.id)
     image_payload = serialize_image_asset(asset) or {}
     return ImageUploaded(
         key=key,
@@ -278,6 +304,9 @@ async def get_image_asset(
     if not asset:
         raise HTTPException(status_code=404, detail="Image not found")
 
+    if effective_image_status(asset) == IMAGE_STATUS_PROCESSING:
+        await refresh_processing_image_asset(session, asset, logger=logger)
+
     payload = serialize_image_asset(asset)
     if not payload:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -295,10 +324,23 @@ async def prepare_image_share(
         raise HTTPException(status_code=404, detail="Image not found")
 
     status = effective_image_status(asset) if asset else "active"
+    if asset and status == IMAGE_STATUS_PROCESSING:
+        await refresh_processing_image_asset(
+            session,
+            asset,
+            logger=logger,
+            force=True,
+            max_retries=3,
+            delay=0.5,
+            min_recheck_seconds=0,
+        )
+        status = effective_image_status(asset)
     if status == IMAGE_STATUS_EXPIRED:
         if asset and asset.status != IMAGE_STATUS_EXPIRED:
             await mark_asset_status(session, asset, IMAGE_STATUS_EXPIRED)
         raise HTTPException(status_code=410, detail="Image expired")
+    if status == IMAGE_STATUS_PROCESSING:
+        raise HTTPException(status_code=409, detail="image_not_ready")
     if status != "active":
         raise HTTPException(status_code=410, detail="Image unavailable")
 

@@ -3,10 +3,9 @@
 import asyncio
 import io
 import hashlib
-import random
 from typing import Optional, Tuple
 
-import httpx
+from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -17,6 +16,17 @@ from app.r2.client import R2_BUCKET
 from app.r2.methods import head_object, get_bytes, put_bytes
 from app.db.models import DerivedImage
 from app.core.config import settings
+from app.services.image_assets import (
+    IMAGE_STATUS_ACTIVE,
+    IMAGE_STATUS_EXPIRED,
+    IMAGE_STATUS_PROCESSING,
+    effective_image_status,
+    find_asset_by_url,
+    mark_asset_status,
+    refresh_processing_image_asset,
+)
+from app.services.public_image_reachability import ImageReachabilityError
+from app.services.public_image_reachability import wait_for_image_url_reachability
 
 
 logger = settings.custom_logger
@@ -136,6 +146,29 @@ async def ensure_openai_compatible_image_url(
     - Else (e.g., HEIC) → derive once (JPEG/PNG), cache, and return derived public URL.
     External URLs: returned unchanged.
     """
+    asset = await find_asset_by_url(session, url_or_key)
+    if asset:
+        status = effective_image_status(asset)
+        if status == IMAGE_STATUS_PROCESSING:
+            await refresh_processing_image_asset(
+                session,
+                asset,
+                logger=logger,
+                force=True,
+                max_retries=3,
+                delay=0.5,
+                min_recheck_seconds=0,
+            )
+            status = effective_image_status(asset)
+        if status == IMAGE_STATUS_EXPIRED:
+            if asset.status != IMAGE_STATUS_EXPIRED:
+                await mark_asset_status(session, asset, IMAGE_STATUS_EXPIRED)
+            raise HTTPException(status_code=410, detail="Image expired")
+        if status == IMAGE_STATUS_PROCESSING:
+            raise HTTPException(status_code=409, detail="image_not_ready")
+        if status != IMAGE_STATUS_ACTIVE:
+            raise HTTPException(status_code=410, detail="Image unavailable")
+
     key = _key_from_public_url(url_or_key)
     if key is None:
         # Not our bucket / unknown domain → let OpenAI fetch it as-is
@@ -148,7 +181,10 @@ async def ensure_openai_compatible_image_url(
     mime = (meta.get("ContentType") or "application/octet-stream").lower()
 
     if mime in SUPPORTED_DIRECT:
-        await _wait_for_public_reachability(openai_url)
+        try:
+            await wait_for_image_url_reachability(openai_url, logger=logger, require_success=True)
+        except ImageReachabilityError as exc:
+            raise HTTPException(status_code=409, detail="image_not_ready") from exc
         return openai_url
 
     # See if we already have a derived variant
@@ -163,7 +199,10 @@ async def ensure_openai_compatible_image_url(
     row = res.first()
     if row:
         derived_openai_url = _public_url(row.derived_key, for_openai=True)
-        await _wait_for_public_reachability(derived_openai_url)
+        try:
+            await wait_for_image_url_reachability(derived_openai_url, logger=logger, require_success=True)
+        except ImageReachabilityError as exc:
+            raise HTTPException(status_code=409, detail="image_not_ready") from exc
         return derived_openai_url
 
     # Pull original bytes, transcode, and store.
@@ -190,29 +229,9 @@ async def ensure_openai_compatible_image_url(
     await session.commit()
 
     derived_openai_url = _public_url(derived_key, for_openai=True)
-    await _wait_for_public_reachability(derived_openai_url)
+    try:
+        await wait_for_image_url_reachability(derived_openai_url, logger=logger, require_success=True)
+    except ImageReachabilityError as exc:
+        raise HTTPException(status_code=409, detail="image_not_ready") from exc
 
     return derived_openai_url
-
-
-async def _wait_for_public_reachability(url: str, max_retries: int = 8, delay: float = 0.75) -> None:
-    """
-    Polls the public URL to ensure it is reachable AND downloadable before handing it off to OpenAI.
-    HEAD alone can be green while GET is still unavailable on edge/CDN.
-    """
-    timeout = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        for attempt in range(max_retries):
-            try:
-                async with client.stream("GET", url, headers={"Range": "bytes=0-65535"}) as resp:
-                    if resp.status_code in (200, 206):
-                        async for _ in resp.aiter_bytes():
-                            return
-                    logger.info("Image URL not ready: %s status=%s", url, resp.status_code)
-            except Exception as exc:
-                logger.info("Image URL not reachable yet: %s error=%r", url, exc)
-
-            sleep_s = delay * (2 ** min(attempt, 4)) + random.random() * 0.25
-            await asyncio.sleep(sleep_s)
-
-    logger.warning("Warning: URL %s did not become downloadable within retries.", url)

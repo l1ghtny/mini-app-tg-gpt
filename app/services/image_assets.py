@@ -14,10 +14,12 @@ from app.db.models import ImageAsset, Message, MessageContent, utcnow_naive
 from app.db.subscription_tiers import UsagePackSource
 from app.r2.client import R2_BUCKET
 from app.r2.settings import Settings
+from app.services.public_image_reachability import wait_for_image_url_reachability
 from app.services.subscription_check.entitlements import get_active_subscriptions, get_active_usage_packs
 
 
 IMAGE_STATUS_ACTIVE = "active"
+IMAGE_STATUS_PROCESSING = "processing"
 IMAGE_STATUS_EXPIRED = "expired"
 IMAGE_STATUS_MISSING = "missing"
 IMAGE_STATUS_DELETED = "deleted"
@@ -114,6 +116,12 @@ def public_url_for_key(bucket: str, key: str) -> str:
     return f"{_normalize_public_base_url(Settings.R2_PUBLIC_BASE_URL)}{key}"
 
 
+def provider_visible_url_for_key(bucket: str, key: str) -> str:
+    _ = bucket
+    base = _normalize_public_base_url(Settings.R2_OPENAI_PUBLIC_BASE_URL) or _normalize_public_base_url(Settings.R2_PUBLIC_BASE_URL)
+    return f"{base}{key}"
+
+
 def key_from_public_url(url: str | None) -> str | None:
     if not url:
         return None
@@ -181,6 +189,7 @@ async def create_image_asset(
     bucket: str | None = None,
     key: str | None = None,
     source: str = IMAGE_SOURCE_GENERATED,
+    initial_status: str = IMAGE_STATUS_ACTIVE,
     conversation_id: uuid.UUID | None = None,
     message_content: MessageContent | None = None,
 ) -> ImageAsset:
@@ -195,7 +204,7 @@ async def create_image_asset(
         source=source,
         retention_policy=retention_policy,
         expires_at=expires_at,
-        status=IMAGE_STATUS_ACTIVE,
+        status=initial_status,
     )
     session.add(asset)
     await session.flush()
@@ -315,3 +324,50 @@ async def mark_asset_status(
         asset.deleted_at = utcnow_naive() if status in {IMAGE_STATUS_DELETED, IMAGE_STATUS_MISSING} else asset.deleted_at
     session.add(asset)
     await session.commit()
+
+
+async def refresh_processing_image_asset(
+    session: AsyncSession,
+    asset: ImageAsset,
+    *,
+    logger=None,
+    force: bool = False,
+    max_retries: int = 1,
+    delay: float = 0.25,
+    min_recheck_seconds: float = 2.0,
+) -> bool:
+    status = effective_image_status(asset)
+    if status == IMAGE_STATUS_EXPIRED:
+        if asset.status != IMAGE_STATUS_EXPIRED:
+            asset.status = IMAGE_STATUS_EXPIRED
+            asset.last_checked_at = utcnow_naive()
+            session.add(asset)
+            await session.commit()
+            await session.refresh(asset)
+        return False
+
+    if status != IMAGE_STATUS_PROCESSING:
+        return status == IMAGE_STATUS_ACTIVE
+
+    now = utcnow_naive()
+    if (
+        not force
+        and asset.last_checked_at is not None
+        and (now - asset.last_checked_at).total_seconds() < min_recheck_seconds
+    ):
+        return False
+
+    reachable = await wait_for_image_url_reachability(
+        provider_visible_url_for_key(asset.bucket, asset.key),
+        logger=logger,
+        require_success=False,
+        max_retries=max_retries,
+        delay=delay,
+    )
+    asset.last_checked_at = utcnow_naive()
+    if reachable:
+        asset.status = IMAGE_STATUS_ACTIVE
+    session.add(asset)
+    await session.commit()
+    await session.refresh(asset)
+    return reachable
