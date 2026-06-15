@@ -77,7 +77,7 @@ def _build_cta(item: WhatsNewItem, lang: str) -> WhatsNewCTA | None:
     if not label:
         return None
 
-    value = item.cta_value if item.cta_kind == "open_url" else None
+    value = item.cta_value
     return WhatsNewCTA(label=label, kind=item.cta_kind, value=value)
 
 
