@@ -30,7 +30,7 @@ from app.services.model_registry import (
 
 
 def _next_utc_midnight() -> datetime:
-    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     return now + timedelta(days=1)
 
 
@@ -199,6 +199,7 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                     if tier_id:
                         # Find the actual tier to get is_recurring and monthly_images
                         tier = next((s.tier for s in subscriptions if str(s.tier_id) == str(tier_id)), None)
+                        sub = next((s for s in subscriptions if str(s.tier_id) == str(tier_id)), None)
                         is_recurring = getattr(tier, "is_recurring", True) if tier else True
                         total_pool = float(getattr(tier, "monthly_images", 0) or 0) if tier else 0.0
                         
@@ -210,6 +211,7 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                             tier_id=tier_id,
                             is_recurring=is_recurring,
                             total_pool=total_pool,
+                            started_at=sub.started_at if sub else None,
                         )
                         pacing = {
                             "is_throttled": is_throttled,
@@ -292,6 +294,7 @@ async def get_image_energy_usage(session: AsyncSession, user) -> UserImageEnergy
             tier_id=tier.id,
             is_recurring=is_recurring,
             total_pool=float(monthly_images),
+            started_at=sub.started_at,
         )
         allowed_models = {limit.image_model for limit in tier.tier_image_model_limits}
         min_cost = None
@@ -311,11 +314,12 @@ async def get_image_energy_usage(session: AsyncSession, user) -> UserImageEnergy
             tier_id=tier.id,
             is_recurring=is_recurring,
             total_pool=float(monthly_images),
+            started_at=sub.started_at,
         )
         max_energy = int(snapshot.capacity)
         available_energy = int(snapshot.available_energy)
         saved_energy = max(0, available_energy - daily_energy)
-        used_energy = max(0, max_energy - available_energy)
+        used_energy = max(0, int(round(snapshot.accrued_capacity)) - available_energy)
         sources.append({
             "kind": "tier",
             "source": "subscription" if (tier.price_cents > 0 and tier.is_recurring) else ("paid" if tier.price_cents > 0 else "free"),

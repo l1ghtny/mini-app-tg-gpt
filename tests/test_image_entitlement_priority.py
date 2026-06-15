@@ -1,5 +1,6 @@
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -32,7 +33,14 @@ async def _prepare_daily_tier_and_pack(session: AsyncSession, telegram_id: int):
 
     session.add(TierImageModelLimit(tier_id=tier.id, image_model="gpt-image-1.5", monthly_requests=-1))
     session.add(TierImageQualityLimit(tier_id=tier.id, quality="low"))
-    session.add(UserSubscription(user_id=user.id, tier_id=tier.id, status=SubscriptionStatus.active))
+    session.add(
+        UserSubscription(
+            user_id=user.id,
+            tier_id=tier.id,
+            status=SubscriptionStatus.active,
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=5),
+        )
+    )
 
     pack = UsagePack(
         name=f"pack-{telegram_id}",
@@ -135,7 +143,14 @@ async def test_image_daily_tier_throttled_without_fallback_returns_pacing():
 
         session.add(TierImageModelLimit(tier_id=tier.id, image_model="gpt-image-1.5", monthly_requests=-1))
         session.add(TierImageQualityLimit(tier_id=tier.id, quality="low"))
-        session.add(UserSubscription(user_id=user.id, tier_id=tier.id, status=SubscriptionStatus.active))
+        session.add(
+            UserSubscription(
+                user_id=user.id,
+                tier_id=tier.id,
+                status=SubscriptionStatus.active,
+                started_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=5),
+            )
+        )
 
         for _ in range(11):
             session.add(

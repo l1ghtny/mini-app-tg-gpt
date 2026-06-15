@@ -16,6 +16,7 @@ class ImageEnergySnapshot:
     daily_target: float
     max_burst_days: int
     capacity: float
+    accrued_capacity: float
     available_energy: float
     saved_energy: float
     used_energy: float
@@ -34,6 +35,7 @@ async def get_image_energy_snapshot(
     tier_id: uuid.UUID | None = None,
     is_recurring: bool = True,
     total_pool: float = 0.0,
+    started_at: datetime | None = None,
 ) -> ImageEnergySnapshot:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -49,6 +51,7 @@ async def get_image_energy_snapshot(
             daily_target=0.0,
             max_burst_days=max_burst_days,
             capacity=0.0,
+            accrued_capacity=0.0,
             available_energy=0.0,
             saved_energy=0.0,
             used_energy=0.0,
@@ -58,8 +61,9 @@ async def get_image_energy_snapshot(
             as_of=now,
         )
 
-    start_window = now - timedelta(days=30)
-    if not is_recurring:
+    effective_start = min(started_at, now) if started_at is not None else None
+    start_window = effective_start or (now - timedelta(days=30))
+    if not is_recurring and effective_start is None:
         # For non-recurring pools, we look back as far as needed to count all usage since sub start
         # but 90 days is a safe practical limit for the "lifetime" check if we don't have sub start here
         start_window = now - timedelta(days=90)
@@ -81,7 +85,10 @@ async def get_image_energy_snapshot(
         )
     history = (await session.exec(query)).all()
 
-    current_tokens = capacity
+    if is_recurring and effective_start is not None:
+        current_tokens = min(capacity, max(0.0, daily_target))
+    else:
+        current_tokens = capacity
     last_time = start_window
     for request in history:
         req_time = request.created_at
@@ -97,7 +104,14 @@ async def get_image_energy_snapshot(
 
     available_energy = max(0.0, current_tokens)
     saved_energy = max(0.0, min(capacity, available_energy) - daily_target) if is_recurring else 0.0
-    used_energy = max(0.0, capacity - min(capacity, available_energy))
+    if is_recurring and effective_start is not None:
+        accrued_capacity = min(
+            capacity,
+            max(0.0, daily_target) + max(0.0, (now - effective_start).total_seconds()) * refill_rate_per_sec,
+        )
+    else:
+        accrued_capacity = capacity
+    used_energy = max(0.0, accrued_capacity - min(accrued_capacity, available_energy))
 
     if cost <= 0 or available_energy >= cost:
         is_throttled = False
@@ -115,6 +129,7 @@ async def get_image_energy_snapshot(
         daily_target=daily_target,
         max_burst_days=max_burst_days,
         capacity=capacity,
+        accrued_capacity=accrued_capacity,
         available_energy=available_energy,
         saved_energy=saved_energy,
         used_energy=used_energy,
@@ -134,6 +149,7 @@ async def check_image_pacing(
     tier_id: uuid.UUID | None = None,
     is_recurring: bool = True,
     total_pool: float = 0.0,
+    started_at: datetime | None = None,
 ) -> tuple[bool, timedelta]:
     snapshot = await get_image_energy_snapshot(
         session=session,
@@ -144,6 +160,7 @@ async def check_image_pacing(
         tier_id=tier_id,
         is_recurring=is_recurring,
         total_pool=total_pool,
+        started_at=started_at,
     )
     return snapshot.is_throttled, snapshot.wait_time
 

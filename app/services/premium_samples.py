@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -25,7 +25,7 @@ def _utc_day_start(now: datetime | None = None) -> datetime:
 
 
 def _next_utc_midnight(now: datetime | None = None) -> datetime:
-    return _utc_day_start(now) + timedelta(days=1)
+    return _utc_day_start(now).replace(tzinfo=UTC) + timedelta(days=1)
 
 
 def premium_sample_access_path(kind: str) -> str:

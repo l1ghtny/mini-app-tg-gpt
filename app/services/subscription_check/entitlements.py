@@ -34,7 +34,7 @@ def _utc_day_start(now: datetime | None = None) -> datetime:
 
 
 def _next_utc_midnight(now: datetime | None = None) -> datetime:
-    return _utc_day_start(now) + timedelta(days=1)
+    return _utc_day_start(now).replace(tzinfo=UTC) + timedelta(days=1)
 
 
 async def month_start_expr():
@@ -809,11 +809,12 @@ async def list_image_entitlements_bulk(
                 tier_id=sub.tier.id,
                 is_recurring=is_recurring,
                 total_pool=float(monthly_images),
+                started_at=sub.started_at,
             )
             max_energy = int(snapshot.capacity)
             available_energy = int(snapshot.available_energy)
             saved_energy = max(0, available_energy - daily_energy) if is_recurring else 0
-            used_energy = max(0, max_energy - available_energy)
+            used_energy = max(0, int(round(snapshot.accrued_capacity)) - available_energy)
             tier_energy_snapshots[sub.tier.id] = {
                 "daily_energy": daily_energy,
                 "max_energy": max_energy,
@@ -887,6 +888,7 @@ async def list_image_entitlements_bulk(
                 "is_recurring": is_recurring,
                 "monthly_images": monthly_images,
                 "is_energy_tier": is_energy_tier,
+                "started_at": sub.started_at,
                 "energy_balance": energy_balance,
                 "allowed_image_qualities": allowed_qualities,
                 "allowed_image_models": allowed_models,
@@ -1037,6 +1039,7 @@ async def select_image_entitlement(
         daily_target = _daily_energy_for_entitlement(ent)
         is_recurring = bool(ent.get("is_recurring", True))
         total_pool = float(ent.get("monthly_images") or 0.0)
+        started_at = ent.get("started_at")
 
         # Even when visible remaining is below cost, keep energy tiers on the
         # pacing path so callers receive a deterministic wait reason.
@@ -1049,6 +1052,7 @@ async def select_image_entitlement(
                 tier_id=tier_id,
                 is_recurring=is_recurring,
                 total_pool=total_pool,
+                started_at=started_at,
             )
             if is_throttled:
                 throttled_waits.append(wait_time)
@@ -1062,6 +1066,7 @@ async def select_image_entitlement(
             tier_id=tier_id,
             is_recurring=is_recurring,
             total_pool=total_pool,
+            started_at=started_at,
         )
         if is_throttled:
             throttled_waits.append(wait_time)

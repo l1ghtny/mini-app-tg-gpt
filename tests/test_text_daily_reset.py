@@ -84,6 +84,7 @@ async def test_text_usage_daily_limits_reset_at_utc_midnight():
     assert nano_model.bucket_models == ["gpt-5.4-nano", "gemini-3.1-flash-lite"]
     assert nano_model.total_remaining == 4
     assert nano_model.next_reset_at is not None
+    assert nano_model.next_reset_at.utcoffset() == timedelta(0)
     assert nano_model.next_reset_at.hour == 0
     assert nano_model.next_reset_at.minute == 0
     assert nano_model.selected is not None
@@ -91,6 +92,7 @@ async def test_text_usage_daily_limits_reset_at_utc_midnight():
     assert nano_model.selected.used == 1
     assert nano_model.selected.remaining == 4
     assert nano_model.selected.next_reset_at is not None
+    assert nano_model.selected.next_reset_at.utcoffset() == timedelta(0)
     assert nano_model.selected.next_reset_at.hour == 0
     assert nano_model.selected.next_reset_at.minute == 0
 
