@@ -528,7 +528,7 @@ async def test_current_subscription_refund_status_uses_confirmed_payment_when_su
             flow_kind="binding_activation",
             tbank_payment_id="TBANK-REFUND-1B",
             created_at=now - timedelta(minutes=3),
-            updated_at=now,
+            updated_at=now - timedelta(milliseconds=12),
         )
         session.add(sub)
         session.add(payment)

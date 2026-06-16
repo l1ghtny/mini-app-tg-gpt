@@ -259,15 +259,16 @@ async def _get_subscription_payment_context(
     tier_name: str,
     started_at: datetime,
 ) -> tuple[Payment | None, str | None]:
+    refund_lookup_floor = started_at - timedelta(hours=REFUND_WINDOW_HOURS)
     payment = (await session.exec(
         select(Payment).where(
             Payment.user_id == user_id,
             Payment.product_type == PaymentProductType.subscription,
             Payment.tier_name == tier_name,
             (
-                Payment.created_at >= started_at
+                Payment.created_at >= refund_lookup_floor
             ) | (
-                Payment.updated_at >= started_at
+                Payment.updated_at >= refund_lookup_floor
             ),
         ).order_by(Payment.created_at.desc())
     )).first()
