@@ -486,6 +486,63 @@ async def test_current_subscription_refund_status_reports_refundable_window(monk
 
 
 @pytest.mark.asyncio
+async def test_current_subscription_refund_status_uses_confirmed_payment_when_subscription_starts_after_payment_creation(monkeypatch):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    monkeypatch.setattr(payment_helpers, "tbank_service", _FakeTbankService(), raising=True)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        user = AppUser(telegram_id=791000109)
+        tier = SubscriptionTier(
+            name="Advanced",
+            name_ru="Advanced",
+            description="",
+            description_ru="",
+            price_cents=100,
+            is_active=True,
+            is_public=True,
+            is_recurring=True,
+        )
+        session.add(user)
+        session.add(tier)
+        await session.commit()
+        await session.refresh(user)
+        await session.refresh(tier)
+
+        sub = UserSubscription(
+            user_id=user.id,
+            tier_id=tier.id,
+            status=SubscriptionStatus.active,
+            started_at=now,
+            expires_at=now + timedelta(days=29),
+            auto_renew_enabled=True,
+        )
+        payment = Payment(
+            user_id=user.id,
+            tier_name=tier.name,
+            amount=10000,
+            tbank_status="CONFIRMED",
+            product_type=PaymentProductType.subscription,
+            flow_kind="binding_activation",
+            tbank_payment_id="TBANK-REFUND-1B",
+            created_at=now - timedelta(minutes=3),
+            updated_at=now,
+        )
+        session.add(sub)
+        session.add(payment)
+        await session.commit()
+
+        result = await payment_helpers.get_current_subscription_refund_status(session, user)
+        assert result.refundable is True
+        assert result.reason is None
+        assert result.payment_id == str(payment.id)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_current_subscription_refund_status_expires_after_24_hours(monkeypatch):
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url
