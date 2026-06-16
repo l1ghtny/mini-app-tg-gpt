@@ -1,7 +1,7 @@
 """seed general_discount rows
 
 Seeds two rows:
-  - FIRST_PURCHASE: 20% off all tiers, condition no_prior_paid_sub, never expires
+  - FIRST_PURCHASE: 50% off all tiers, condition no_prior_paid_sub, never expires
   - SEASONAL: inactive placeholder (0%), to be activated via direct DB update
 
 Revision ID: gd2a3b4c5d6e
@@ -43,7 +43,7 @@ def upgrade() -> None:
             "id": _sid("first_purchase_discount"),
             "code": "FIRST_PURCHASE",
             "type": "first_purchase",
-            "percent_off": 20,
+            "percent_off": 50,
             "applies_to_tiers": None,          # all tiers
             "conditions": {"no_prior_paid_sub": True},
             "starts_at": None,
