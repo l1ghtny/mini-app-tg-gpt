@@ -415,15 +415,18 @@ async def _apply_sentry_cohort_filters(
         return recipients
     user_ids = {recipient.user_id for recipient in recipients}
 
-    if filters.registered_but_not_opened_within_hours:
-        cohort_ids = await sentry_audiences.registered_but_not_opened_within_hours(
-            filters.registered_but_not_opened_within_hours
-        )
-        user_ids &= cohort_ids
+    try:
+        if filters.registered_but_not_opened_within_hours:
+            cohort_ids = await sentry_audiences.registered_but_not_opened_within_hours(
+                filters.registered_but_not_opened_within_hours
+            )
+            user_ids &= cohort_ids
 
-    if filters.not_opened_for_days:
-        opened_ids = await sentry_audiences.opened_within_days(filters.not_opened_for_days)
-        user_ids -= opened_ids
+        if filters.not_opened_for_days:
+            opened_ids = await sentry_audiences.opened_within_days(filters.not_opened_for_days)
+            user_ids -= opened_ids
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Sentry audience resolution failed: {exc}") from exc
 
     return [recipient for recipient in recipients if recipient.user_id in user_ids]
 

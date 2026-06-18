@@ -62,6 +62,8 @@ def _fetch_metric_user_ids_sync(
         "Authorization": f"Bearer {settings.SENTRY_AUTH_TOKEN}",
         "Accept": "application/json",
     }
+    session = requests.Session()
+    session.trust_env = False
     params: list[tuple[str, str]] = [
         ("field", "user_id"),
         ("field", _count_field(metric_name)),
@@ -88,7 +90,7 @@ def _fetch_metric_user_ids_sync(
         request_params = list(params)
         if cursor:
             request_params.append(("cursor", cursor))
-        response = requests.get(url, headers=headers, params=request_params, timeout=30)
+        response = session.get(url, headers=headers, params=request_params, timeout=30)
         response.raise_for_status()
         payload = response.json()
         for row in payload.get("data", []):
