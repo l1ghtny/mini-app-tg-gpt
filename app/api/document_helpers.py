@@ -644,7 +644,9 @@ async def upload_document(
     _sync_document_from_artifacts(document)
     session.add(document)
     await session.commit()
-    await session.refresh(document)
+    document = await _load_document_for_user(session, user_id=user.id, document_id=document.id)
+    if not document:
+        raise HTTPException(status_code=500, detail={"error": "document_upload_persist_failed"})
 
     background_tasks.add_task(_ingest_document_background, document.id, tmp_path, artifact_plan)
     return _document_to_response(document, preferred_provider=effective_provider)

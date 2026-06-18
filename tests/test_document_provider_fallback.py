@@ -1,12 +1,16 @@
+import io
 import os
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import BackgroundTasks, UploadFile
+from starlette.datastructures import Headers
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import app.api.document_helpers as document_helpers
+from app.schemas.documents import DocumentCapabilitiesResponse
 from app.db.models import AppUser, Conversation, ConversationDocument, DocumentProviderArtifact, UserDocument
 
 
@@ -124,3 +128,64 @@ async def test_legacy_openai_document_without_artifact_still_resolves_vector_sto
     await engine.dispose()
 
     assert vector_store_ids == ["vs-legacy-1"]
+
+
+@pytest.mark.asyncio
+async def test_upload_document_returns_response_without_lazy_loading_provider_artifacts(monkeypatch, tmp_path):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+
+    async def fake_capabilities(session, user):
+        return DocumentCapabilitiesResponse(
+            status="active",
+            tier_name=None,
+            max_active_docs=2,
+            active_doc_count=0,
+            max_pinned_docs=0,
+            pinned_doc_count=0,
+            max_storage_bytes=10 * 1024 * 1024,
+            used_storage_bytes=0,
+            remaining_storage_bytes=10 * 1024 * 1024,
+            max_file_size_bytes=5 * 1024 * 1024,
+            doc_retention_hours=24,
+        )
+
+    persisted_file = tmp_path / "notes.txt"
+    persisted_file.write_bytes(b"hello")
+
+    async def fake_persist_upload_to_temp_file(upload, target_filename):
+        return str(persisted_file), 5, "sha256-1"
+
+    monkeypatch.setattr(document_helpers, "get_document_capabilities", fake_capabilities)
+    monkeypatch.setattr(document_helpers, "_persist_upload_to_temp_file", fake_persist_upload_to_temp_file)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=721000903)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        upload = UploadFile(
+            filename="notes.txt",
+            file=io.BytesIO(b"hello"),
+            headers=Headers({"content-type": "text/plain"}),
+        )
+        background_tasks = BackgroundTasks()
+
+        response = await document_helpers.upload_document(
+            session=session,
+            user=user,
+            background_tasks=background_tasks,
+            upload=upload,
+        )
+
+    await engine.dispose()
+
+    assert response.filename.endswith(".txt")
+    assert response.status == "uploading"
+    assert response.primary_provider == "openai"
+    assert len(response.provider_artifacts) == 1
+    assert response.provider_artifacts[0].provider == "openai"
+    assert response.provider_artifacts[0].status == "uploading"
+    assert len(background_tasks.tasks) == 1

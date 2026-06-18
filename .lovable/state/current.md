@@ -2,60 +2,39 @@
 
 ## Current objective
 
-Upgrade admin broadcasts from a single active-subscriber filter into a safer campaign tool with Sentry-backed cohorts, broader audience scope, and cross-cohort cooldown protection.
+Fix the production document upload regression affecting `POST /api/v1/documents/upload`.
 
 ## In progress
 
-- Backend implementation is complete and validated locally.
-- Frontend admin UI still needs to expose the new cohort filters and cooldown controls.
-- Production use of the Sentry-backed cohorts depends on valid `SENTRY_AUTH_TOKEN` / `SENTRY_ORG` / `SENTRY_PROJECT` runtime config in the backend environment.
+- Backend patch is implemented locally.
+- Local regression coverage is added and passing.
+- Production verification still needs a deploy and a fresh Sentry check after release.
 
 ## Completed
 
-- Added Sentry-backed audience resolution in [app/services/sentry_audiences.py](G:\0\Coding_projects\Python\PycharmProjects\mini-app-tg-gpt\app\services\sentry_audiences.py).
-- Extended broadcast config in [app/core/config.py](G:\0\Coding_projects\Python\PycharmProjects\mini-app-tg-gpt\app\core\config.py) with:
-  - `SENTRY_AUTH_TOKEN`
-  - `SENTRY_ORG`
-  - `SENTRY_PROJECT`
-  - `SENTRY_BASE_URL`
-- Extended broadcast filters in [app/api/admin_broadcast.py](G:\0\Coding_projects\Python\PycharmProjects\mini-app-tg-gpt\app\api\admin_broadcast.py) with:
-  - `user_scope`
-  - `registered_but_not_opened_within_hours`
-  - `not_opened_for_days`
-  - `min_hours_since_last_broadcast`
-- Added `all_users` scope so broadcasts are no longer limited to active subscribers when running marketing / reactivation campaigns.
-- Added cross-cohort cooldown filtering backed by Redis last-delivery timestamps, and persisted those timestamps on successful sends.
-- Added observability for cooldown exclusions through `cooldown_excluded` on job and send responses.
-- Relaxed recipient tier/onboarded metadata to allow all-user cohorts where no active subscription exists.
-- Added focused regression coverage for:
-  - Sentry cohort filtering
-  - cooldown filtering
-  - existing job-status and idempotency behavior
+- Queried Sentry production events for backend project `gpt-mini-app-backend`.
+- Confirmed repeated prod failures on June 18, 2026 in release `1.6.1` with:
+  - exception: `MissingGreenlet`
+  - transaction: `/api/v1/documents/upload`
+  - environment: `production_main_server`
+  - culprit/location: `app/api/document_helpers.py` / `_active_provider_artifacts`
+- Traced the failure to the upload response path:
+  - `upload_document()` committed successfully
+  - `session.refresh(document)` left `provider_artifacts` unavailable for safe async access in the response serializer
+  - `_document_to_response()` then touched `document.provider_artifacts` and triggered a lazy load in the wrong context
+- Patched [app/api/document_helpers.py](G:\0\Coding_projects\Python\PycharmProjects\mini-app-tg-gpt\app\api\document_helpers.py) to reload the saved document through `_load_document_for_user(...)` before serializing the response.
+- Added a focused regression test in [tests/test_document_provider_fallback.py](G:\0\Coding_projects\Python\PycharmProjects\mini-app-tg-gpt\tests\test_document_provider_fallback.py) covering `upload_document()` returning provider artifacts without a lazy-load failure.
 - Validated successfully:
-  - `poetry run pytest tests/test_admin_broadcast.py`
-  - `py -3 -m py_compile app/api/admin_broadcast.py app/core/config.py app/services/sentry_audiences.py`
+  - `poetry run pytest tests/test_document_provider_fallback.py`
 
 ## Blockers and risks
 
-- Sentry-backed cohorts are only as good as emitted metrics:
-  - `registered_but_not_opened_within_hours` is a stopgap based on `user_registered` minus `app_opened`
-  - it does not cover existing users who pressed `/start` again unless bot-side `/start` instrumentation is added later
-- The backend still lacks first-class durable `last_bot_start_at` / `last_app_opened_at` columns on `AppUser`.
-- This shell still does not have direct production Kubernetes tooling installed, so prod verification remains external.
+- This session did not deploy the backend, so the fix is only locally validated.
+- Sentry issue grouping will still show historical failures until a fixed release is deployed and exercised.
 
 ## Next steps
 
-- In the frontend admin UI, expose the new payload fields:
-  - `filters.user_scope`
-  - `filters.registered_but_not_opened_within_hours`
-  - `filters.not_opened_for_days`
-  - `filters.min_hours_since_last_broadcast`
-- Add clear preset labels in the UI:
-  - “New users who registered but never opened the app”
-  - “Users who have not opened the app for N days”
-- Ensure production backend env includes:
-  - `SENTRY_AUTH_TOKEN`
-  - `SENTRY_ORG`
-  - `SENTRY_PROJECT`
-- Follow up with bot-side `/start` instrumentation for a better “started recently but did not open app” cohort.
-- Longer term, add durable `AppUser` activity timestamps so Sentry is no longer the only audience source.
+- Deploy the backend patch.
+- Re-test a real document upload in production.
+- Re-check Sentry for new `/api/v1/documents/upload` events after the deploy.
+- If uploads still fail after this fix, inspect the background ingestion task separately for OpenAI vector-store or provider-specific errors.
