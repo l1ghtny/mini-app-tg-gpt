@@ -258,6 +258,52 @@ async def test_list_jobs_returns_most_recent_first():
 
 
 @pytest.mark.asyncio
+async def test_apply_sentry_cohort_filters_registered_but_not_opened(monkeypatch):
+    recipients = [_recipient(1), _recipient(2), _recipient(3)]
+    cohort_ids = {recipients[0].user_id, recipients[2].user_id}
+
+    async def _fake_registered_but_not_opened(_hours: int, *, limit: int = 5000):
+        return cohort_ids
+
+    monkeypatch.setattr(
+        admin_broadcast.sentry_audiences,
+        "registered_but_not_opened_within_hours",
+        _fake_registered_but_not_opened,
+    )
+
+    filtered = await admin_broadcast._apply_sentry_cohort_filters(
+        recipients,
+        admin_broadcast.BroadcastFilters(registered_but_not_opened_within_hours=24),
+    )
+
+    assert [item.user_id for item in filtered] == [recipients[0].user_id, recipients[2].user_id]
+
+
+@pytest.mark.asyncio
+async def test_apply_broadcast_cooldown_filters_recent_recipient():
+    fake_redis = _FakeRedis()
+    recent = _recipient(1)
+    older = _recipient(2)
+    await fake_redis.set(
+        admin_broadcast._recipient_last_sent_key(recent.user_id),
+        datetime.now(UTC).isoformat(),
+    )
+    await fake_redis.set(
+        admin_broadcast._recipient_last_sent_key(older.user_id),
+        (datetime.now(UTC) - timedelta(hours=72)).isoformat(),
+    )
+
+    filtered, excluded = await admin_broadcast._apply_broadcast_cooldown(
+        fake_redis,
+        [recent, older],
+        min_hours_since_last_broadcast=48,
+    )
+
+    assert excluded == 1
+    assert [item.user_id for item in filtered] == [older.user_id]
+
+
+@pytest.mark.asyncio
 async def test_broadcast_worker_honors_preexisting_cancel_request(monkeypatch):
     fake_redis = _FakeRedis()
     _FakeBot.calls = {}
@@ -310,8 +356,8 @@ async def test_enqueue_broadcast_job_reuses_existing_job_for_idempotency_key(mon
     fake_redis = _FakeRedis()
     recipients = [_recipient(1), _recipient(2)]
 
-    async def _fake_select(_session, _filters, _limit):
-        return recipients
+    async def _fake_select(_session, _filters, _limit, _redis):
+        return recipients, 0
 
     monkeypatch.setattr(admin_broadcast, "_select_recipients", _fake_select)
     monkeypatch.setattr(admin_broadcast.settings, "BROADCAST_ADMIN_TOKEN", "secret")
@@ -352,8 +398,8 @@ async def test_enqueue_broadcast_job_rejects_recipient_fingerprint_mismatch(monk
     fake_redis = _FakeRedis()
     recipients = [_recipient(1), _recipient(2)]
 
-    async def _fake_select(_session, _filters, _limit):
-        return recipients
+    async def _fake_select(_session, _filters, _limit, _redis):
+        return recipients, 0
 
     monkeypatch.setattr(admin_broadcast, "_select_recipients", _fake_select)
     monkeypatch.setattr(admin_broadcast.settings, "BROADCAST_ADMIN_TOKEN", "secret")

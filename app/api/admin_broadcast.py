@@ -4,7 +4,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
@@ -24,6 +24,7 @@ from app.db.database import get_session
 from app.db.models import AppUser, RequestLedger
 from app.db.subscription_tiers import SubscriptionStatus, SubscriptionTier, UserSubscription
 from app.redis.settings import settings as redis_settings
+from app.services import sentry_audiences
 
 
 admin_broadcast = APIRouter(tags=["admin"], prefix="/admin/broadcast")
@@ -38,12 +39,13 @@ _optional_oauth2_scheme = OAuth2PasswordBearer(
 class _Recipient:
     user_id: uuid.UUID
     telegram_id: int
-    tier_id: uuid.UUID
-    tier_name: str
-    onboarded_at: datetime
+    tier_id: Optional[uuid.UUID]
+    tier_name: Optional[str]
+    onboarded_at: Optional[datetime]
 
 
 class BroadcastFilters(BaseModel):
+    user_scope: Literal["active_subscribers", "all_users"] = "active_subscribers"
     tier_ids: list[uuid.UUID] = []
     tier_names: list[str] = []
     onboarded_from: Optional[datetime] = None
@@ -51,6 +53,9 @@ class BroadcastFilters(BaseModel):
     has_sent_first_message: Optional[bool] = None
     campaigns: list[str] = []
     active_within_days: Optional[int] = Field(default=None, ge=1, le=365)
+    registered_but_not_opened_within_hours: Optional[int] = Field(default=None, ge=1, le=720)
+    not_opened_for_days: Optional[int] = Field(default=None, ge=1, le=365)
+    min_hours_since_last_broadcast: Optional[int] = Field(default=None, ge=1, le=720)
 
 
 class BroadcastRequest(BaseModel):
@@ -65,9 +70,9 @@ class BroadcastRequest(BaseModel):
 class BroadcastRecipientStatus(BaseModel):
     user_id: str
     telegram_id: int
-    tier_id: str
-    tier_name: str
-    onboarded_at: datetime
+    tier_id: Optional[str] = None
+    tier_name: Optional[str] = None
+    onboarded_at: Optional[datetime] = None
     status: str = "pending"
     attempts: int = 0
     attempted_at: Optional[datetime] = None
@@ -101,6 +106,7 @@ class BroadcastSendResponse(BaseModel):
     pending: int
     updated_at: datetime
     idempotency_key: Optional[str] = None
+    cooldown_excluded: int = 0
     note: str
 
 
@@ -121,6 +127,7 @@ class BroadcastJobStatus(BaseModel):
     bad_request: int = 0
     retried: int = 0
     retry_succeeded: int = 0
+    cooldown_excluded: int = 0
     started_at: datetime
     updated_at: datetime
     finished_at: Optional[datetime] = None
@@ -180,6 +187,10 @@ def _job_recipient_state_key(job_id: str) -> str:
     return f"broadcast:job:{job_id}:recipient_state"
 
 
+def _recipient_last_sent_key(user_id: uuid.UUID) -> str:
+    return f"broadcast:recipient:{user_id}:last_sent_at"
+
+
 def _broadcast_idempotency_key(idempotency_key: str) -> str:
     return f"{_BROADCAST_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}"
 
@@ -237,7 +248,7 @@ def _recipient_to_status(recipient: _Recipient) -> BroadcastRecipientStatus:
     return BroadcastRecipientStatus(
         user_id=str(recipient.user_id),
         telegram_id=recipient.telegram_id,
-        tier_id=str(recipient.tier_id),
+        tier_id=str(recipient.tier_id) if recipient.tier_id else None,
         tier_name=recipient.tier_name,
         onboarded_at=recipient.onboarded_at,
     )
@@ -396,7 +407,57 @@ def _to_utc_naive(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
-async def _select_recipients(session: AsyncSession, filters: BroadcastFilters, limit: Optional[int]) -> list[_Recipient]:
+async def _apply_sentry_cohort_filters(
+    recipients: list[_Recipient],
+    filters: BroadcastFilters,
+) -> list[_Recipient]:
+    if not recipients:
+        return recipients
+    user_ids = {recipient.user_id for recipient in recipients}
+
+    if filters.registered_but_not_opened_within_hours:
+        cohort_ids = await sentry_audiences.registered_but_not_opened_within_hours(
+            filters.registered_but_not_opened_within_hours
+        )
+        user_ids &= cohort_ids
+
+    if filters.not_opened_for_days:
+        opened_ids = await sentry_audiences.opened_within_days(filters.not_opened_for_days)
+        user_ids -= opened_ids
+
+    return [recipient for recipient in recipients if recipient.user_id in user_ids]
+
+
+async def _apply_broadcast_cooldown(
+    redis: Redis,
+    recipients: list[_Recipient],
+    min_hours_since_last_broadcast: Optional[int],
+) -> tuple[list[_Recipient], int]:
+    if not min_hours_since_last_broadcast or not recipients:
+        return recipients, 0
+    cutoff = datetime.now(UTC) - timedelta(hours=min_hours_since_last_broadcast)
+    filtered: list[_Recipient] = []
+    excluded = 0
+    for recipient in recipients:
+        raw = await redis.get(_recipient_last_sent_key(recipient.user_id))
+        if not raw:
+            filtered.append(recipient)
+            continue
+        try:
+            sent_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            filtered.append(recipient)
+            continue
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=UTC)
+        if sent_at >= cutoff:
+            excluded += 1
+            continue
+        filtered.append(recipient)
+    return filtered, excluded
+
+
+async def _select_recipients(session: AsyncSession, filters: BroadcastFilters, limit: Optional[int], redis: Redis) -> tuple[list[_Recipient], int]:
     now = datetime.now(UTC).replace(tzinfo=None)
     stmt = (
         select(
@@ -406,14 +467,20 @@ async def _select_recipients(session: AsyncSession, filters: BroadcastFilters, l
             UserSubscription.started_at,
             SubscriptionTier.name,
         )
-        .join(UserSubscription, UserSubscription.user_id == AppUser.id)
-        .join(SubscriptionTier, SubscriptionTier.id == UserSubscription.tier_id)
-        .where(
-            UserSubscription.status == SubscriptionStatus.active,
-            or_(UserSubscription.expires_at.is_(None), UserSubscription.expires_at > now),
+        .select_from(AppUser)
+        .join(
+            UserSubscription,
+            (UserSubscription.user_id == AppUser.id)
+            & (UserSubscription.status == SubscriptionStatus.active)
+            & (or_(UserSubscription.expires_at.is_(None), UserSubscription.expires_at > now)),
+            isouter=True,
         )
-        .order_by(UserSubscription.started_at.desc())
+        .join(SubscriptionTier, SubscriptionTier.id == UserSubscription.tier_id, isouter=True)
+        .order_by(UserSubscription.started_at.desc().nulls_last(), AppUser.id.asc())
     )
+
+    if filters.user_scope == "active_subscribers":
+        stmt = stmt.where(UserSubscription.user_id.is_not(None))
 
     if filters.tier_ids:
         stmt = stmt.where(UserSubscription.tier_id.in_(filters.tier_ids))
@@ -461,10 +528,17 @@ async def _select_recipients(session: AsyncSession, filters: BroadcastFilters, l
         active_ids = set((await session.exec(activity_stmt)).all())
         recipients = [r for r in recipients if r.user_id in active_ids]
 
+    recipients = await _apply_sentry_cohort_filters(recipients, filters)
+    recipients, cooldown_excluded = await _apply_broadcast_cooldown(
+        redis,
+        recipients,
+        filters.min_hours_since_last_broadcast,
+    )
+
     if limit:
         recipients = recipients[:limit]
 
-    return recipients
+    return recipients, cooldown_excluded
 
 
 async def _broadcast_worker(
@@ -580,6 +654,12 @@ async def _broadcast_worker(
 
             await _write_job(redis, job)
             await _write_recipient_status(redis, job_id, recipient_status)
+            if recipient_status.status == "sent" and recipient_status.delivered_at is not None:
+                await redis.set(
+                    _recipient_last_sent_key(recipient.user_id),
+                    recipient_status.delivered_at.astimezone(UTC).isoformat(),
+                )
+                await redis.expire(_recipient_last_sent_key(recipient.user_id), _BROADCAST_JOB_TTL_SECONDS)
             await asyncio.sleep(delay_s)
 
         if job.status not in {"cancelled", "cancelling"}:
@@ -749,11 +829,12 @@ async def broadcast_panel() -> str:
 async def preview_broadcast(
     req: BroadcastRequest,
     session: AsyncSession = Depends(get_session),
+    redis: Redis = Depends(get_redis),
     x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
     current_user: Optional[AppUser] = Depends(_get_optional_current_user),
 ) -> BroadcastPreviewResponse:
     _check_admin_access(x_admin_token, current_user)
-    recipients = await _select_recipients(session, req.filters, req.limit)
+    recipients, _cooldown_excluded = await _select_recipients(session, req.filters, req.limit, redis)
     return BroadcastPreviewResponse(
         recipients=len(recipients),
         recipient_fingerprint=_build_recipient_fingerprint(recipients),
@@ -787,9 +868,10 @@ async def _enqueue_broadcast_job(
                     pending=existing_job.pending,
                     updated_at=existing_job.updated_at,
                     idempotency_key=existing_job.idempotency_key,
+                    cooldown_excluded=existing_job.cooldown_excluded,
                     note=existing_job.note,
                 )
-    recipients = await _select_recipients(session, req.filters, req.limit)
+    recipients, cooldown_excluded = await _select_recipients(session, req.filters, req.limit, redis)
 
     if not recipients:
         raise HTTPException(status_code=400, detail="No recipients matched filters")
@@ -819,6 +901,7 @@ async def _enqueue_broadcast_job(
         created_by_telegram_id=current_user.telegram_id if current_user else None,
         expected_recipient_fingerprint=req.expected_recipient_fingerprint,
         idempotency_key=req.idempotency_key,
+        cooldown_excluded=cooldown_excluded,
     )
     await _write_job(redis, job)
     await _write_recipient_snapshot(redis, job_id, recipients)
@@ -846,6 +929,7 @@ async def _enqueue_broadcast_job(
         pending=job.pending,
         updated_at=job.updated_at,
         idempotency_key=job.idempotency_key,
+        cooldown_excluded=job.cooldown_excluded,
         note=job.note,
     )
 

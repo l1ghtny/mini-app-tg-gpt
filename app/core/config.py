@@ -61,6 +61,10 @@ class Settings:
     custom_logger = logging.getLogger("uvicorn")
     # Add Sentry Config
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    SENTRY_AUTH_TOKEN: str = os.getenv("SENTRY_AUTH_TOKEN", "")
+    SENTRY_ORG: str = os.getenv("SENTRY_ORG", "")
+    SENTRY_PROJECT: str = os.getenv("SENTRY_PROJECT", "")
+    SENTRY_BASE_URL: str = os.getenv("SENTRY_BASE_URL", "https://sentry.io")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "local")  # e.g. 'production', 'staging'
     TBANK_TAXATION: str = "usn_income"
     STARTER_BUNDLE_NAME: str = os.getenv("STARTER_BUNDLE")
