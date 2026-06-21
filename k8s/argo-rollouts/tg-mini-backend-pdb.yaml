@@ -1,0 +1,11 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tg-mini-backend
+  namespace: gpt
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: tg-mini-backend
+

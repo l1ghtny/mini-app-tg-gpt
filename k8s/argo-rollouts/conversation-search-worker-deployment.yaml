@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conversation-search-worker
+  namespace: gpt
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: conversation-search-worker
+  template:
+    metadata:
+      labels:
+        app: conversation-search-worker
+    spec:
+      hostAliases:
+      - ip: 10.77.0.2
+        hostnames:
+        - securepay.tinkoff.ru
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: conversation-search-worker
+      containers:
+      - name: worker
+        image: localhost:32000/tg-mini-app-backend:251
+        imagePullPolicy: Always
+        workingDir: /app
+        command: ["python", "-m", "jobs.conversation_search_worker"]
+        env:
+        - name: HTTPS_PROXY
+          value: socks5://warp-proxy:1080
+        - name: HTTP_PROXY
+          value: socks5://warp-proxy:1080
+        - name: CONVERSATION_SEARCH_POLL_SECONDS
+          value: "1.0"
+        envFrom:
+        - secretRef:
+            name: backend-env
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+

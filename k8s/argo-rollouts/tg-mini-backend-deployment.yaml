@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tg-mini-backend
+  namespace: gpt
+spec:
+  replicas: 0
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: tg-mini-backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        app: tg-mini-backend
+    spec:
+      hostAliases:
+      - ip: 10.77.0.2
+        hostnames:
+        - securepay.tinkoff.ru
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: tg-mini-backend
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: tg-mini-backend
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: api
+        image: localhost:32000/tg-mini-app-backend:251
+        imagePullPolicy: Always
+        env:
+        - name: HTTPS_PROXY
+          value: socks5://warp-proxy:1080
+        - name: HTTP_PROXY
+          value: socks5://warp-proxy:1080
+        envFrom:
+        - secretRef:
+            name: backend-env
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+        readinessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 1
+          successThreshold: 1
+          failureThreshold: 3
+        livenessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 1
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          tcpSocket:
+            port: 8000
+          periodSeconds: 5
+          timeoutSeconds: 1
+          successThreshold: 1
+          failureThreshold: 30
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+

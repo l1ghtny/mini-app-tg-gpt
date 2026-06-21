@@ -1,0 +1,86 @@
+apiVersion: postgres-operator.crunchydata.com/v1beta1
+kind: PostgresCluster
+metadata:
+  name: tg-mini-app-db
+  namespace: gpt
+spec:
+  postgresVersion: 16
+  port: 5432
+  patroni:
+    leaderLeaseDurationSeconds: 30
+    port: 8008
+    syncPeriodSeconds: 10
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          max_connections: "300"
+  instances:
+  - name: instance1
+    replicas: 3
+    dataVolumeClaimSpec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+    sidecars:
+      replicaCertCopy:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+            - key: postgres-operator.crunchydata.com/cluster
+              operator: In
+              values:
+              - tg-mini-app-db
+            - key: postgres-operator.crunchydata.com/data
+              operator: In
+              values:
+              - postgres
+          topologyKey: kubernetes.io/hostname
+    topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          postgres-operator.crunchydata.com/cluster: tg-mini-app-db
+          postgres-operator.crunchydata.com/data: postgres
+  users:
+  - name: backend
+    options: LOGIN
+    databases:
+    - tg-mini-app-db
+  backups:
+    pgbackrest:
+      configuration:
+      - secret:
+          name: tg-mini-app-db-pgbackrest-secrets
+      global:
+        repo1-path: /pgbackrest/gpt/tg-mini-app-db/repo1
+        repo1-retention-diff: "14"
+        repo1-retention-full: "4"
+      repos:
+      - name: repo1
+        s3:
+          bucket: tg-mini-app-db-backups-prod
+          endpoint: 3976b304dd7e75b248d867d320740478.r2.cloudflarestorage.com
+          region: auto
+        schedules:
+          differential: 0 3 * * 1-6
+          full: 0 3 * * 0
