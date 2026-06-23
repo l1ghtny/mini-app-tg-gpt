@@ -232,6 +232,50 @@ async def test_history_keeps_stored_user_image_url_when_openai_url_differs(monke
 
 
 @pytest.mark.asyncio
+async def test_history_skips_unavailable_historic_user_images(monkeypatch):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = m.AppUser(telegram_id=721000207)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        conversation = m.Conversation(user_id=user.id, title=f"conv-{uuid.uuid4()}")
+        session.add(conversation)
+        await session.commit()
+        await session.refresh(conversation)
+
+        old_user_message = m.Message(conversation_id=conversation.id, role="user")
+        latest_user_message = m.Message(conversation_id=conversation.id, role="user")
+        session.add(old_user_message)
+        session.add(latest_user_message)
+        await session.commit()
+        await session.refresh(old_user_message)
+        await session.refresh(latest_user_message)
+
+        stale_url = "https://lightny.ru/images/images/free/uploaded/2026/06/15/missing.png"
+        session.add(m.MessageContent(message_id=old_user_message.id, ordinal=0, type="image_url", value=stale_url))
+        session.add(m.MessageContent(message_id=latest_user_message.id, ordinal=0, type="text", value="continue this chat"))
+        await session.commit()
+
+        async def fake_ensure_image_url(_session, url, max_size=2048):
+            if url == stale_url:
+                raise HTTPException(status_code=410, detail="Image unavailable")
+            return url
+
+        monkeypatch.setattr(chat_helpers, "ensure_openai_compatible_image_url", fake_ensure_image_url, raising=True)
+
+        history = await chat_helpers._build_history_for_openai(session, conversation.id)
+
+    assert history == [{"role": "user", "content": [{"type": "input_text", "text": "continue this chat"}]}]
+
+@pytest.mark.asyncio
 async def test_history_rejects_processing_user_image_until_ready(monkeypatch):
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url
@@ -310,3 +354,4 @@ def test_resolve_system_prompt_includes_main_and_folder_prompts():
     assert "Use concise and practical wording." in resolved
     assert "Folder prompt for this chat:" in resolved
     assert "Focus on backend architecture details." in resolved
+

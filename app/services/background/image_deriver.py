@@ -1,10 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import io
 import hashlib
 from typing import Optional, Tuple
 
+from botocore.exceptions import ClientError
 from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -19,6 +20,7 @@ from app.core.config import settings
 from app.services.image_assets import (
     IMAGE_STATUS_ACTIVE,
     IMAGE_STATUS_EXPIRED,
+    IMAGE_STATUS_MISSING,
     IMAGE_STATUS_PROCESSING,
     effective_image_status,
     find_asset_by_url,
@@ -41,6 +43,14 @@ except Exception:
 
 
 SUPPORTED_DIRECT = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
+
+def _is_not_found_client_error(exc: ClientError) -> bool:
+    error = exc.response.get("Error") or {}
+    code = str(error.get("Code") or "").strip()
+    status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return status_code == 404 or code in {"404", "NoSuchKey", "NotFound"}
+
 
 def _normalize_public_base_url(base_url: str | None) -> str | None:
     if not base_url:
@@ -80,7 +90,7 @@ def _key_from_public_url(url: str) -> Optional[str]:
     for public_base_url in _known_public_base_urls():
         if url.startswith(public_base_url):
             return _strip_legacy_bucket_prefix(url[len(public_base_url):])
-    return None  # external URL or a different domain → pass through as-is
+    return None  # external URL or a different domain -> pass through as-is
 
 def _decide_target(mime: str, has_alpha: bool) -> str:
     if mime in SUPPORTED_DIRECT:
@@ -142,8 +152,8 @@ async def ensure_openai_compatible_image_url(
 ) -> str:
     """
     If this is our R2 public URL, ensure it's directly consumable by OpenAI.
-    - If already PNG/JPEG/WEBP/GIF → return original public URL.
-    - Else (e.g., HEIC) → derive once (JPEG/PNG), cache, and return derived public URL.
+    - If already PNG/JPEG/WEBP/GIF -> return original public URL.
+    - Else (e.g., HEIC) -> derive once (JPEG/PNG), cache, and return derived public URL.
     External URLs: returned unchanged.
     """
     asset = await find_asset_by_url(session, url_or_key)
@@ -171,13 +181,20 @@ async def ensure_openai_compatible_image_url(
 
     key = _key_from_public_url(url_or_key)
     if key is None:
-        # Not our bucket / unknown domain → let OpenAI fetch it as-is
+        # Not our bucket / unknown domain -> let OpenAI fetch it as-is
         return url_or_key
 
     openai_url = _public_url(key, for_openai=True)
 
-    # HEAD → content-type
-    meta = await head_object(key)
+    # HEAD -> content-type
+    try:
+        meta = await head_object(key)
+    except ClientError as exc:
+        if _is_not_found_client_error(exc):
+            if asset and asset.status != IMAGE_STATUS_MISSING:
+                await mark_asset_status(session, asset, IMAGE_STATUS_MISSING)
+            raise HTTPException(status_code=410, detail="Image unavailable") from exc
+        raise
     mime = (meta.get("ContentType") or "application/octet-stream").lower()
 
     if mime in SUPPORTED_DIRECT:
@@ -235,3 +252,4 @@ async def ensure_openai_compatible_image_url(
         raise HTTPException(status_code=409, detail="image_not_ready") from exc
 
     return derived_openai_url
+

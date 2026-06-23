@@ -2,39 +2,37 @@
 
 ## Current objective
 
-Fix the production document upload regression affecting `POST /api/v1/documents/upload`.
+Triage and fix Sentry issue `GPT-MINI-APP-BACKEND-5B` on `GET /api/v1/user/usage/me/image-models`.
 
 ## In progress
 
-- Backend patch is implemented locally.
-- Local regression coverage is added and passing.
-- Production verification still needs a deploy and a fresh Sentry check after release.
+- Backend patch is implemented locally to stop repeated pacing queries inside `get_image_usage()`.
+- Focused regression coverage is added for the image-models response path.
+- Local verification passed with focused pytest coverage and a syntax check.
 
 ## Completed
 
-- Queried Sentry production events for backend project `gpt-mini-app-backend`.
-- Confirmed repeated prod failures on June 18, 2026 in release `1.6.1` with:
-  - exception: `MissingGreenlet`
-  - transaction: `/api/v1/documents/upload`
+- Queried Sentry production issue `GPT-MINI-APP-BACKEND-5B` on June 23, 2026 in org `kosh-games`, project `gpt-mini-app-backend`.
+- Confirmed it is a transaction/performance issue, not an exception:
+  - issue type: `performance_n_plus_one_db_queries`
+  - endpoint: `GET /api/v1/user/usage/me/image-models`
   - environment: `production_main_server`
-  - culprit/location: `app/api/document_helpers.py` / `_active_provider_artifacts`
-- Traced the failure to the upload response path:
-  - `upload_document()` committed successfully
-  - `session.refresh(document)` left `provider_artifacts` unavailable for safe async access in the response serializer
-  - `_document_to_response()` then touched `document.provider_artifacts` and triggered a lazy load in the wrong context
-- Patched [app/api/document_helpers.py](G:\0\Coding_projects\Python\PycharmProjects\mini-app-tg-gpt\app\api\document_helpers.py) to reload the saved document through `_load_document_for_user(...)` before serializing the response.
-- Added a focused regression test in [tests/test_document_provider_fallback.py](G:\0\Coding_projects\Python\PycharmProjects\mini-app-tg-gpt\tests\test_document_provider_fallback.py) covering `upload_document()` returning provider artifacts without a lazy-load failure.
-- Validated successfully:
-  - `poetry run pytest tests/test_document_provider_fallback.py`
+  - release: `1.6.1`
+  - count: `9`
+  - affected users: `1`
+- Traced the repeated query signature to `request_ledger` reads under the image usage path.
+- Confirmed the backend cause in code:
+  - `app/api/user_usage_helpers.py:get_image_usage()` called `check_image_pacing()` inside the resolution/source loop.
+  - `app/services/subscription_check/pacing.py:get_image_energy_snapshot()` re-queries `RequestLedger` on each pacing check.
+  - The entitlement payload already carries `energy_balance`, so the later per-resolution pacing checks were redundant.
 
 ## Blockers and risks
 
-- This session did not deploy the backend, so the fix is only locally validated.
-- Sentry issue grouping will still show historical failures until a fixed release is deployed and exercised.
+- This is a production performance signal, so local tests can verify the query path removal but cannot confirm Sentry issue closure without a deploy.
+- Other endpoints may still have similar snapshot-recomputation patterns and would need separate production evidence before widening the fix.
 
 ## Next steps
 
-- Deploy the backend patch.
-- Re-test a real document upload in production.
-- Re-check Sentry for new `/api/v1/documents/upload` events after the deploy.
-- If uploads still fail after this fix, inspect the background ingestion task separately for OpenAI vector-store or provider-specific errors.
+- Run focused tests for the image usage helpers.
+- If tests pass, re-check `GPT-MINI-APP-BACKEND-5B` after deploy for fresh events on or after June 23, 2026.
+

@@ -1520,8 +1520,13 @@ async def _build_history_for_openai(
     if summary_item:
         history.append(summary_item)
 
+    latest_message_id = selected[-1].message_id
     for candidate in selected:
-        finalized = await _finalize_history_payload(session, candidate)
+        finalized = await _finalize_history_payload(
+            session,
+            candidate,
+            skip_unavailable_images=candidate.message_id != latest_message_id,
+        )
         if finalized:
             history.append(finalized)
 
@@ -1602,7 +1607,9 @@ def _build_history_candidate(msg: Message) -> _HistoryCandidate | None:
 async def _finalize_history_payload(
     session: AsyncSession,
     candidate: _HistoryCandidate,
-) -> dict[str, Any]:
+    *,
+    skip_unavailable_images: bool = False,
+) -> dict[str, Any] | None:
     payload = {"role": candidate.payload["role"], "content": []}
     for part in candidate.payload.get("content", []):
         if part.get("type") != "input_image":
@@ -1612,9 +1619,16 @@ async def _finalize_history_payload(
         source_url = part.get("image_url")
         if not source_url:
             continue
-        compatible_url = await ensure_openai_compatible_image_url(session, source_url, max_size=2048)
+        try:
+            compatible_url = await ensure_openai_compatible_image_url(session, source_url, max_size=2048)
+        except HTTPException as exc:
+            if skip_unavailable_images and exc.status_code == 410:
+                continue
+            raise
         payload["content"].append({"type": "input_image", "image_url": compatible_url})
 
+    if not payload["content"]:
+        return None
     return payload
 
 
@@ -1839,3 +1853,4 @@ async def handle_conversation_search(
         current_user=current_user,
         query=query,
     )
+

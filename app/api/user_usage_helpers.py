@@ -42,6 +42,27 @@ def _daily_energy_from_entitlement(ent: dict) -> int:
     return int(ent.get("daily_image_energy") or 0)
 
 
+def _pacing_from_energy_balance(ent: dict, cost: float) -> tuple[bool, timedelta] | None:
+    energy_balance = ent.get("energy_balance") or {}
+    if not energy_balance:
+        return None
+
+    daily_target = float(_daily_energy_from_entitlement(ent))
+    if daily_target <= 0:
+        return None
+
+    available_energy = float(energy_balance.get("available_energy") or 0.0)
+    if cost <= 0 or available_energy >= cost:
+        return False, timedelta(seconds=0)
+
+    refill_rate_per_sec = daily_target / 86400.0
+    if refill_rate_per_sec <= 0:
+        return True, timedelta(days=365)
+
+    missing_energy = cost - available_energy
+    return True, timedelta(seconds=(missing_energy / refill_rate_per_sec))
+
+
 def _image_option_sort_key(option: str) -> tuple[int, str]:
     normalized = (option or "").strip().lower()
     order = {
@@ -194,25 +215,28 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
                     ent_remaining = int(math.floor(ent_remaining_credits / cost)) if cost > 0 else 0
                 pacing = None
                 if ent["kind"] == "tier" and _daily_energy_from_entitlement(ent) > 0:
-                    daily_target = _daily_energy_from_entitlement(ent)
                     tier_id = uuid.UUID(ent["tier_id"]) if ent.get("tier_id") else None
                     if tier_id:
-                        # Find the actual tier to get is_recurring and monthly_images
-                        tier = next((s.tier for s in subscriptions if str(s.tier_id) == str(tier_id)), None)
-                        sub = next((s for s in subscriptions if str(s.tier_id) == str(tier_id)), None)
-                        is_recurring = getattr(tier, "is_recurring", True) if tier else True
-                        total_pool = float(getattr(tier, "monthly_images", 0) or 0) if tier else 0.0
-                        
-                        is_throttled, wait_time = await check_image_pacing(
-                            session,
-                            user.id,
-                            daily_target=daily_target,
-                            cost=cost,
-                            tier_id=tier_id,
-                            is_recurring=is_recurring,
-                            total_pool=total_pool,
-                            started_at=sub.started_at if sub else None,
-                        )
+                        pacing_state = _pacing_from_energy_balance(ent, cost)
+                        if pacing_state is None:
+                            daily_target = _daily_energy_from_entitlement(ent)
+                            tier = next((s.tier for s in subscriptions if str(s.tier_id) == str(tier_id)), None)
+                            sub = next((s for s in subscriptions if str(s.tier_id) == str(tier_id)), None)
+                            is_recurring = getattr(tier, "is_recurring", True) if tier else True
+                            total_pool = float(getattr(tier, "monthly_images", 0) or 0) if tier else 0.0
+
+                            pacing_state = await check_image_pacing(
+                                session,
+                                user.id,
+                                daily_target=daily_target,
+                                cost=cost,
+                                tier_id=tier_id,
+                                is_recurring=is_recurring,
+                                total_pool=total_pool,
+                                started_at=sub.started_at if sub else None,
+                            )
+
+                        is_throttled, wait_time = pacing_state
                         pacing = {
                             "is_throttled": is_throttled,
                             "wait_seconds": int(wait_time.total_seconds()),

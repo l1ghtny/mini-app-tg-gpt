@@ -7,8 +7,10 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.api.user_usage_helpers import get_image_energy_usage
+from app.api import user_usage_helpers
+from app.api.user_usage_helpers import get_image_energy_usage, get_image_usage
 from app.db import models as m
+from app.db.models import ImageQualityPricing
 from app.db.subscription_tiers import (
     SubscriptionStatus,
     SubscriptionTier,
@@ -225,3 +227,71 @@ async def test_image_energy_usage_recurring_daily_budget_accumulates_five_day_bu
     assert source.available_energy == 397
     assert source.saved_energy == 317
     assert source.used_energy == 3
+
+
+
+@pytest.mark.asyncio
+async def test_image_usage_reuses_preloaded_energy_snapshot_for_pacing(monkeypatch):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = m.AppUser(telegram_id=721000605)
+        session.add(user)
+        await session.flush()
+
+        tier = (await session.exec(select(SubscriptionTier).where(SubscriptionTier.name == "free"))).first()
+        assert tier is not None
+        tier.daily_image_energy = 2
+        tier.monthly_images = 20
+        tier.is_recurring = True
+        session.add(tier)
+
+        session.add(TierImageModelLimit(tier_id=tier.id, image_model="gpt-image-1.5", monthly_requests=-1))
+        session.add(TierImageQualityLimit(tier_id=tier.id, quality="low"))
+        session.add(
+            UserSubscription(
+                user_id=user.id,
+                tier_id=tier.id,
+                status=SubscriptionStatus.active,
+                started_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1),
+            )
+        )
+
+        existing_pricing = (
+            await session.exec(
+                select(ImageQualityPricing).where(
+                    ImageQualityPricing.image_model == "gpt-image-1.5",
+                    ImageQualityPricing.quality == "low",
+                    ImageQualityPricing.is_active == True,
+                )
+            )
+        ).first()
+        if existing_pricing is None:
+            session.add(
+                ImageQualityPricing(
+                    image_model="gpt-image-1.5",
+                    quality="low",
+                    credit_cost=1.0,
+                    is_active=True,
+                )
+            )
+
+        await session.commit()
+
+        async def _unexpected_check_image_pacing(*args, **kwargs):
+            raise AssertionError("get_image_usage should reuse the preloaded energy snapshot")
+
+        monkeypatch.setattr(user_usage_helpers, "check_image_pacing", _unexpected_check_image_pacing)
+
+        response = await get_image_usage(session, user)
+
+    await engine.dispose()
+
+    assert response.status == "active"
+    assert len(response.models) == 1
+    assert response.models[0].resolutions
+    pacing = response.models[0].resolutions[0].sources[0].pacing
+    assert pacing is not None
+    assert pacing.wait_seconds >= 0
