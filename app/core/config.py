@@ -35,6 +35,9 @@ class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     GEMINI_API_BASE_URL: str = os.getenv("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
+    PERPLEXITY_API_KEY: str = os.getenv("PERPLEXITY_API_KEY", "")
+    PERPLEXITY_API_BASE_URL: str = os.getenv("PERPLEXITY_API_BASE_URL", "https://api.perplexity.ai")
+    PERPLEXITY_SEARCH_CONTEXT_SIZE: str = os.getenv("PERPLEXITY_SEARCH_CONTEXT_SIZE", "low")
     GEMINI_PROXY_URL: str = (
         os.getenv("GEMINI_PROXY_URL")
         or os.getenv("GOOGLE_PROXY_URL")

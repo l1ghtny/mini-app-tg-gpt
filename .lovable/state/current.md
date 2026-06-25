@@ -2,37 +2,60 @@
 
 ## Current objective
 
-Triage and fix Sentry issue `GPT-MINI-APP-BACKEND-5B` on `GET /api/v1/user/usage/me/image-models`.
+Integrate Perplexity Sonar as a backend text provider for the Telegram mini-app, then hand off the exact frontend changes needed for Lovable.
 
 ## In progress
 
-- Backend patch is implemented locally to stop repeated pacing queries inside `get_image_usage()`.
-- Focused regression coverage is added for the image-models response path.
-- Local verification passed with focused pytest coverage and a syntax check.
+- None.
 
 ## Completed
 
-- Queried Sentry production issue `GPT-MINI-APP-BACKEND-5B` on June 23, 2026 in org `kosh-games`, project `gpt-mini-app-backend`.
-- Confirmed it is a transaction/performance issue, not an exception:
-  - issue type: `performance_n_plus_one_db_queries`
-  - endpoint: `GET /api/v1/user/usage/me/image-models`
-  - environment: `production_main_server`
-  - release: `1.6.1`
-  - count: `9`
-  - affected users: `1`
-- Traced the repeated query signature to `request_ledger` reads under the image usage path.
-- Confirmed the backend cause in code:
-  - `app/api/user_usage_helpers.py:get_image_usage()` called `check_image_pacing()` inside the resolution/source loop.
-  - `app/services/subscription_check/pacing.py:get_image_energy_snapshot()` re-queries `RequestLedger` on each pacing check.
-  - The entitlement payload already carries `energy_balance`, so the later per-resolution pacing checks were redundant.
+- Fixed migration failure reported during `alembic upgrade head`:
+  - root cause: migration used `ai_model_pricing`, but the existing SQLModel table is named `aimodelpricing`
+  - patched `l1a2b3c4d5e6_add_perplexity_sonar_models.py` to seed/delete from `aimodelpricing`
+- Added Perplexity config:
+  - `PERPLEXITY_API_KEY`
+  - `PERPLEXITY_API_BASE_URL`
+  - `PERPLEXITY_SEARCH_CONTEXT_SIZE`
+- Added `sonar` and `sonar-pro` to the backend text model registry under provider `perplexity`.
+- Added `app/services/perplexity_service.py` to call Perplexity Sonar through OpenAI-compatible chat completions and normalize stream output into existing SSE event types.
+- Wired `stream_normalized_ai_response()` to route Perplexity models to the new provider adapter.
+- Kept Perplexity text-only:
+  - rejects image input
+  - rejects image generation
+  - keeps file search restricted to OpenAI
+  - uses the existing OpenAI image default for conversation/settings compatibility
+- Added migration `l1a2b3c4d5e6_add_perplexity_sonar_models.py` to seed:
+  - text model catalog rows
+  - provider pricing rows
+  - tier limits
+  - usage pack limits where matching source limits exist
+- Added focused tests in `tests/test_perplexity_provider.py`.
+- Added durable memory note `.lovable/memory/tech/perplexity-sonar-provider.md`.
+
+## Verification
+
+- `poetry run alembic upgrade head`
+  - passed locally after the pricing table-name fix
+- `poetry run pytest tests/test_perplexity_provider.py tests/test_google_provider_contracts.py tests/test_user_settings_endpoint.py tests/test_models_catalog_endpoint.py`
+  - passed: 10 tests
+- `poetry run pytest tests/test_perplexity_provider.py tests/test_models_catalog_endpoint.py tests/test_text_daily_reset.py tests/test_text_infinite_entitlement.py`
+  - passed: 10 tests after the migration fix
+- `poetry run pytest tests/test_text_daily_reset.py tests/test_text_infinite_entitlement.py`
+  - passed: 5 tests
+- `poetry run python -m py_compile app\services\perplexity_service.py app\services\ai_service.py app\services\model_registry.py app\api\chat_helpers.py app\api\model_catalog_helpers.py app\services\subscription_check\realtime_check.py migrations\versions\l1a2b3c4d5e6_add_perplexity_sonar_models.py`
+  - passed
+- `poetry run alembic heads`
+  - current head: `l1a2b3c4d5e6`
 
 ## Blockers and risks
 
-- This is a production performance signal, so local tests can verify the query path removal but cannot confirm Sentry issue closure without a deploy.
-- Other endpoints may still have similar snapshot-recomputation patterns and would need separate production evidence before widening the fix.
+- Live runtime validation still requires a real `PERPLEXITY_API_KEY`.
+- Perplexity streaming was verified with mocked OpenAI-compatible chunks, not a live API call.
+- Frontend must disable image/file controls for Perplexity models before this is exposed broadly.
 
 ## Next steps
 
-- Run focused tests for the image usage helpers.
-- If tests pass, re-check `GPT-MINI-APP-BACKEND-5B` after deploy for fresh events on or after June 23, 2026.
-
+- Add `PERPLEXITY_API_KEY` in staging/production secrets.
+- Run `poetry run alembic upgrade head` during deploy.
+- Ask frontend/Lovable to add model picker and tool-control support for provider `perplexity`.

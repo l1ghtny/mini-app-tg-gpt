@@ -9,6 +9,8 @@ TextModelName = Literal[
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.1-pro-preview",
+    "sonar",
+    "sonar-pro",
 ]
 
 ImageModelName = Literal[
@@ -18,7 +20,8 @@ ImageModelName = Literal[
     "gemini-3-pro-image-preview",
 ]
 
-ProviderName = Literal["openai", "google"]
+ProviderName = Literal["openai", "google", "perplexity"]
+ImageProviderName = Literal["openai", "google"]
 
 TEXT_MODEL_PROVIDER: dict[str, ProviderName] = {
     "gpt-5.5": "openai",
@@ -29,9 +32,11 @@ TEXT_MODEL_PROVIDER: dict[str, ProviderName] = {
     "gemini-3.1-flash-lite": "google",
     "gemini-3.5-flash": "google",
     "gemini-3.1-pro-preview": "google",
+    "sonar": "perplexity",
+    "sonar-pro": "perplexity",
 }
 
-IMAGE_MODEL_PROVIDER: dict[str, ProviderName] = {
+IMAGE_MODEL_PROVIDER: dict[str, ImageProviderName] = {
     "gpt-image-1.5": "openai",
     "gpt-image-2": "openai",
     "gemini-3.1-flash-image-preview": "google",
@@ -41,11 +46,18 @@ IMAGE_MODEL_PROVIDER: dict[str, ProviderName] = {
 DEFAULT_TEXT_MODEL_BY_PROVIDER: dict[ProviderName, str] = {
     "openai": "gpt-5.4-nano",
     "google": "gemini-3.1-flash-lite",
+    "perplexity": "sonar",
 }
 
-DEFAULT_IMAGE_MODEL_BY_PROVIDER: dict[ProviderName, str] = {
+DEFAULT_IMAGE_MODEL_BY_PROVIDER: dict[ImageProviderName, str] = {
     "openai": "gpt-image-1.5",
     "google": "gemini-3.1-flash-image-preview",
+}
+
+TEXT_PROVIDER_IMAGE_PROVIDER: dict[ProviderName, ImageProviderName] = {
+    "openai": "openai",
+    "google": "google",
+    "perplexity": "openai",
 }
 
 LEGACY_IMAGE_MODEL_REPLACEMENTS: dict[str, str] = {
@@ -61,6 +73,8 @@ TEXT_USAGE_BUCKET_MEMBERS: dict[str, tuple[str, ...]] = {
     "gpt-5.4-nano": ("gpt-5.4-nano", "gemini-3.1-flash-lite"),
     "gpt-5.4-mini": ("gpt-5.4-mini", "gemini-3.5-flash"),
     "gpt-5.5": ("gpt-5.5", "gemini-3.1-pro-preview"),
+    "sonar": ("sonar",),
+    "sonar-pro": ("sonar-pro",),
 }
 
 TEXT_MODEL_DISPLAY_NAMES: dict[str, tuple[str, str]] = {
@@ -72,6 +86,8 @@ TEXT_MODEL_DISPLAY_NAMES: dict[str, tuple[str, str]] = {
     "gemini-3.1-flash-lite": ("Gemini 3.1 Flash Lite", "Gemini 3.1 Flash Lite"),
     "gemini-3.5-flash": ("Gemini 3.5 Flash", "Gemini 3.5 Flash"),
     "gemini-3.1-pro-preview": ("Gemini 3.1 Pro", "Gemini 3.1 Pro"),
+    "sonar": ("Perplexity Sonar", "Perplexity Sonar"),
+    "sonar-pro": ("Perplexity Sonar Pro", "Perplexity Sonar Pro"),
 }
 
 TEXT_USAGE_BUCKET_BY_MODEL: dict[str, str] = {}
@@ -88,12 +104,17 @@ def get_text_model_provider(model_name: str) -> ProviderName:
     return TEXT_MODEL_PROVIDER[model_name]
 
 
-def get_image_model_provider(model_name: str) -> ProviderName:
+def get_image_model_provider(model_name: str) -> ImageProviderName:
     return IMAGE_MODEL_PROVIDER[canonicalize_image_model(model_name)]
 
 
-def get_default_image_model_for_provider(provider: ProviderName) -> str:
-    return DEFAULT_IMAGE_MODEL_BY_PROVIDER[provider]
+def get_image_provider_for_text_provider(provider: ProviderName) -> ImageProviderName:
+    return TEXT_PROVIDER_IMAGE_PROVIDER[provider]
+
+
+def get_default_image_model_for_provider(provider: ProviderName | ImageProviderName) -> str:
+    image_provider = TEXT_PROVIDER_IMAGE_PROVIDER.get(provider, provider)
+    return DEFAULT_IMAGE_MODEL_BY_PROVIDER[image_provider]
 
 
 def get_default_text_model_for_provider(provider: ProviderName) -> str:
@@ -123,4 +144,6 @@ def get_text_usage_bucket_display_names(model_name: str) -> tuple[str, str]:
 
 
 def models_share_provider(text_model: str, image_model: str) -> bool:
-    return get_text_model_provider(text_model) == get_image_model_provider(image_model)
+    text_provider = get_text_model_provider(text_model)
+    image_provider = get_image_model_provider(image_model)
+    return get_image_provider_for_text_provider(text_provider) == image_provider

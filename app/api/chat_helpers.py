@@ -128,6 +128,42 @@ def _validate_or_align_image_model(
     return image_model
 
 
+def _request_has_image_content(request: NewMessageRequest) -> bool:
+    return any(
+        getattr(item, "type", None) in {"image", "image_url"}
+        for item in (request.content or [])
+    )
+
+
+def _validate_text_provider_request_capabilities(
+    request: NewMessageRequest,
+    *,
+    model_provider: str,
+) -> None:
+    if model_provider != "perplexity":
+        return
+    if _request_has_image_content(request):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "vision_not_supported_for_provider",
+                "provider": model_provider,
+                "model": request.model,
+                "message": "Perplexity models are text-only in this app.",
+            },
+        )
+    if _is_image_generation_requested(request.tool_choice):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "image_generation_not_supported_for_provider",
+                "provider": model_provider,
+                "model": request.model,
+                "message": "Image generation is not supported for Perplexity models.",
+            },
+        )
+
+
 @dataclass(frozen=True)
 class TextEntitlementSelection:
     remaining: int
@@ -740,6 +776,8 @@ async def _check_entitlements(
     await _enforce_gpt52_safeguard(session, user, request.model)
 
     image_model, image_quality, image_size = _resolve_image_settings(request, conversation, request.model)
+    model_provider = get_text_model_provider(request.model)
+    _validate_text_provider_request_capabilities(request, model_provider=model_provider)
     _validate_provider_image_option_controls(
         request=request,
         image_model=image_model,
@@ -772,7 +810,6 @@ async def _check_entitlements(
         conversation.id,
         user=user,
     )
-    model_provider = get_text_model_provider(request.model)
     if _is_file_search_requested(request.tool_choice) and model_provider != "openai":
         raise HTTPException(
             status_code=409,

@@ -25,7 +25,7 @@ async def create_tools_list(
             FileSearchToolParam(type="file_search", vector_store_ids=vector_store_ids)
         )
 
-    if image_allowed:
+    if image_allowed and provider in {"openai", "google"}:
         image_model = canonicalize_image_model(image_model)
         if provider == "google":
             base_tools.append(

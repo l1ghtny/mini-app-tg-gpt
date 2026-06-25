@@ -7,6 +7,7 @@ from openai.types.responses.tool import CodeInterpreter, ImageGeneration
 from app.services.google_service import stream_normalized_google_response
 from app.services.model_registry import get_text_model_provider
 from app.services.openai_service import stream_normalized_openai_response
+from app.services.perplexity_service import stream_normalized_perplexity_response
 
 
 def _resolve_openai_reasoning_summary(
@@ -68,6 +69,18 @@ async def stream_normalized_ai_response(
             previous_interaction_id=previous_interaction_id,
             thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort,
+        ):
+            yield event
+        return
+
+    if provider == "perplexity":
+        async for event in stream_normalized_perplexity_response(
+            messages,
+            model or "sonar",
+            instructions=instructions,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            request_id=request_id,
         ):
             yield event
         return

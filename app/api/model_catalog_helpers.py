@@ -149,9 +149,10 @@ async def get_models_catalog(session: AsyncSession) -> ModelsCatalogResponse:
     updated_at = max(updated_candidates) if updated_candidates else datetime.now(timezone.utc).replace(tzinfo=None)
 
     provider_defaults: dict[str, dict[str, Any]] = {}
-    for provider in ("openai", "google"):
+    for provider in ("openai", "google", "perplexity"):
         text_default = next((row.model_name for row in text_rows if row.provider == provider), None)
-        image_default = next((row.model_name for row in image_rows if row.provider == provider), None)
+        image_provider = "openai" if provider == "perplexity" else provider
+        image_default = next((row.model_name for row in image_rows if row.provider == image_provider), None)
         provider_defaults[provider] = {
             "text": text_default or DEFAULT_TEXT_MODEL_BY_PROVIDER.get(provider),
             "image": image_default or DEFAULT_IMAGE_MODEL_BY_PROVIDER.get(provider),
