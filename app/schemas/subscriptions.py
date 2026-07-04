@@ -56,6 +56,11 @@ class TierImageModelLimits(BaseModel):
     requests_limit: int
 
 
+class PerplexityFeatureAccess(BaseModel):
+    search_modes: List[Literal["quick", "standard", "deep"]] = []
+    tools: List[Literal["fetch_url", "finance_search"]] = []
+
+
 class ImageQualityPricingResponse(BaseModel):
     image_model: str
     quality: str
@@ -85,6 +90,7 @@ class SubscriptionTierResponse(BaseModel):
     is_recurring: bool
     daily_image_energy: int = 0
     image_energy_max: int = 0
+    perplexity_features: PerplexityFeatureAccess = PerplexityFeatureAccess()
     allowed_image_qualities: List[str] = []
     allowed_image_models: List[str] = []
     tier_id: str

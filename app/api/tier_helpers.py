@@ -17,6 +17,7 @@ from app.schemas.subscriptions import (
     TierSubscribeResponse,
 )
 from app.services.model_registry import get_image_model_provider
+from app.services.perplexity_features import build_perplexity_feature_access
 from app.services.subscription_check.realtime_check import check_tier
 
 
@@ -216,6 +217,7 @@ def _build_tier_response(
         is_recurring=tier.is_recurring,
         daily_image_energy=daily_energy,
         image_energy_max=_image_energy_max(tier),
+        perplexity_features=build_perplexity_feature_access(tier.index or 0),
         allowed_image_qualities=allowed_qualities,
         allowed_image_models=allowed_models,
         tier_id=str(tier.id),

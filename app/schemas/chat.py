@@ -7,8 +7,17 @@ from app.services.model_registry import ImageModelName, TextModelName
 
 AllowedModels = TextModelName
 AllowedImageModels = ImageModelName
-AllowedToolChoices = Literal["web_search", "file_search", "image_generation", "code_interpreter", "auto"]
+AllowedToolChoices = Literal[
+    "web_search",
+    "file_search",
+    "image_generation",
+    "code_interpreter",
+    "fetch_url",
+    "finance_search",
+    "auto",
+]
 PremiumSampleKind = Literal["flagship_text"]
+SearchMode = Literal["quick", "standard", "deep"]
 
 
 ImageQualitySetting = Literal["low", "medium", "high"]
@@ -81,6 +90,7 @@ class NewMessageRequest(BaseModel):
     image_size: Optional[ImageSizeSetting] = None
     thinking: Optional[bool] = None
     reasoning_effort: Optional[str] = None
+    search_mode: Optional[SearchMode] = None
     premium_sample_kind: Optional[PremiumSampleKind] = None
 
 

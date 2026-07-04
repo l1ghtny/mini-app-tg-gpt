@@ -75,3 +75,31 @@ def test_tier_response_exposes_energy_cost_per_quality():
     assert len(response.image_quality_pricing) == 1
     assert response.image_quality_pricing[0].credit_cost == 10.0
     assert response.image_quality_pricing[0].energy_cost == 10.0
+
+
+def test_tier_response_exposes_perplexity_feature_access_by_rank():
+    tier_id = uuid.uuid4()
+    tier = SubscriptionTier(
+        id=tier_id,
+        name="premium-tier",
+        name_ru="premium-tier-ru",
+        description="d",
+        description_ru="d",
+        price_cents=100,
+        monthly_images=100,
+        daily_image_energy=100,
+        monthly_docs=0,
+        monthly_deepsearch=0,
+        is_active=True,
+        is_public=True,
+        index=3,
+        is_recurring=True,
+    )
+    tier.tier_model_limits = [TierModelLimit(tier_id=tier_id, model_name="sonar-pro", monthly_requests=100)]
+    tier.tier_image_model_limits = []
+    tier.tier_image_quality_limits = []
+
+    response = tier_helpers._build_tier_response(tier, pricing_by_model={})
+
+    assert response.perplexity_features.search_modes == ["quick", "standard", "deep"]
+    assert response.perplexity_features.tools == ["fetch_url", "finance_search"]

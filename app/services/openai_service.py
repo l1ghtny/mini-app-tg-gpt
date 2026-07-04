@@ -59,7 +59,7 @@ SUMMARY_JSON_SCHEMA = {
         "constraints": {"type": "array", "items": {"type": "string"}},
         "decisions": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["summary"],
+    "required": ["summary", "open_tasks", "constraints", "decisions"],
     "additionalProperties": False,
 }
 

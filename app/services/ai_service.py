@@ -53,6 +53,7 @@ async def stream_normalized_ai_response(
     fallback_messages: Optional[list[dict[str, Any]]] = None,
     thinking_enabled: bool | None = None,
     reasoning_effort: str | None = None,
+    search_mode: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     provider = get_text_model_provider(model or "gpt-5.4-nano")
     if provider == "google":
@@ -78,6 +79,8 @@ async def stream_normalized_ai_response(
             messages,
             model or "sonar",
             instructions=instructions,
+            tool_choice=tool_choice,
+            search_mode=search_mode,
             user_id=user_id,
             conversation_id=conversation_id,
             request_id=request_id,

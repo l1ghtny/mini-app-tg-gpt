@@ -44,8 +44,10 @@ from app.services.model_registry import (
     get_text_model_provider,
     models_share_provider,
 )
+from app.services.perplexity_features import required_rank_for_perplexity_options
 from app.services.streaming.test_idempotency import _choose_link_for_message
 from app.services.subscription_check.entitlements import (
+    get_active_tier,
     get_daily_text_count,
     reserve_request,
     select_image_entitlement,
@@ -84,8 +86,12 @@ _TOOL_TYPE_ALIASES = {
     "web_search_preview": "web_search",
     "web_search_preview_2025_03_11": "web_search",
     "web_search_2025_08_26": "web_search",
+    "read_url": "fetch_url",
+    "url_fetch": "fetch_url",
+    "finance": "finance_search",
 }
 _BASIC_TOOL_CHOICES = {"auto", "none", "required"}
+_PERPLEXITY_AGENT_TOOLS = {"fetch_url", "finance_search"}
 
 _DEFAULT_CONTEXT_WINDOW_TOKENS = 128000
 _DEFAULT_HISTORY_BUDGET_TOKENS = 12000
@@ -140,6 +146,19 @@ def _validate_text_provider_request_capabilities(
     *,
     model_provider: str,
 ) -> None:
+    requested_agent_tools = _requested_tool_choice_names(request.tool_choice) & _PERPLEXITY_AGENT_TOOLS
+    if requested_agent_tools and model_provider != "perplexity":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "tool_not_supported_for_provider",
+                "provider": model_provider,
+                "model": request.model,
+                "tools": sorted(requested_agent_tools),
+                "message": "This tool is currently only supported for Perplexity models.",
+            },
+        )
+
     if model_provider != "perplexity":
         return
     if _request_has_image_content(request):
@@ -152,6 +171,7 @@ def _validate_text_provider_request_capabilities(
                 "message": "Perplexity models are text-only in this app.",
             },
         )
+
     if _is_image_generation_requested(request.tool_choice):
         raise HTTPException(
             status_code=409,
@@ -163,6 +183,55 @@ def _validate_text_provider_request_capabilities(
             },
         )
 
+
+def _requested_tool_choice_names(tool_choice: Any) -> set[str]:
+    if isinstance(tool_choice, list):
+        return {
+            normalized
+            for item in tool_choice
+            for normalized in [_normalize_tool_name(item)]
+            if normalized
+        }
+
+    normalized = _normalize_tool_name(tool_choice)
+    return {normalized} if normalized else set()
+
+async def _require_perplexity_feature_access(
+    session: AsyncSession,
+    user: AppUser,
+    request: NewMessageRequest,
+    *,
+    model_provider: str,
+) -> None:
+    if model_provider != "perplexity":
+        return
+
+    required_rank, requirements = required_rank_for_perplexity_options(
+        search_mode=request.search_mode,
+        tool_names=_requested_tool_choice_names(request.tool_choice),
+    )
+    if required_rank <= 0:
+        return
+
+    active_tier = await get_active_tier(session, user.id)
+    current_rank = int(getattr(active_tier, "index", 0) or 0) if active_tier else 0
+    if current_rank >= required_rank:
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "perplexity_feature_not_allowed",
+            "model": request.model,
+            "search_mode": request.search_mode,
+            "tools": sorted(_requested_tool_choice_names(request.tool_choice)),
+            "current_tier": getattr(active_tier, "name", None),
+            "current_tier_rank": current_rank,
+            "required_tier_rank": required_rank,
+            "requirements": requirements,
+            "message": "This Perplexity option requires a higher subscription tier.",
+        },
+    )
 
 @dataclass(frozen=True)
 class TextEntitlementSelection:
@@ -220,6 +289,13 @@ async def handle_create_message(
         image_size,
         text_access_path,
     ) = await _check_entitlements(session, current_user, request, conversation)
+    provider = get_text_model_provider(request.model)
+    await _require_perplexity_feature_access(
+        session,
+        current_user,
+        request,
+        model_provider=provider,
+    )
     tools, request_tool_choice, ledger_tool_choice = _resolve_openai_tooling(
         request.tool_choice,
         available_tools,
@@ -361,6 +437,7 @@ async def handle_create_message(
         image_entitlement_pack_id=image_entitlement.usage_pack_id,
         thinking_enabled=request.thinking if request.thinking is not None else conversation.thinking,
         reasoning_effort=request.reasoning_effort,
+        search_mode=request.search_mode,
     )
     await _track_message_metrics(session, background_tasks, current_user, request.model)
 
@@ -1783,6 +1860,7 @@ def _queue_generation(
     image_entitlement_pack_id: Optional[uuid.UUID],
     thinking_enabled: Optional[bool],
     reasoning_effort: Optional[str],
+    search_mode: Optional[str],
 ) -> None:
     background_tasks.add_task(
         generate_and_publish,
@@ -1804,6 +1882,7 @@ def _queue_generation(
         image_entitlement_pack_id=image_entitlement_pack_id,
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
+        search_mode=search_mode,
     )
 
 
