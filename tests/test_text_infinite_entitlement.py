@@ -56,7 +56,7 @@ async def test_require_text_entitlement_allows_premium_sample_when_regular_quota
     entitlement = await chat_helpers._require_text_entitlement(
         None,
         user,
-        "gpt-5.5",
+        "gpt-5.6-sol",
         premium_sample_kind="flagship_text",
     )
 

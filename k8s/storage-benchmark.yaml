@@ -1,0 +1,178 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bench-hostpath-main
+  namespace: gamedev
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: main-storage
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bench-longhorn-rwo
+  namespace: gamedev
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn-r2-local
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bench-longhorn-rwx
+  namespace: gamedev
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: longhorn-r2
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-hostpath-main
+  namespace: gamedev
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeName: main-server
+      containers:
+        - name: bench
+          image: busybox:1.36
+          command: ["sh", "-c", "/bench/run.sh hostpath-main"]
+          volumeMounts:
+            - name: data
+              mountPath: /mnt/bench
+            - name: script
+              mountPath: /bench
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: bench-hostpath-main
+        - name: script
+          configMap:
+            name: storage-benchmark-script
+            defaultMode: 0755
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-longhorn-rwo
+  namespace: gamedev
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeName: k8s-node-3
+      containers:
+        - name: bench
+          image: busybox:1.36
+          command: ["sh", "-c", "/bench/run.sh longhorn-rwo"]
+          volumeMounts:
+            - name: data
+              mountPath: /mnt/bench
+            - name: script
+              mountPath: /bench
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: bench-longhorn-rwo
+        - name: script
+          configMap:
+            name: storage-benchmark-script
+            defaultMode: 0755
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-longhorn-rwx
+  namespace: gamedev
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeName: k8s-node-3
+      containers:
+        - name: bench
+          image: busybox:1.36
+          command: ["sh", "-c", "/bench/run.sh longhorn-rwx"]
+          volumeMounts:
+            - name: data
+              mountPath: /mnt/bench
+            - name: script
+              mountPath: /bench
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: bench-longhorn-rwx
+        - name: script
+          configMap:
+            name: storage-benchmark-script
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-benchmark-script
+  namespace: gamedev
+data:
+  run.sh: |
+    #!/bin/sh
+    set -eu
+    label="$1"
+    cd /mnt/bench
+    rm -rf ./*
+
+    bytes=$((512 * 1024 * 1024))
+    start=$(date +%s)
+    dd if=/dev/zero of=seq.bin bs=16M count=32
+    sync
+    end=$(date +%s)
+    secs=$((end - start))
+    [ "$secs" -lt 1 ] && secs=1
+    echo "RESULT ${label} sequential_write_seconds=${secs} approx_mib_s=$((512 / secs))"
+
+    start=$(date +%s)
+    dd if=seq.bin of=/dev/null bs=16M
+    end=$(date +%s)
+    secs=$((end - start))
+    [ "$secs" -lt 1 ] && secs=1
+    echo "RESULT ${label} sequential_read_seconds=${secs} approx_mib_s=$((512 / secs))"
+
+    mkdir small
+    start=$(date +%s)
+    i=0
+    while [ "$i" -lt 2000 ]; do
+      printf '%s\n' "$i" > "small/file-$i.txt"
+      i=$((i + 1))
+    done
+    sync
+    end=$(date +%s)
+    secs=$((end - start))
+    [ "$secs" -lt 1 ] && secs=1
+    echo "RESULT ${label} small_file_create_seconds=${secs} files_per_second=$((2000 / secs))"
+
+    mkdir copy-small
+    start=$(date +%s)
+    tar cf - -C small . | tar xf - -C copy-small
+    sync
+    end=$(date +%s)
+    secs=$((end - start))
+    [ "$secs" -lt 1 ] && secs=1
+    echo "RESULT ${label} small_file_tar_copy_seconds=${secs} files_per_second=$((2000 / secs))"
+
+    du -sh .

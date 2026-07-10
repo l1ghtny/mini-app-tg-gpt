@@ -90,7 +90,7 @@ async def test_user_settings_get_and_put():
         )
         assert response.status_code == 200
         payload = response.json()
-        assert payload["default_text_model"] == "gpt-5.5"
+        assert payload["default_text_model"] == "gpt-5.6-sol"
         assert payload["default_image_model"] == "gpt-image-2"
 
         # 5. Update default thinking and verify persistence

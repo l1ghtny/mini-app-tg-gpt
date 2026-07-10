@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: teamcity-copy-to-longhorn
+  namespace: gamedev
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeName: main-server
+      containers:
+        - name: copy
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -eux
+              mkdir -p /new-data /new-logs
+              tar cf - -C /old-data . | tar xpf - -C /new-data
+              tar cf - -C /old-logs . | tar xpf - -C /new-logs
+              sync
+              echo "data bytes:"
+              du -sh /new-data || true
+              echo "logs bytes:"
+              du -sh /new-logs || true
+          volumeMounts:
+            - name: old-data
+              mountPath: /old-data
+              readOnly: true
+            - name: old-logs
+              mountPath: /old-logs
+              readOnly: true
+            - name: new-data
+              mountPath: /new-data
+            - name: new-logs
+              mountPath: /new-logs
+      volumes:
+        - name: old-data
+          persistentVolumeClaim:
+            claimName: teamcity-data-pvc
+        - name: old-logs
+          persistentVolumeClaim:
+            claimName: teamcity-logs-pvc
+        - name: new-data
+          persistentVolumeClaim:
+            claimName: teamcity-data-pvc-longhorn
+        - name: new-logs
+          persistentVolumeClaim:
+            claimName: teamcity-logs-pvc-longhorn

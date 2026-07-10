@@ -30,7 +30,7 @@ def _build_welcoming_bonus_tier() -> SubscriptionTier:
     tier.tier_model_limits = [
         TierModelLimit(tier_id=tier_id, model_name="gpt-5.4-nano", monthly_requests=15, daily_requests=15),
         TierModelLimit(tier_id=tier_id, model_name="gemini-3.1-flash-lite", monthly_requests=15, daily_requests=15),
-        TierModelLimit(tier_id=tier_id, model_name="gpt-5.5", monthly_requests=0, daily_requests=0),
+        TierModelLimit(tier_id=tier_id, model_name="gpt-5.6-sol", monthly_requests=0, daily_requests=0),
     ]
     tier.tier_image_model_limits = [
         TierImageModelLimit(tier_id=tier_id, image_model="gpt-image-1.5", monthly_requests=40),

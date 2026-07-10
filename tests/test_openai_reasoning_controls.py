@@ -27,7 +27,7 @@ async def test_openai_thinking_false_disables_reasoning_summary(monkeypatch):
 
     assert any(e.get("type") == "done" for e in events)
     assert captured.get("reasoning_summary") is None
-    assert captured.get("reasoning_effort") is None
+    assert captured.get("reasoning_effort") == "none"
 
 
 @pytest.mark.asyncio
@@ -51,6 +51,60 @@ async def test_openai_thinking_true_enables_reasoning_effort(monkeypatch):
     assert any(e.get("type") == "done" for e in events)
     assert captured.get("reasoning_summary") == "detailed"
     assert captured.get("reasoning_effort") == "medium"
+
+
+@pytest.mark.asyncio
+async def test_explicit_openai_reasoning_effort_wins_over_boolean_default(monkeypatch):
+    captured: dict = {}
+
+    async def _fake_openai_stream(_messages, _model, **kwargs):
+        captured.update(kwargs)
+        yield {"type": "done"}
+
+    monkeypatch.setattr(ai_service, "stream_normalized_openai_response", _fake_openai_stream, raising=True)
+
+    async for _ in ai_service.stream_normalized_ai_response(
+        [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
+        model="gpt-5.6-sol",
+        thinking_enabled=True,
+        reasoning_effort="max",
+    ):
+        pass
+
+    assert captured.get("reasoning_effort") == "max"
+
+
+def test_openai_kwargs_include_max_reasoning_and_safety_identifier():
+    user_id = uuid.uuid4()
+    safety_identifier = openai_service._build_safety_identifier(user_id)
+
+    kwargs = openai_service._build_responses_create_kwargs(
+        model="gpt-5.6-sol",
+        input_data=[],
+        stream=True,
+        reasoning_effort="max",
+        safety_identifier=safety_identifier,
+    )
+
+    assert kwargs["reasoning"] == {"effort": "max"}
+    assert kwargs["service_tier"] == "default"
+    assert kwargs["safety_identifier"] == safety_identifier
+    assert safety_identifier != str(user_id)
+    assert safety_identifier == openai_service._build_safety_identifier(user_id)
+
+
+def test_openai_usage_tracker_splits_reasoning_from_total_output():
+    tracker = openai_service.UsageTracker()
+    usage = SimpleNamespace(
+        input_tokens=11,
+        output_tokens=13,
+        output_tokens_details=SimpleNamespace(reasoning_tokens=7),
+    )
+
+    tracker.apply_completed_event(SimpleNamespace(response=SimpleNamespace(usage=usage)))
+
+    assert tracker.output_tokens == 6
+    assert tracker.reasoning_tokens == 7
 
 
 @pytest.mark.asyncio

@@ -98,11 +98,11 @@ async def _seed_reference_data(engine) -> None:
             )
         )
         session.add(
-            TierModelLimit(tier_id=free.id, model_name="gpt-5.5", monthly_requests=0)
+            TierModelLimit(tier_id=free.id, model_name="gpt-5.6-sol", monthly_requests=0)
         )
         session.add(
             TierModelLimit(
-                tier_id=advanced.id, model_name="gpt-5.5", monthly_requests=0
+                tier_id=advanced.id, model_name="gpt-5.6-sol", monthly_requests=0
             )
         )
 

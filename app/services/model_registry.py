@@ -1,6 +1,9 @@
 from typing import Literal
 
 TextModelName = Literal[
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "gpt-5.2",
     "gpt-5.4",
@@ -24,6 +27,9 @@ ProviderName = Literal["openai", "google", "perplexity"]
 ImageProviderName = Literal["openai", "google"]
 
 TEXT_MODEL_PROVIDER: dict[str, ProviderName] = {
+    "gpt-5.6-sol": "openai",
+    "gpt-5.6-terra": "openai",
+    "gpt-5.6-luna": "openai",
     "gpt-5.5": "openai",
     "gpt-5.2": "openai",
     "gpt-5.4": "openai",
@@ -64,20 +70,33 @@ LEGACY_IMAGE_MODEL_REPLACEMENTS: dict[str, str] = {
     "gemini-2.5-flash-image": "gemini-3.1-flash-image-preview",
 }
 
+LEGACY_TEXT_MODEL_REPLACEMENTS: dict[str, str] = {
+    "gpt-5-nano": "gpt-5.4-nano",
+    "gpt-5-mini": "gpt-5.6-luna",
+    "gpt-5.2": "gpt-5.6-terra",
+    "gpt-5.4-mini": "gpt-5.6-luna",
+    "gpt-5.4": "gpt-5.6-terra",
+    "gpt-5.5": "gpt-5.6-sol",
+}
+
 GOOGLE_THINKING_MODELS = {
     "gemini-3.5-flash",
     "gemini-3.1-pro-preview",
 }
 
 TEXT_USAGE_BUCKET_MEMBERS: dict[str, tuple[str, ...]] = {
-    "gpt-5.4-nano": ("gpt-5.4-nano", "gemini-3.1-flash-lite"),
-    "gpt-5.4-mini": ("gpt-5.4-mini", "gemini-3.5-flash"),
-    "gpt-5.5": ("gpt-5.5", "gemini-3.1-pro-preview"),
+    "gpt-5.4-nano": ("gpt-5.4-nano", "gpt-5-nano", "gemini-3.1-flash-lite"),
+    "gpt-5.6-luna": ("gpt-5.6-luna", "gpt-5.4-mini", "gpt-5-mini", "gemini-3.5-flash"),
+    "gpt-5.6-terra": ("gpt-5.6-terra", "gpt-5.4", "gpt-5.2"),
+    "gpt-5.6-sol": ("gpt-5.6-sol", "gpt-5.5", "gemini-3.1-pro-preview"),
     "sonar": ("sonar",),
     "sonar-pro": ("sonar-pro",),
 }
 
 TEXT_MODEL_DISPLAY_NAMES: dict[str, tuple[str, str]] = {
+    "gpt-5.6-sol": ("Flagship", "Флагман"),
+    "gpt-5.6-terra": ("Balanced", "Сбалансированный"),
+    "gpt-5.6-luna": ("Smart", "Умный"),
     "gpt-5.5": ("Flagship", "Флагман"),
     "gpt-5.2": ("Balanced", "Сбалансированный"),
     "gpt-5.4": ("Balanced", "Сбалансированный"),
@@ -100,8 +119,12 @@ def canonicalize_image_model(model_name: str) -> str:
     return LEGACY_IMAGE_MODEL_REPLACEMENTS.get(model_name, model_name)
 
 
+def canonicalize_text_model(model_name: str) -> str:
+    return LEGACY_TEXT_MODEL_REPLACEMENTS.get(model_name, model_name)
+
+
 def get_text_model_provider(model_name: str) -> ProviderName:
-    return TEXT_MODEL_PROVIDER[model_name]
+    return TEXT_MODEL_PROVIDER[canonicalize_text_model(model_name)]
 
 
 def get_image_model_provider(model_name: str) -> ImageProviderName:

@@ -1,9 +1,9 @@
 import uuid
 from typing import List, Literal, Optional, Iterable, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.services.model_registry import ImageModelName, TextModelName
+from app.services.model_registry import ImageModelName, TextModelName, canonicalize_text_model
 
 AllowedModels = TextModelName
 AllowedImageModels = ImageModelName
@@ -93,6 +93,11 @@ class NewMessageRequest(BaseModel):
     search_mode: Optional[SearchMode] = None
     premium_sample_kind: Optional[PremiumSampleKind] = None
 
+    @field_validator("model", mode="before")
+    @classmethod
+    def canonicalize_legacy_model(cls, value: object) -> object:
+        return canonicalize_text_model(value) if isinstance(value, str) else value
+
 
 class EditMessageRequest(BaseModel):
     content: str
@@ -107,6 +112,11 @@ class UpdateConversationSettingsRequest(BaseModel):
     image_quality: Optional[ImageQualitySetting] = None
     image_size: Optional[ImageSizeSetting] = None
     thinking: Optional[bool] = None
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def canonicalize_legacy_model(cls, value: object) -> object:
+        return canonicalize_text_model(value) if isinstance(value, str) else value
 
 
 class ConversationInfo(BaseModel):

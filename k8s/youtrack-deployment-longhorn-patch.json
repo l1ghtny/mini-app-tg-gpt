@@ -1,0 +1,30 @@
+[
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/volumes/0/persistentVolumeClaim/claimName",
+    "value": "youtrack-pvc-longhorn"
+  },
+  {
+    "op": "add",
+    "path": "/spec/template/spec/affinity",
+    "value": {
+      "nodeAffinity": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+          "nodeSelectorTerms": [
+            {
+              "matchExpressions": [
+                {
+                  "key": "kubernetes.io/hostname",
+                  "operator": "NotIn",
+                  "values": [
+                    "main-server"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+]

@@ -31,7 +31,7 @@ def _resolve_openai_reasoning_effort(
     if thinking_enabled is None:
         return None
     if not thinking_enabled:
-        return None
+        return "none"
     # When user explicitly enables thinking on OpenAI, request non-trivial effort.
     return "medium"
 
@@ -92,7 +92,7 @@ async def stream_normalized_ai_response(
         requested_summary=reasoning_summary,
         thinking_enabled=thinking_enabled,
     )
-    openai_reasoning_effort = _resolve_openai_reasoning_effort(
+    openai_reasoning_effort = reasoning_effort or _resolve_openai_reasoning_effort(
         thinking_enabled=thinking_enabled,
     )
 

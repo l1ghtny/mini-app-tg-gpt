@@ -932,17 +932,23 @@ async def _check_entitlements(
 
 
 def _validate_reasoning_controls(request: NewMessageRequest) -> None:
-    # Backward compatibility: legacy/frontend clients may always send the
-    # boolean `thinking` toggle. For models without explicit reasoning controls
-    # we accept and ignore this value instead of hard-failing the request.
-    if request.reasoning_effort is not None and request.model not in GOOGLE_THINKING_MODELS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "reasoning_effort_not_supported_for_model",
-                "model": request.model,
-            },
-        )
+    if request.reasoning_effort is None:
+        return
+
+    provider = get_text_model_provider(request.model)
+    if provider == "openai":
+        if request.reasoning_effort in {"none", "low", "medium", "high", "xhigh", "max"}:
+            return
+    elif provider == "google" and request.model in GOOGLE_THINKING_MODELS:
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "reasoning_effort_not_supported_for_model",
+            "model": request.model,
+        },
+    )
 
 
 def _validate_provider_image_option_controls(

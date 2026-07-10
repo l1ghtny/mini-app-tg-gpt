@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teamcity-data-pvc-longhorn
+  namespace: gamedev
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn-r2-local
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teamcity-logs-pvc-longhorn
+  namespace: gamedev
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn-r2-local
+  resources:
+    requests:
+      storage: 2Gi

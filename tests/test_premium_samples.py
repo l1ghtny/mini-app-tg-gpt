@@ -56,7 +56,7 @@ async def test_premium_sample_is_rejected_for_active_free_subscription():
                 session,
                 user_id=user.id,
                 kind="flagship_text",
-                model="gpt-5.5",
+                model="gpt-5.6-sol",
             )
 
     await engine.dispose()

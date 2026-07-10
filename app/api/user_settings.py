@@ -12,6 +12,7 @@ from app.services.model_registry import (
     models_share_provider,
     TEXT_MODEL_PROVIDER,
     IMAGE_MODEL_PROVIDER,
+    canonicalize_text_model,
 )
 
 user_settings = APIRouter(tags=["user/settings"], prefix="/user/settings")
@@ -34,7 +35,7 @@ async def get_user_settings(
     current_user: AppUser = Depends(get_current_user),
 ):
     return UserSettingsResponse(
-        default_text_model=current_user.default_text_model or "gpt-5.4-nano",
+        default_text_model=canonicalize_text_model(current_user.default_text_model or "gpt-5.4-nano"),
         default_image_model=current_user.default_image_model or "gpt-image-1.5",
         default_document_provider=(getattr(current_user, "default_document_provider", None) or "openai"),
         default_thinking=bool(getattr(current_user, "default_thinking", True)),
@@ -47,7 +48,7 @@ async def update_user_settings(
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
-    text_model = request.default_text_model or current_user.default_text_model or "gpt-5.4-nano"
+    text_model = canonicalize_text_model(request.default_text_model or current_user.default_text_model or "gpt-5.4-nano")
     image_model = request.default_image_model or current_user.default_image_model or "gpt-image-1.5"
     explicit_image_model = request.default_image_model is not None
 

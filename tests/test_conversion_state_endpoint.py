@@ -73,8 +73,8 @@ async def test_conversion_state_for_free_user_without_subscription():
     assert payload["premium_sample"]["status"] == "available"
     assert payload["premium_sample"]["eligible"] is True
     assert payload["premium_sample"]["kinds"] == ["flagship_text"]
-    assert payload["premium_sample"]["available_models"] == ["gpt-5.5", "gemini-3.1-pro-preview"]
-    assert payload["premium_sample"]["default_model"] == "gpt-5.5"
+    assert payload["premium_sample"]["available_models"] == ["gpt-5.6-sol", "gemini-3.1-pro-preview"]
+    assert payload["premium_sample"]["default_model"] == "gpt-5.6-sol"
     assert payload["premium_sample"]["remaining_uses_today"] == 1
     assert payload["premium_sample"]["next_reset_at"] is not None
 
@@ -184,7 +184,7 @@ async def test_conversion_state_reports_consumed_premium_sample():
             RequestLedger(
                 user_id=user.id,
                 request_id="sample-consumed-1",
-                model_name="gpt-5.5",
+                model_name="gpt-5.6-sol",
                 feature="text",
                 cost=1.0,
                 access_path="premium_sample:flagship_text",
@@ -287,7 +287,7 @@ async def test_conversion_state_disables_premium_sample_when_free_tier_has_zero_
         await session.commit()
         await session.refresh(tier)
 
-        session.add(TierModelLimit(tier_id=tier.id, model_name="gpt-5.5", monthly_requests=0, daily_requests=0))
+        session.add(TierModelLimit(tier_id=tier.id, model_name="gpt-5.6-sol", monthly_requests=0, daily_requests=0))
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         session.add(
             UserSubscription(
@@ -342,7 +342,7 @@ async def test_conversion_event_endpoint_tracks_premium_sample_event(monkeypatch
             json={
                 "event": "premium_sample_clicked",
                 "kind": "flagship_text",
-                "model": "gpt-5.5",
+                "model": "gpt-5.6-sol",
                 "surface": "home_chip",
                 "status": "available",
             },
@@ -360,7 +360,7 @@ async def test_conversion_event_endpoint_tracks_premium_sample_event(monkeypatch
             {
                 "campaign": "ads_search_2",
                 "kind": "flagship_text",
-                "model": "gpt-5.5",
+                "model": "gpt-5.6-sol",
                 "surface": "home_chip",
                 "status": "available",
             },

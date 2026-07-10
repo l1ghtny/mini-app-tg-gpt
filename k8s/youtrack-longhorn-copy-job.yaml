@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: youtrack-copy-to-longhorn
+  namespace: gamedev
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeName: main-server
+      containers:
+        - name: copy
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -eux
+              mkdir -p /new-youtrack
+              tar cf - -C /old-youtrack . | tar xpf - -C /new-youtrack
+              sync
+              echo "youtrack bytes:"
+              du -sh /new-youtrack || true
+          volumeMounts:
+            - name: old-youtrack
+              mountPath: /old-youtrack
+              readOnly: true
+            - name: new-youtrack
+              mountPath: /new-youtrack
+      volumes:
+        - name: old-youtrack
+          persistentVolumeClaim:
+            claimName: youtrack-pvc
+        - name: new-youtrack
+          persistentVolumeClaim:
+            claimName: youtrack-pvc-longhorn

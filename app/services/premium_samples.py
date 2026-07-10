@@ -10,7 +10,7 @@ from app.schemas.conversion import PremiumSampleStateResponse
 from app.services.subscription_check.entitlements import get_current_subscription, list_text_entitlements
 
 FLAGSHIP_TEXT_SAMPLE_KIND = "flagship_text"
-FLAGSHIP_TEXT_SAMPLE_MODELS = ("gpt-5.5", "gemini-3.1-pro-preview")
+FLAGSHIP_TEXT_SAMPLE_MODELS = ("gpt-5.6-sol", "gemini-3.1-pro-preview")
 _ACTIVE_SAMPLE_STATES = ("reserved", "consumed")
 PREMIUM_SAMPLE_REASON_AVAILABLE = "available"
 PREMIUM_SAMPLE_REASON_ALREADY_SUBSCRIBED = "already_subscribed"

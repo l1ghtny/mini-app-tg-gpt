@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: affine-copy-to-longhorn
+  namespace: affine
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: copy
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -eux
+              mkdir -p /new-config /new-storage
+              tar cf - -C /old-config . | tar xpf - -C /new-config
+              tar cf - -C /old-storage . | tar xpf - -C /new-storage
+              sync
+              echo "config bytes:"
+              du -sh /new-config || true
+              echo "storage bytes:"
+              du -sh /new-storage || true
+          volumeMounts:
+            - name: old-config
+              mountPath: /old-config
+              readOnly: true
+            - name: old-storage
+              mountPath: /old-storage
+              readOnly: true
+            - name: new-config
+              mountPath: /new-config
+            - name: new-storage
+              mountPath: /new-storage
+      volumes:
+        - name: old-config
+          persistentVolumeClaim:
+            claimName: affine-config-pvc
+        - name: old-storage
+          persistentVolumeClaim:
+            claimName: affine-storage
+        - name: new-config
+          persistentVolumeClaim:
+            claimName: affine-config-pvc-longhorn
+        - name: new-storage
+          persistentVolumeClaim:
+            claimName: affine-storage-longhorn

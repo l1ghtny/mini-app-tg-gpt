@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 import json
 import random
 import time
@@ -75,6 +77,19 @@ OPENAI_UPSTREAM_ERROR_CODE = "OPENAI_UPSTREAM_UNAVAILABLE"
 OPENAI_UPSTREAM_USER_MESSAGE = "Sorry, OpenAI has some issues on their end. Please try again in a moment."
 
 
+def _build_safety_identifier(user_id: uuid.UUID | None) -> str | None:
+    if user_id is None:
+        return None
+    raw_user_id = str(user_id).encode("utf-8")
+    if main_settings.SECRET_KEY:
+        return hmac.new(
+            main_settings.SECRET_KEY.encode("utf-8"),
+            raw_user_id,
+            hashlib.sha256,
+        ).hexdigest()
+    return hashlib.sha256(raw_user_id).hexdigest()
+
+
 def _is_openai_image_download_timeout(exc: Exception) -> bool:
     msg = str(exc)
     return ("Timeout while downloading" in msg) and (
@@ -130,11 +145,12 @@ def _build_responses_create_kwargs(
     instructions: str | None = None,
     stream: bool = False,
     reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = None,
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
+    reasoning_effort: Optional[Literal["none", "low", "medium", "high", "xhigh", "max"]] = None,
     previous_response_id: str | None = None,
     max_output_tokens: int | None = None,
     text_format: dict[str, Any] | None = None,
     metadata: dict[str, str] | None = None,
+    safety_identifier: str | None = None,
 ) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {
         "model": model,
@@ -167,6 +183,8 @@ def _build_responses_create_kwargs(
         kwargs["text"] = text_format
     if metadata:
         kwargs["metadata"] = metadata
+    if safety_identifier:
+        kwargs["safety_identifier"] = safety_identifier
 
     return kwargs
 
@@ -240,13 +258,14 @@ class UsageTracker:
             return
 
         self.input_tokens = usage.input_tokens or self.input_tokens
-        self.output_tokens = usage.output_tokens or self.output_tokens
+        total_output_tokens = usage.output_tokens or self.output_tokens
 
         output_tokens_details = getattr(usage, "output_tokens_details", None)
         if output_tokens_details:
             self.reasoning_tokens = (
                 getattr(output_tokens_details, "reasoning_tokens", None) or self.reasoning_tokens
             )
+        self.output_tokens = max(0, total_output_tokens - self.reasoning_tokens)
 
 
 @dataclass
@@ -599,7 +618,7 @@ async def stream_normalized_openai_response(
     request_id: Optional[str] = None,
     assistant_message_id: Optional[uuid.UUID] = None,
     reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "auto",
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
+    reasoning_effort: Optional[Literal["none", "low", "medium", "high", "xhigh", "max"]] = None,
     previous_response_id: Optional[str] = None,
     fallback_messages: Optional[List["Message"]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -637,6 +656,7 @@ async def stream_normalized_openai_response(
                     reasoning_summary=reasoning_summary,
                     reasoning_effort=reasoning_effort,
                     metadata=request_metadata,
+                    safety_identifier=_build_safety_identifier(user_id),
                     previous_response_id=active_previous_response_id,
                 )
                 response = await client.responses.create(**create_kwargs)
@@ -722,6 +742,7 @@ async def stream_normalized_openai_response(
                         reasoning_summary=reasoning_summary,
                         reasoning_effort=reasoning_effort,
                         metadata=request_metadata,
+                        safety_identifier=_build_safety_identifier(user_id),
                         previous_response_id=active_previous_response_id,
                     )
                     response = await client.responses.create(**create_kwargs)
