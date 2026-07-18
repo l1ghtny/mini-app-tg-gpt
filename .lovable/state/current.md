@@ -6,7 +6,7 @@ Balance memory-heavy Kubernetes workloads onto `new-node` with worker failover.
 
 ## In progress
 
-- Verify Argo reconciliation and production health after scheduling policy updates.
+- None.
 
 ## Completed
 
@@ -17,6 +17,7 @@ Balance memory-heavy Kubernetes workloads onto `new-node` with worker failover.
   - one WARP replica on `new-node`
   - one WARP replica on `k8s-node-3`
 - Scheduling remains failover-capable because `new-node` is preferred, not required; node 2 and node 3 remain eligible.
+- Verified both deployments rolled out successfully and the public GPT API remained HTTP 200.
 - Inspected `gamedev` TeamCity Kubernetes objects:
   - existing `teamcity-agent-deployment` is a single-replica Deployment pinned to `main-server`
   - existing agent uses `hostPath` directories under `/opt/buildagent/...`, not PVCs
