@@ -25,6 +25,23 @@ spec:
         labelSelector:
           matchLabels:
             app: conversation-search-worker
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - main-server
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: workload.cybercolors.dev/high-memory
+                operator: In
+                values:
+                - "true"
       containers:
       - name: worker
         image: localhost:32000/tg-mini-app-backend:251
@@ -48,4 +65,3 @@ spec:
           limits:
             cpu: "1"
             memory: 1Gi
-

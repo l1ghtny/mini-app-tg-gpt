@@ -27,6 +27,22 @@ spec:
           matchLabels:
             app: warp-proxy
       affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - main-server
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: workload.cybercolors.dev/high-memory
+                operator: In
+                values:
+                - "true"
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
@@ -52,4 +68,3 @@ spec:
           capabilities:
             add:
             - NET_ADMIN
-

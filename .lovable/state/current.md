@@ -2,14 +2,21 @@
 
 ## Current objective
 
-SPB nginx/AWG stability check for `https://lightny.ru` is complete.
+Balance memory-heavy Kubernetes workloads onto `new-node` with worker failover.
 
 ## In progress
 
-- None.
+- Verify Argo reconciliation and production health after scheduling policy updates.
 
 ## Completed
 
+- Labeled `new-node` with `workload.cybercolors.dev/high-memory=true`.
+- Added soft high-memory preference and `main-server` exclusion to the conversation-search worker and WARP proxy manifests.
+- Live placement after rollout:
+  - conversation-search worker on `new-node`
+  - one WARP replica on `new-node`
+  - one WARP replica on `k8s-node-3`
+- Scheduling remains failover-capable because `new-node` is preferred, not required; node 2 and node 3 remain eligible.
 - Inspected `gamedev` TeamCity Kubernetes objects:
   - existing `teamcity-agent-deployment` is a single-replica Deployment pinned to `main-server`
   - existing agent uses `hostPath` directories under `/opt/buildagent/...`, not PVCs
@@ -114,9 +121,9 @@ SPB nginx/AWG stability check for `https://lightny.ru` is complete.
 
 ## Next steps
 
-- Authorize agents `311` and `312` in TeamCity UI.
-- After authorization, confirm both agents are connected, authorized, enabled, and assigned to the expected pool.
-- Queue or wait for builds to confirm parallel scheduling.
+- Monitor worker memory and application health after redistribution.
+- Keep Prometheus on node 2 until its `emptyDir` TSDB has a deliberate persistence/migration plan.
+- Authorize TeamCity agents `311` and `312` if still pending.
 
 ## Latest update
 
