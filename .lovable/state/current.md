@@ -2,7 +2,7 @@
 
 ## Current objective
 
-Balance memory-heavy Kubernetes workloads onto `new-node` with worker failover.
+Add a TeamCity agent on `new-node` and audit remaining workload placement and hostPath dependencies.
 
 ## In progress
 
@@ -10,6 +10,12 @@ Balance memory-heavy Kubernetes workloads onto `new-node` with worker failover.
 
 ## Completed
 
+- Added `teamcity-agent-new-node` with a dedicated 30Gi `microk8s-hostpath` PVC and stable `gamedev-teamcity-agent-new-node` identity.
+- Kept the new build cache node-local for build performance; the other three agents remain independent fallback capacity if `new-node` fails.
+- Reconciled the Docker-in-Docker insecure-registry arguments into the source manifest for all three extra agents.
+- Verified the new pod is `2/2 Running` on `new-node`, Docker Engine is reachable, and Docker Compose is installed.
+- TeamCity registered the agent as id `321` in the Default pool; it is connected and enabled but cannot be authorized under the current three-agent license.
+- Audited live memory placement and all application hostPath PV/direct-hostPath consumers.
 - Labeled `new-node` with `workload.cybercolors.dev/high-memory=true`.
 - Added soft high-memory preference and `main-server` exclusion to the conversation-search worker and WARP proxy manifests.
 - Live placement after rollout:
@@ -116,15 +122,16 @@ Balance memory-heavy Kubernetes workloads onto `new-node` with worker failover.
 
 ## Blockers and risks
 
-- TeamCity reports `gamedev-teamcity-agent-k8s-node-2` and `gamedev-teamcity-agent-k8s-node-3` as unauthorized, so they cannot run builds until approved in TeamCity.
-- First-run plugin sync is still in progress; this is expected for fresh persistent agent directories and should settle before first build use.
+- TeamCity agent `321` cannot be authorized because the current license allows only three authorized agents; either upgrade the license or replace/deauthorize an existing agent.
 - The new agents use privileged Docker-in-Docker sidecars and expose the Docker API on `localhost:2375` inside each pod.
 
 ## Next steps
 
-- Monitor worker memory and application health after redistribution.
+- Decide whether to license four concurrent TeamCity agents or replace the legacy main-server agent with agent `321`.
+- Prefer one `tg-mini-backend` replica and selected stateless services toward `new-node` with soft affinity while preserving worker fallback.
+- Replace main-server PGO replicas on worker-local storage before making the node control-plane-only; do not blanket-migrate synchronous databases to Longhorn without workload-specific latency validation.
+- Review and remove confirmed obsolete, unmounted hostPath PVCs after backup/rollback retention decisions.
 - Keep Prometheus on node 2 until its `emptyDir` TSDB has a deliberate persistence/migration plan.
-- Authorize TeamCity agents `311` and `312` if still pending.
 
 ## Latest update
 

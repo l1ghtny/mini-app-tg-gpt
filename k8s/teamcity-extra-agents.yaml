@@ -87,6 +87,12 @@ spec:
         - name: docker-dind
           image: docker:29-dind
           imagePullPolicy: IfNotPresent
+          args:
+            - --host=tcp://0.0.0.0:2375
+            - --host=unix:///var/run/docker.sock
+            - --insecure-registry=registry.container-registry.svc.cluster.local:5000
+            - --insecure-registry=10.152.183.21:5000
+            - --insecure-registry=localhost:32000
           env:
             - name: DOCKER_TLS_CERTDIR
               value: ""
@@ -190,6 +196,12 @@ spec:
         - name: docker-dind
           image: docker:29-dind
           imagePullPolicy: IfNotPresent
+          args:
+            - --host=tcp://0.0.0.0:2375
+            - --host=unix:///var/run/docker.sock
+            - --insecure-registry=registry.container-registry.svc.cluster.local:5000
+            - --insecure-registry=10.152.183.21:5000
+            - --insecure-registry=localhost:32000
           env:
             - name: DOCKER_TLS_CERTDIR
               value: ""
@@ -203,3 +215,112 @@ spec:
         - name: agent-data
           persistentVolumeClaim:
             claimName: teamcity-agent-k8s-node-3-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teamcity-agent-new-node-pvc
+  namespace: gamedev
+  labels:
+    app: teamcity-agent-extra
+    teamcity-agent: gamedev-teamcity-agent-new-node
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: microk8s-hostpath
+  resources:
+    requests:
+      storage: 30Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: teamcity-agent-new-node
+  namespace: gamedev
+  labels:
+    app: teamcity-agent-extra
+    teamcity-agent: gamedev-teamcity-agent-new-node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: teamcity-agent-extra
+      teamcity-agent: gamedev-teamcity-agent-new-node
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: teamcity-agent-extra
+        teamcity-agent: gamedev-teamcity-agent-new-node
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: new-node
+      securityContext:
+        runAsUser: 0
+      initContainers:
+        - name: prepare-agent-data
+          image: jetbrains/teamcity-agent:latest-linux-sudo
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - mkdir -p /agent-data/conf /agent-data/work /agent-data/temp /agent-data/tools /agent-data/plugins /agent-data/system /agent-data/logs /agent-data/docker
+          volumeMounts:
+            - mountPath: /agent-data
+              name: agent-data
+      containers:
+        - name: teamcity-agent
+          image: jetbrains/teamcity-agent:latest-linux-sudo
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SERVER_URL
+              value: http://teamcity-server-service.gamedev:8111/
+            - name: AGENT_NAME
+              value: gamedev-teamcity-agent-new-node
+            - name: DOCKER_HOST
+              value: tcp://localhost:2375
+          volumeMounts:
+            - mountPath: /data/teamcity_agent/conf
+              name: agent-data
+              subPath: conf
+            - mountPath: /opt/buildagent/work
+              name: agent-data
+              subPath: work
+            - mountPath: /opt/buildagent/temp
+              name: agent-data
+              subPath: temp
+            - mountPath: /opt/buildagent/tools
+              name: agent-data
+              subPath: tools
+            - mountPath: /opt/buildagent/plugins
+              name: agent-data
+              subPath: plugins
+            - mountPath: /opt/buildagent/system
+              name: agent-data
+              subPath: system
+            - mountPath: /opt/buildagent/logs
+              name: agent-data
+              subPath: logs
+        - name: docker-dind
+          image: docker:29-dind
+          imagePullPolicy: IfNotPresent
+          args:
+            - --host=tcp://0.0.0.0:2375
+            - --host=unix:///var/run/docker.sock
+            - --insecure-registry=registry.container-registry.svc.cluster.local:5000
+            - --insecure-registry=10.152.183.21:5000
+            - --insecure-registry=localhost:32000
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /var/lib/docker
+              name: agent-data
+              subPath: docker
+      volumes:
+        - name: agent-data
+          persistentVolumeClaim:
+            claimName: teamcity-agent-new-node-pvc
