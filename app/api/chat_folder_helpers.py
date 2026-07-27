@@ -2,11 +2,12 @@ import uuid
 from typing import List, Optional
 
 from fastapi import HTTPException
+from sqlalchemy import delete
 from sqlmodel import select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import AppUser, ChatFolder, Conversation
+from app.db.models import AppUser, ChatFolder, ChatFolderDocument, Conversation, UserDocument
 from app.schemas.chat_folders import ChatFolderCreate, ChatFolderUpdate
 
 async def handle_create_folder(
@@ -21,9 +22,10 @@ async def handle_create_folder(
         prompt=request.prompt
     )
     session.add(new_folder)
+    await session.flush()
+    await _replace_folder_documents(session, new_folder, request.document_ids, current_user.id)
     await session.commit()
-    await session.refresh(new_folder)
-    return new_folder
+    return await _load_owned_folder(session, new_folder.id, current_user.id)
 
 async def handle_get_folders(
     *,
@@ -37,7 +39,12 @@ async def handle_get_folders(
         .order_by(desc(ChatFolder.id))
     )
     if include_conversations:
-        query = query.options(selectinload(ChatFolder.conversations))
+        query = query.options(
+            selectinload(ChatFolder.conversations),
+            selectinload(ChatFolder.attached_documents),
+        )
+    else:
+        query = query.options(selectinload(ChatFolder.attached_documents))
 
     result = await session.exec(query)
     folders = result.all()
@@ -62,7 +69,10 @@ async def handle_get_folder(
     query = (
         select(ChatFolder)
         .where(ChatFolder.id == folder_id, ChatFolder.user_id == current_user.id)
-        .options(selectinload(ChatFolder.conversations))
+        .options(
+            selectinload(ChatFolder.conversations),
+            selectinload(ChatFolder.attached_documents),
+        )
     )
     folder = (await session.exec(query)).first()
     if not folder:
@@ -89,11 +99,12 @@ async def handle_update_folder(
         folder.name = request.name
     if request.prompt is not None:
         folder.prompt = request.prompt
+    if request.document_ids is not None:
+        await _replace_folder_documents(session, folder, request.document_ids, current_user.id)
 
     session.add(folder)
     await session.commit()
-    await session.refresh(folder)
-    return folder
+    return await _load_owned_folder(session, folder.id, current_user.id)
 
 async def handle_delete_folder(
     *,
@@ -137,3 +148,45 @@ async def handle_folder_search(query: str, session: AsyncSession):
         return result
 
 
+async def _load_owned_folder(
+    session: AsyncSession,
+    folder_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> ChatFolder:
+    folder = (await session.exec(
+        select(ChatFolder)
+        .where(ChatFolder.id == folder_id, ChatFolder.user_id == user_id)
+        .options(selectinload(ChatFolder.attached_documents))
+        .execution_options(populate_existing=True)
+    )).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return folder
+
+
+async def _replace_folder_documents(
+    session: AsyncSession,
+    folder: ChatFolder,
+    document_ids: list[uuid.UUID],
+    user_id: uuid.UUID,
+) -> None:
+    normalized_ids = list(dict.fromkeys(document_ids))
+    if normalized_ids:
+        owned_ids = set((await session.exec(
+            select(UserDocument.id).where(
+                UserDocument.id.in_(normalized_ids),
+                UserDocument.user_id == user_id,
+                UserDocument.deleted_at.is_(None),
+                UserDocument.status == "ready",
+            )
+        )).all())
+        missing = [str(document_id) for document_id in normalized_ids if document_id not in owned_ids]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "project_documents_not_ready_or_not_owned", "document_ids": missing},
+            )
+
+    await session.exec(delete(ChatFolderDocument).where(ChatFolderDocument.folder_id == folder.id))
+    for document_id in normalized_ids:
+        session.add(ChatFolderDocument(folder_id=folder.id, document_id=document_id))

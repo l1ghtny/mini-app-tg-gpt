@@ -1,7 +1,8 @@
 import logging
 import os
-from dotenv import load_dotenv, find_dotenv
 from pathlib import Path
+
+from dotenv import find_dotenv, load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parents[2]  # repo root
 _PROXY_ENV_ALIASES = (
@@ -57,6 +58,59 @@ class Settings:
     TEST_ENV: bool = os.getenv("TEST_ENV", "False").lower() in ("true", "1")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 4
+    CORS_ALLOWED_ORIGINS: tuple[str, ...] = tuple(
+        origin.strip()
+        for origin in os.getenv(
+            "CORS_ALLOWED_ORIGINS",
+            ",".join(
+                (
+                    "http://localhost:5172",
+                    "http://127.0.0.1:5172",
+                    "http://localhost:5173",
+                    "http://127.0.0.1:5173",
+                    "http://localhost:4173",
+                    "http://127.0.0.1:4173",
+                    "http://localhost:4175",
+                    "http://127.0.0.1:4175",
+                    "http://192.168.1.137:5173",
+                    "http://192.168.1.137:4173",
+                    "https://gpt-mini-app.lightny.pro",
+                    "https://gpt-mini-app-ru.lightny.pro",
+                    "https://gpt-mini-app-dev.lightny.pro",
+                    "https://preview--chat-bot-telegram.lovable.app",
+                    "https://lightny.ru",
+                    "https://www.lightny.ru",
+                    "https://app.lightny.ru",
+                )
+            ),
+        ).split(",")
+        if origin.strip()
+    )
+    WEB_AUTH_ENABLED: bool = os.getenv("WEB_AUTH_ENABLED", "False").lower() in ("true", "1")
+    WEB_AUTH_LINK_TTL_MINUTES: int = int(os.getenv("WEB_AUTH_LINK_TTL_MINUTES", "15"))
+    WEB_AUTH_CALLBACK_URL: str = os.getenv("WEB_AUTH_CALLBACK_URL", "")
+    WEB_AUTH_FROM_EMAIL: str = os.getenv("WEB_AUTH_FROM_EMAIL", "")
+    AUTH_COOKIE_NAME: str = os.getenv("AUTH_COOKIE_NAME", "lightny_session")
+    AUTH_COOKIE_SECURE: bool = os.getenv(
+        "AUTH_COOKIE_SECURE",
+        "False" if DEBUG_MODE or TEST_ENV else "True",
+    ).lower() in ("true", "1")
+    AUTH_COOKIE_SAMESITE: str = os.getenv("AUTH_COOKIE_SAMESITE", "lax").lower()
+    AUTH_COOKIE_DOMAIN: str | None = os.getenv("AUTH_COOKIE_DOMAIN") or None
+    BROWSER_SESSION_TTL_DAYS: int = int(os.getenv("BROWSER_SESSION_TTL_DAYS", "30"))
+    AUTH_COOKIE_MAX_AGE_SECONDS: int = int(
+        os.getenv("AUTH_COOKIE_MAX_AGE_SECONDS", str(BROWSER_SESSION_TTL_DAYS * 24 * 60 * 60))
+    )
+    WEB_AUTH_TRUSTED_PROXY_CIDRS: tuple[str, ...] = tuple(
+        cidr.strip()
+        for cidr in os.getenv("WEB_AUTH_TRUSTED_PROXY_CIDRS", "").split(",")
+        if cidr.strip()
+    )
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_STARTTLS: bool = os.getenv("SMTP_STARTTLS", "True").lower() in ("true", "1")
     TBANK_TERMINAL_KEY: str = os.getenv("TBANK_TERMINAL_KEY", "DEMO")
     TBANK_PASSWORD: str = os.getenv("TBANK_PASSWORD", "password")
     TBANK_API_URL: str = os.getenv("TBANK_API_URL", "https://securepay.tinkoff.ru/v2")

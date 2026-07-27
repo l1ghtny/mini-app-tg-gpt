@@ -18,7 +18,7 @@ from app.api.document_helpers import (
     count_conversation_pending_indexing_documents,
     list_conversation_ready_vector_store_ids,
 )
-from app.api.helpers import generate_and_publish, load_conversation
+from app.api.helpers import generate_and_publish
 from app.core.config import settings as app_settings
 from app.core.metrics import track_event
 from app.db import models
@@ -332,6 +332,7 @@ async def handle_create_message(
         tier_id=text_entitlement.tier_id,
         usage_pack_id=text_entitlement.usage_pack_id,
         access_path=text_access_path,
+        workflow_kind=request.workflow_kind,
     )
     if text_access_path and text_access_path.startswith("premium_sample:"):
         background_tasks.add_task(
@@ -590,7 +591,11 @@ async def handle_create_conversation(
         await session.refresh(user)
 
     if folder_id is not None:
-        folder = await session.get(models.ChatFolder, folder_id)
+        folder = (await session.exec(
+            select(models.ChatFolder)
+            .where(models.ChatFolder.id == folder_id)
+            .options(selectinload(models.ChatFolder.attached_documents))
+        )).first()
         if not folder or folder.user_id != user.id:
             raise HTTPException(status_code=404, detail="Folder not found")
 
@@ -601,6 +606,13 @@ async def handle_create_conversation(
         thinking=bool(getattr(user, "default_thinking", True)),
     )
     session.add(new_conversation)
+    await session.flush()
+    if folder_id is not None:
+        for project_document in folder.attached_documents:
+            session.add(models.ConversationDocument(
+                conversation_id=new_conversation.id,
+                document_id=project_document.document_id,
+            ))
     await session.commit()
     await session.refresh(new_conversation)
     return new_conversation
@@ -1761,7 +1773,7 @@ async def _resolve_context_window_tokens(session: AsyncSession, model_name: str 
             select(TextModelCatalog)
             .where(
                 TextModelCatalog.model_name == model_name,
-                TextModelCatalog.is_active == True,
+                TextModelCatalog.is_active.is_(True),
             )
         )
     ).first()
@@ -1975,4 +1987,3 @@ async def handle_conversation_search(
         current_user=current_user,
         query=query,
     )
-

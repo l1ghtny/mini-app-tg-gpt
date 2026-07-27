@@ -1,8 +1,212 @@
 # Current State
 
+## 2026-07-27 pilot blockers P0.1-P0.5 implementation
+
+- Added server-side, opaque browser sessions with a 30-day lifetime, logout revocation, session listing, individual revocation, and logout-other-devices. Bearer JWTs remain available for Telegram/API compatibility but are no longer stored by browser email/debug login.
+- Added browser-initiated Telegram linking through a single-use 15-minute bot challenge. Unclaimed identities link explicitly; collisions preserve both accounts and return a support recovery reference. Identity unlinking prevents removal of the last login method.
+- Added account JSON export and confirmed account deletion. Deletion disables renewal, revokes sessions, removes identities and chats, scrubs Telegram/payment credentials, and queues file/provider cleanup while preserving accounting records.
+- Added migration `v1a2b3c4d5e6`, disposable PostgreSQL/Redis E2E composition, Playwright desktop/mobile auth/session/prompt/account-lifecycle coverage, integration tests, production environment preflight, and `docs/operations/pilot-release-runbook.md`.
+- Added process-only `/health/live` and dependency-aware `/health/ready`; Docker and Kubernetes now use HTTP probes, while external AI providers remain outside pod restart readiness.
+- Added public privacy, terms/payment, and account/data pages in `chat-search-link`, plus app login/settings/error support fallbacks, legal links, and the alpha warning against sensitive production uploads.
+- Verification: backend Ruff, compile, and focused tests pass (`11 passed`; six database cases are skipped locally without disposable PostgreSQL); frontend TypeScript, seven unit tests, and production build pass; SEO production build passes; Playwright discovers eight Chromium/mobile tests. Full E2E execution remains pending because Docker/PostgreSQL are unavailable on this Mac.
+
+### Next steps
+
+1. Run `pnpm test:e2e:local` on a Docker-capable agent; fix any browser/data-path failures before commit or deployment.
+2. Review the public privacy/terms copy with counsel and add a service address before public paid acquisition.
+3. Commit each repository independently, run production preflight, deploy backend then frontend then trust pages through canary, and record build IDs/rollback evidence.
+
+## 2026-07-27 real-user pilot readiness audit
+
+- Added `docs/product-strategy/13-real-user-pilot-readiness-audit.md` after inspecting the earlier strategy pack, backend and frontend implementation, current local browser UX, test coverage, deployment manifests, and current competitor/category expectations.
+- Verdict: the app is not ready for an unsupervised public beta, but it is close to a controlled 5–10 person alpha; the core chat/workspace is no longer the main blocker.
+- Locally verified dummy email login, SEO prompt handoff through auth, task-first workflows, visible request quotas, Projects, document management, settings, and current subscription comparison.
+- Highest-priority blockers: deploy the dirty worktrees safely, add production-equivalent E2E coverage, replace the four-hour non-revocable browser session lifecycle, choose an honest web–Telegram account contract, publish minimum privacy/file/deletion/support surfaces, add real HTTP health probes and restore evidence, persist browser acquisition attribution, and hide unimplemented Code Interpreter.
+- Differentiation work for the research/document hypothesis remains navigable citations, source controls, page-level document citations, stronger exports/result reuse, and measured model guidance.
+- Verification during audit: backend focused tests `12 passed, 3 skipped`; frontend Vitest `7 passed`; no live generation, upload, payment, refund, or destructive account operation was performed.
+
+### Next steps
+
+1. Execute Gate A from audit 13: clean commits, isolated migrations, session lifecycle, Code Interpreter removal, health endpoints/probes, and critical E2E matrix.
+2. Execute Gate B: minimum trust/support pages and in-app links, account lifecycle process, cohort attribution, cross-surface contract, and restore/rollback drill.
+3. Invite 5–10 named users to test sourced research, document analysis, and recurring Project work before adding broad competitive parity features.
+
+## 2026-07-27 local web-app HTTP middleware fix
+
+- Fixed local frontend requests from `http://127.0.0.1:4175`: the backend now trusts the `127.0.0.1` host and permits the exact port 4175 origin with credentials.
+- Root cause was middleware rejection before routing: `TrustedHostMiddleware` returned HTTP 400 `Invalid host header`; the browser therefore surfaced `Failed to fetch`.
+- Enabled `WEB_AUTH_ENABLED=True` in the local `.env`; `DEBUG_MODE` controls debug-token delivery but does not itself expose the web-auth routes.
+- Verification: the exact email-login CORS preflight returns HTTP 200 with `Access-Control-Allow-Origin: http://127.0.0.1:4175`; the reloaded frontend login page no longer shows the transport error; Ruff passed and `tests/test_web_auth_security.py` reports 5 passed.
+
+## 2026-07-27 explicit magic-link confirmation
+
+- Changed production email-login callbacks from query tokens to URL-fragment tokens so the secret is not sent in the initial HTTP request or ordinary access logs.
+- The frontend captures and removes callback secrets before Sentry initializes, while retaining compatibility with previously issued `?token=` links.
+- Opening an email no longer consumes the challenge. The browser shows a dedicated confirmation screen and verifies the token only after the user explicitly continues.
+- Updated English and native Russian login copy plus the plain-text email to explain the confirmation step.
+- Added focused callback URL/parser tests. Verification: backend web-auth suite `8 passed, 3 skipped` without a disposable PostgreSQL database; frontend Vitest `7 passed`; targeted ESLint, Ruff, diff checks, and production frontend build passed.
+- Resend production follow-up: use a verified Lightny transactional subdomain, disable click/open tracking for login messages, and migrate from SMTP to the Resend API with idempotency and signed delivery webhooks.
+
+## 2026-07-27 competitive product implementation tranche
+
+- Implemented a task-first home experience with five workflows: quick answer, writing/analysis, compare/decide, research with sources, and document analysis.
+- Workflow selection chooses the best preferred model only when the current entitlement pool has capacity, otherwise preserving the user's current model. The workflow is stored on `RequestLedger` for cohort and conversion analysis.
+- Added an in-context quota contract and pool preview: one completed text answer equals one request, with remaining requests or unlimited status shown before sending.
+- Reframed existing chat folders as Projects in public UI copy; projects preserve shared instructions, grouped chats, and reusable documents that are attached automatically to new project chats.
+- Added Markdown conversation export, bookmarkable `?chat=` URLs, and copyable browser links for cross-surface continuation.
+- Added unauthenticated `GET /api/v1/public/catalog` as the backend-owned source for model, tier, pack, and billing-contract facts.
+- Added cache-aware OpenAI cost telemetry: cached-input tokens, cache-write tokens, their separate costs, configurable pricing, and GPT-5.6 read/write rates. This fixes the measurement flaw that priced every input token as uncached.
+- Fixed corrupted Russian display names for Sonar and Sonar Pro.
+- SEO positioning commit `36757f8` was pushed to `chat-search-link/main` with corrected Premium pricing, completed-answer positioning, qualified continuity, updated workflow pages, dual CTAs, and `llms.txt`.
+
+### Verification
+
+- Backend focused tests: 19 passed, 3 PostgreSQL integration tests skipped without `TEST_DATABASE_URL`.
+- Backend Ruff changed-file set: passed.
+- Alembic graph: one head, `q1a2b3c4d5e6`.
+- Frontend production build: passed; targeted ESLint has no errors and four pre-existing hook dependency warnings in `Index.tsx`.
+- SEO build, changed-file lint, stale-claim search, and eight local route checks: passed before push.
+
+### Immediate next steps
+
+1. Run web-auth and new migration integration tests against disposable PostgreSQL.
+2. Add app E2E coverage for workflow selection, quota preview, prompt handoff, export, browser deep links, and Telegram/email account linking.
+3. Add provider-cost reconciliation against daily OpenAI billing totals before changing prices or quotas.
+4. Deploy backend/frontend through canary after environment and SMTP/CORS preflight; do not deploy the unverified dirty worktrees directly.
+
+## 2026-07-27 cost-analysis correction from OpenAI dashboard
+
+- The supplied OpenAI dashboard shows $11.84 total project spend for the last 30 days, $8.22 July spend, 15,051,563 tokens, and 1,449 requests. This disproves the earlier estimate that `lloaThfull` alone cost about $23.20.
+- Root cause: the reconstruction priced every stored input token at the uncached rate. The backend uses stored Responses and `previous_response_id` chaining, while current OpenAI cached input is priced at one-tenth of normal input. `UsageTracker` stores total input but discards `input_tokens_details.cached_tokens` and cache-write attribution.
+- Reasoning tokens were not double-counted: `UsageTracker` subtracts reasoning from total output before persisting normal output tokens.
+- A current production aggregate showed about 3.7 million stored OpenAI tokens for `lloaThfull` in the rolling window, but exact per-user dollars cannot be recovered without cached-token data. Their OpenAI cost is below the entire project's $11.84 and likely single-digit dollars.
+- Withdrawn: the recommendation to reduce Premium Flagship from 100 to 40-60 or introduce a 3,990-4,990 RUB Power tier as a margin fix.
+- Correct decision: keep Basic 490 RUB, Advanced 1,490 RUB, Premium 2,490 RUB, and current request allowances while adding cached/cache-write telemetry and reconciling daily provider costs.
+- Updated product-strategy documents 11 and 12 plus durable memories to remove the invalid cost figures and pricing conclusion.
+
+## 2026-07-27 concluding differentiation and viability decision
+
+- Added `docs/product-strategy/12-concluding-promise-viability-and-value.md` and reconciled earlier strategy wording away from per-request ruble estimates toward clear request-pool impact.
+- Final promise direction: “AI without token math. For text, one completed answer uses one clear request. Choose the level of intelligence, see exactly what remains, and continue the same work in the browser or Telegram.”
+- Competitive conclusion: Chad, BotHub, GPTunnel, and Neuromia remain stronger in catalogue breadth, media types, pay-as-you-go flexibility, proof, or business readiness. Lightny can differentiate through tariff simplicity plus a stronger research/document workflow and verified web-Telegram continuity.
+- Customer-value conclusion: recurring knowledge workers can receive better cognitive and budget value; occasional pay-as-you-go users, broad-media users, and enterprise teams do not yet universally receive better value.
+- Commercial decision: preserve request-based subscriptions and keep all current pricing and allowances during corrected measurement. Request packs remain a convenience expansion, not a demonstrated margin necessity.
+- Expansion priority: automatic model guidance, sourced research, serious document citations/collections/exports, verified cross-surface continuity, and request packs; Claude and comparison are parity; broad media remains later.
+
+## 2026-07-27 production usage personas and unit economics
+
+- Queried production read-only for request, token, model, web-search, image-energy, subscription, and conversation-count aggregates; no message, document, payment, email, or Telegram-ID content was inspected.
+- Added `docs/product-strategy/11-usage-personas-and-unit-economics.md` and durable feature memory.
+- Segmented the friend cohort into occasional convenience (`F0rvarD`), steady Fast utility (`flow_of_spirits`), episodic Balanced/search burst (`ARONZ96`), and daily Flagship/image power (`lloaThfull`) personas; an anonymized 203-request/five-day account provides an additional binge pattern.
+- The original provider-cost reconstruction is superseded because it priced all input as uncached. Behavioral counts and personas remain valid; dollar estimates do not.
+- Per-user dollar costs remain unknown until cached-input/cache-write tokens are stored or allocated from provider usage exports.
+- Keep the public request-quota/no-token-counting promise. P0 is accurate cost telemetry plus invisible output, reasoning, context, tool-call, image-energy, and automation guardrails.
+- Pricing decision: no quota or price change from the current evidence; revisit only after corrected 30-day paid-cohort reconciliation.
+
+## 2026-07-27 production quota and competitor review
+
+- Queried the production catalogue read-only from the `gpt` namespace and confirmed that paid text access is subscription-based, with monthly request allowances per shared model pool rather than per-request ruble charging.
+- Public production prices and text pools are currently:
+  - Basic: 490 RUB; Fast unlimited, Smart 300, Balanced 100, Flagship 15, Sonar 300, Sonar Pro 0.
+  - Advanced: 1,490 RUB; Fast/Smart/Sonar unlimited, Balanced 250, Flagship 25, Sonar Pro 0.
+  - Premium: 2,490 RUB; Fast/Smart/Sonar unlimited, Balanced 1,000, Flagship 100, Sonar Pro 100.
+- GPT and Gemini models can share one pool: Fast combines GPT Nano with Gemini Flash Lite; Smart combines GPT Luna with Gemini Flash; Flagship combines GPT Sol with Gemini Pro.
+- Failed text generations are finalized as refunded and do not consume quota. Monthly usage resets on the subscriber's billing-date boundary.
+- Production currently has no public usage packs. Do not promise request top-ups until catalogue rows and checkout are enabled.
+- Images are the exception to the simple monthly-request story: paid recurring tiers use replenishing daily image energy with a five-day storage cap and model/quality-dependent costs.
+- Competitive review supports retaining subscriptions and request quotas as a differentiator against token-, credit-, Caps-, spark-, and wallet-based billing. Replace the earlier pre-request ruble-estimate recommendation with a quota-impact indicator such as pool used, requests remaining, and reset date.
+- Product/UI follow-up: present shared usage pools rather than duplicate per-model limits; qualify unlimited plans with the existing technical rate limit; translate image energy into understandable generation estimates; and update stale public Premium pricing from 2,190 to the production value of 2,490 RUB.
+
+## 2026-07-26 app-to-SEO capability audit
+
+- Committed and pushed the current SEO acquisition tranche to `chat-search-link` `main` as `f2a681f` (`Improve browser-first SEO acquisition`).
+- Compared the current backend, React app, and SEO site and added `docs/product-strategy/10-app-to-seo-capability-audit.md`.
+- Strongest under-communicated product layer: workspace organization and continuity—conversation search, folders with shared prompts, persistent personalization, resumable streams, and a reusable pinned document library.
+- Other safe secondary messages: automatic/manual tool selection, Sonar search depth and URL/finance tools, image controls and energy, transparent usage pools, and billing self-service.
+- Product-copy bugs found: the frontend still promises Claude although Claude is absent from the backend registry; Code Interpreter is exposed in UI/schema but never added by the backend tool builder.
+- Do not promise seamless web/Telegram account continuity, fixed file retention, security absolutes, or guaranteed stream recovery until the relevant production contracts and policies are verified.
+- SEO P0 remains real product proof, application-side prompt handoff, public backend-driven pricing/catalogue, legal pages, final domain/canonical setup, consent-aware analytics, and webmaster tooling.
+
+### Next SEO implementation sequence
+
+1. Remove the stale Claude copy and hide or implement Code Interpreter in the product repos.
+2. Add app-side SEO prompt prefilling and end-to-end funnel measurement.
+3. Build a focused workspace page for folders, shared prompts, search, and personalization using real screenshots.
+4. Rework the PDF page around the reusable document library and pinning.
+5. Expand help, billing/refund, account-linking, and legal information pages.
+
+## 2026-07-26 browser-auth hardening and verification
+
+- Browser authentication now uses a Secure, HttpOnly, SameSite=Lax cookie while preserving bearer-token compatibility for Telegram and existing API clients.
+- The frontend keeps new JWTs in memory only, restores browser sessions through `/api/v1/auth/me`, sends credentials on API/SSE/image requests, resumes streams after cookie-only reloads, and calls the backend logout endpoint.
+- Cookie-authenticated mutations require an exact configured CORS origin. Canonical `lightny.ru`, `www.lightny.ru`, and `app.lightny.ru` origins and `*.lightny.ru` hosts are recognized by default.
+- Optional authentication is strict: an absent credential is anonymous, while an invalid supplied bearer or cookie returns 401.
+- Magic-link IP limiting only trusts `X-Forwarded-For` from configured proxy CIDRs; an untrusted shared ingress is not treated as one client. Email and global limits remain active.
+- SMTP transport failures return controlled `login_email_unavailable` responses, and failed deliveries remove their challenge.
+- Existing-email/account collisions preserve both users, consume the one-time challenge, and return `account_merge_required`; no conversation, subscription, payment, or ledger data is auto-merged.
+- Magic-link callback tokens are removed from browser history before verification.
+- The web-auth migration downgrade now renders in offline mode and refuses at execution time when web-only users exist.
+- Verification completed: backend focused suite `7 passed, 3 skipped` (PostgreSQL integration cases require `TEST_DATABASE_URL`); Ruff passes with repository-wide FastAPI/style exclusions; offline Alembic downgrade SQL renders; frontend TypeScript, ESLint, Vitest (`3 passed`), and production build pass.
+
+### Immediate release blockers
+
+- Run all three skipped identity/database tests against an isolated PostgreSQL database and add API-level cookie/CORS/callback E2E coverage.
+- Configure staging/production `WEB_AUTH_CALLBACK_URL`, SMTP sender credentials, exact `CORS_ALLOWED_ORIGINS`, `WEB_AUTH_TRUSTED_PROXY_CIDRS`, `AUTH_COOKIE_SECURE=true`, `VITE_API_URL`, and `VITE_WEB_AUTH_ENABLED=true`.
+- Verify the real ingress proxy chain before enabling client-IP limiting; do not guess Kubernetes CIDRs.
+- Implement an explicit, auditable account-merge/recovery workflow before claiming seamless continuity for users who already created separate Telegram and email accounts.
+
+### Recommended next implementation sequence
+
+1. Staging deploy and E2E matrix: new email login, reload, logout, expired/replayed link, Telegram login, Telegram-to-email linking, conflict behavior, chat send/SSE resume, documents/images, entitlements, and payments.
+2. Account lifecycle P0: controlled merge preview/confirmation, immutable ledger/subscription rules, unlink-with-last-identity protection, recovery, server-side session revocation, and duplicate-account telemetry.
+3. Browser activation P0: consume the SEO `prompt` handoff safely, add a guest/preview first-value path, and expose backend-driven public model/pricing/limit data.
+4. Launch trust P0: privacy, terms/public offer, refund, file retention/deletion, provider-routing, and data-location disclosures with qualified review.
+5. Measurement P0: auth funnel, email delivery, callback failures, link conflicts, duplicate accounts, first useful task, SSE reliability, cross-surface continuation, conversion, and contribution margin.
+6. Differentiation after launch readiness: automatic model guidance, pre-request cost estimates, comparison mode, stronger citations/exports, then Claude if unit economics and demand support it.
+
+## 2026-07-26 web + Telegram product migration
+
+- Cloned the SEO repository to `/Users/lightny/0/coding/PersonalProjects/chat-search-link`.
+- Added backend, frontend, and SEO as the three folders in `mini-gpt-telegram.code-workspace` and documented the SEO role in `AGENTS.md`.
+- Repositioned the SEO site around one AI with UI product with two interfaces: a primary full web app and a Telegram Mini App.
+- Added web-app CTAs, separate `cta_web_app_click` analytics, dual mobile CTA, and `VITE_WEB_APP_URL` configuration while preserving start-only Telegram links.
+- Rewrote the 11 product pages, shared UI copy, disclaimers, `llms.txt`, and all three blog articles in natural Russian.
+- Corrected product facts: Perplexity Sonar/Sonar Pro are used through Perplexity API; current backend models, document limits, image-energy gating, and independent-provider disclaimers are reflected in copy.
+- Frontend follow-up: finish and verify email-to-Telegram account linking before promising shared history and subscription across both login methods.
+- Release follow-up: publish privacy/terms/file-processing documents and configure production `SITE_URL`, `VITE_WEB_APP_URL`, web-auth callback, SMTP, and CORS.
+
+## 2026-07-26 product-market strategy pack
+
+- Added `docs/product-strategy/` as the cross-repository source of truth for positioning, competitor lessons, product gaps, landing/conversion, SEO, trust/legal readiness, branding/domains, execution, and measurement.
+- Recommended a focused position: an AI workspace for research, documents, writing, and code with curated GPT/Gemini/AI-search capabilities in the browser and Telegram.
+- Recommended browser as the primary acquisition, activation, and payment surface, with Telegram as the continuity and convenience companion.
+- Recommended `Lightny AI` as the master-brand direction, subject to ownership, trademark, availability, and customer validation; preserve `@AIwithUIbot` for Telegram continuity.
+- Proposed domain architecture: `lightny.ru` for the canonical marketing site, `app.lightny.ru` for the web app, `api.lightny.ru` for the backend, and an optional defensive `lightny.ai` redirect.
+- Prioritized browser auth/account-linking verification, public pricing/catalogue, trust and legal pages, real product proof, analytics, and a first-value demo before buying significant traffic.
+- Prioritized automatic model guidance, cost estimates, side-by-side comparison, Claude, and stronger document citations/exports as the focused product differentiation layer.
+- Next decision: accept or revise the positioning and brand/domain architecture, then execute Phase 0 and Phase 1 from `docs/product-strategy/08-execution-roadmap.md`.
+- Implemented the first strategy tranche in `/Users/lightny/0/coding/PersonalProjects/chat-search-link`:
+  - rewrote the homepage around research, documents, and completed work
+  - added public `/features`, `/models`, `/pricing`, `/security`, and `/help` routes
+  - added browser-first navigation, model/pricing proof, WebApplication JSON-LD, Open Graph imagery, sitemap `lastmod`, and environment-aware `robots.txt`
+  - SEO prompt CTAs now send a `prompt` query parameter to the web app for future composer prefilling
+- SEO verification: targeted ESLint and production build pass; all new local routes return HTTP 200; desktop/mobile visual checks found no console errors or horizontal overflow.
+- Frontend follow-up: read the optional `prompt` query parameter on app entry, validate its length, and prefill without automatically sending it.
+
+## 2026-07-26 SEO browser-acquisition foundation
+
+- Reworked the SEO homepage around research, documents, verified sources, and useful outcomes; the browser is the primary CTA and Telegram remains the companion surface.
+- Added public `/features`, `/models`, `/pricing`, `/security`, and `/help` routes with native Russian copy grounded in current backend behavior.
+- Added exact public monthly price anchors for Basic (490 ₽), Advanced (1,490 ₽), and Premium (2,190 ₽), while directing users to production for live limits and checkout terms.
+- Added prompt handoff through the web CTA `prompt` query parameter; frontend follow-up is required to prefill the new-chat composer from this parameter.
+- Added Open Graph images, `WebApplication` structured data, sitemap `lastmod`, new information routes in the sitemap, and an environment-aware dynamic `robots.txt`.
+- Preserved `AI with UI` as the visible brand until the Lightny AI naming decision is confirmed.
+- Verified a production build, lint for the changed-file set, desktop/mobile layout, navigation, pricing, dynamic robots, and sitemap. The local dev server is available at `http://127.0.0.1:4173/` for this session.
+- Remaining SEO launch work: canonical domain decision, production `SITE_URL`, Yandex/Google webmaster setup, consent-aware analytics, reviewed legal documents, real product screenshots, and customer proof.
+
 ## Current objective
 
-Add a TeamCity agent on `new-node` and audit remaining workload placement and hostPath dependencies.
+Deploy and canary the browser-ready authentication foundation across the backend and frontend.
 
 ## In progress
 
@@ -455,3 +659,30 @@ Add a TeamCity agent on `new-node` and audit remaining workload placement and ho
 
 - Apply `poetry run alembic upgrade head` in the target environment during the backend rollout.
 - Canary one send per tier and verify model id, SSE completion, reasoning-off behavior, entitlement decrement, and recorded cost before promotion.
+
+## 2026-07-26 Browser web app foundation
+
+- Corrected the `AppUser` model invariant after review: internal `id` is typed as a mandatory `uuid.UUID` and remains a non-null primary key; only `telegram_id` is nullable for browser-only accounts.
+- Added provider-neutral `UserIdentity` records and nullable Telegram identities so browser-only users can share the existing conversation, entitlement, ledger, and SSE backend.
+- Added single-use, hashed, expiring email magic-link challenges with email/IP rate limiting, SMTP delivery, `/auth/me`, and optional email-to-Telegram account linking.
+- Added the Alembic migration and Telegram identity backfill; Telegram broadcasts and Telegram-only image sharing now explicitly exclude or reject web-only users.
+- Replaced wildcard CORS with an environment-configurable origin allowlist while preserving the existing local, preview, and production origins.
+- Updated the React frontend to authenticate automatically in Telegram and show passwordless email login in a normal browser when `VITE_WEB_AUTH_ENABLED=true`.
+- Added callback verification, authenticated session hydration, browser logout, browser-safe sharing, and an account-settings flow for linking email to an existing Telegram account.
+- Added English and native-Russian web-auth UI copy plus Docker/Vite build configuration.
+
+### Verification
+
+- Backend web-auth tests without external PostgreSQL: 1 passed, 2 database integration tests skipped because `TEST_DATABASE_URL` is not configured.
+- Backend Python compilation and targeted Ruff checks passed.
+- Alembic reports `o1a2b3c4d5e6` as the single head; offline upgrade SQL generation passed.
+- Frontend ESLint and TypeScript checks passed.
+- Frontend Vitest: 3 passed.
+- Frontend production build passed with the repository's existing chunk-size and mixed dynamic/static import warnings.
+
+### Next steps
+
+- Run the two database integration tests against a disposable PostgreSQL database.
+- Configure backend `WEB_AUTH_ENABLED`, callback URL, SMTP credentials, and the browser origin allowlist; configure frontend `VITE_WEB_AUTH_ENABLED` and `VITE_WEB_APP_URL`.
+- Apply `poetry run alembic upgrade head`, deploy backend first, then deploy frontend and canary email request, link consumption, account linking, chat send/SSE resume, billing, and logout.
+- Add challenge cleanup/retention and migrate bearer-token storage to secure HttpOnly cookies before treating browser authentication as fully hardened.

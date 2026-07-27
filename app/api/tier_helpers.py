@@ -46,7 +46,7 @@ async def list_public_tiers(session: AsyncSession, user) -> list[SubscriptionTie
 
     tiers_info = (await session.exec(
         select(SubscriptionTier)
-        .where(SubscriptionTier.is_public == True)
+        .where(SubscriptionTier.is_public.is_(True))
         .order_by(SubscriptionTier.index)
         .options(
             selectinload(SubscriptionTier.tier_model_limits),
@@ -64,6 +64,23 @@ async def list_public_tiers(session: AsyncSession, user) -> list[SubscriptionTie
         if loaded_tier:
             tiers_info.insert(0, loaded_tier)
 
+    pricing_by_model = await _load_image_pricing(session)
+    general_discounts = await _load_applicable_general_discounts(session)
+    return [_build_tier_response(tier, pricing_by_model, general_discounts) for tier in tiers_info]
+
+
+async def list_public_tiers_for_catalog(session: AsyncSession) -> list[SubscriptionTierResponse]:
+    """Return the saleable tier catalogue without user-specific subscription state."""
+    tiers_info = (await session.exec(
+        select(SubscriptionTier)
+        .where(SubscriptionTier.is_public.is_(True))
+        .order_by(SubscriptionTier.index)
+        .options(
+            selectinload(SubscriptionTier.tier_model_limits),
+            selectinload(SubscriptionTier.tier_image_model_limits),
+            selectinload(SubscriptionTier.tier_image_quality_limits),
+        )
+    )).all()
     pricing_by_model = await _load_image_pricing(session)
     general_discounts = await _load_applicable_general_discounts(session)
     return [_build_tier_response(tier, pricing_by_model, general_discounts) for tier in tiers_info]
@@ -119,7 +136,7 @@ async def _load_tier_with_limits(
 
 async def _load_image_pricing(session: AsyncSession) -> dict[str, list[ImageQualityPricing]]:
     pricing_rows = (await session.exec(
-        select(ImageQualityPricing).where(ImageQualityPricing.is_active == True)
+        select(ImageQualityPricing).where(ImageQualityPricing.is_active.is_(True))
     )).all()
 
     pricing_by_model: dict[str, list[ImageQualityPricing]] = {}
@@ -170,8 +187,8 @@ def _build_tier_response(
 ) -> SubscriptionTierResponse:
     daily_energy = _daily_image_energy(tier)
     image_limit_override = -1 if daily_energy > 0 else None
-    allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
-    allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
+    allowed_models = sorted({limit.image_model for limit in tier.tier_image_model_limits})
+    allowed_qualities = sorted({limit.quality for limit in tier.tier_image_quality_limits})
     image_pricing: list[ImageQualityPricingResponse] = []
     for image_model in allowed_models:
         for pricing in sorted(pricing_by_model.get(image_model, []), key=lambda p: p.quality):
@@ -200,18 +217,18 @@ def _build_tier_response(
         doc_retention_hours=int(getattr(tier, "doc_retention_hours", 24) or 24),
         tier_model_limits=[
             TierMonthlyLimits(
-                model_name=l.model_name,
-                requests_limit=l.monthly_requests,
-                daily_requests_limit=int(getattr(l, "daily_requests", 0) or 0),
+                model_name=limit.model_name,
+                requests_limit=limit.monthly_requests,
+                daily_requests_limit=int(getattr(limit, "daily_requests", 0) or 0),
             )
-            for l in tier.tier_model_limits
+            for limit in tier.tier_model_limits
         ],
         tier_image_model_limits=[
             TierImageModelLimits(
-                image_model=l.image_model,
-                requests_limit=image_limit_override if image_limit_override is not None else l.monthly_requests,
+                image_model=limit.image_model,
+                requests_limit=image_limit_override if image_limit_override is not None else limit.monthly_requests,
             )
-            for l in tier.tier_image_model_limits
+            for limit in tier.tier_image_model_limits
         ],
         image_quality_pricing=image_pricing,
         is_recurring=tier.is_recurring,

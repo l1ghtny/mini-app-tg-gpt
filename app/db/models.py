@@ -18,13 +18,17 @@ def utcnow_naive():
 class AppUser(SQLModel, table=True):
     __tablename__ = "app_user" # Explicitly name the table to avoid conflicts
 
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True)
-    telegram_id: int = Field(sa_column=Column(BigInteger, unique=True, index=True))
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    telegram_id: int | None = Field(
+        default=None,
+        sa_column=Column(BigInteger, unique=True, index=True, nullable=True),
+    )
     telegram_username: Optional[str] = Field(default=None, index=True)
     telegram_first_name: Optional[str] = Field(default=None)
     telegram_last_name: Optional[str] = Field(default=None)
     has_sent_first_message: bool = Field(default=False)
     campaign: Optional[str] = Field(default=None, index=True)
+    deleted_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True, index=True))
 
     default_prompt: str = Field(default="Ты помощник, готовый ответить на вопросы.")
     default_text_model: str = Field(default="gpt-5.4-nano")
@@ -38,6 +42,84 @@ class AppUser(SQLModel, table=True):
     payments: List["Payment"] = Relationship(back_populates="user")
     documents: List["UserDocument"] = Relationship(back_populates="user")
     payment_binding_sessions: List["PaymentBindingSession"] = Relationship(back_populates="user")
+
+
+class UserIdentity(SQLModel, table=True):
+    __tablename__ = "user_identity"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    provider: str = Field(index=True)  # telegram | email
+    subject: str = Field(index=True)
+    email: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    last_used_at: datetime = Field(
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, index=True, onupdate=utcnow_naive),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("provider", "subject", name="uq_user_identity_provider_subject"),
+        CheckConstraint("provider IN ('telegram','email')", name="ck_user_identity_provider"),
+    )
+
+
+class WebAuthChallenge(SQLModel, table=True):
+    __tablename__ = "web_auth_challenge"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    token_hash: str = Field(unique=True, index=True)
+    email: str = Field(index=True)
+    target_user_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(ForeignKey("app_user.id", ondelete="CASCADE"), nullable=True, index=True),
+    )
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    expires_at: datetime = Field(sa_column=Column(DateTime, nullable=False, index=True))
+    consumed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True, index=True))
+
+
+class BrowserSession(SQLModel, table=True):
+    __tablename__ = "browser_session"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    token_hash: str = Field(unique=True, index=True)
+    user_agent: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    last_seen_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    expires_at: datetime = Field(sa_column=Column(DateTime, nullable=False, index=True))
+    revoked_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True, index=True))
+
+
+class TelegramLinkChallenge(SQLModel, table=True):
+    __tablename__ = "telegram_link_challenge"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    target_user_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    token_hash: str = Field(unique=True, index=True)
+    status: str = Field(default="pending", index=True)  # pending | linked | conflict | expired
+    telegram_id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, nullable=True, index=True))
+    conflicting_user_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True, index=True),
+    )
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    expires_at: datetime = Field(sa_column=Column(DateTime, nullable=False, index=True))
+    consumed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, nullable=True, index=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','linked','conflict','expired')",
+            name="ck_telegram_link_challenge_status",
+        ),
+    )
 
 
 class WhatsNewItem(SQLModel, table=True):
@@ -135,6 +217,14 @@ class ChatFolder(SQLModel, table=True):
         back_populates="folder",
         sa_relationship_kwargs={"cascade": "all"}
     )
+    attached_documents: List["ChatFolderDocument"] = Relationship(
+        back_populates="folder",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
+    @property
+    def document_ids(self) -> list[uuid.UUID]:
+        return [link.document_id for link in self.attached_documents]
 
 
 class Conversation(SQLModel, table=True):
@@ -250,6 +340,14 @@ class AiModelPricing(SQLModel, table=True):
 
     # per-1M token prices
     unit_price_input_per_1m: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    unit_price_cached_input_per_1m: Optional[Decimal] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 6), nullable=True),
+    )
+    unit_price_cache_write_per_1m: Optional[Decimal] = Field(
+        default=None,
+        sa_column=Column(Numeric(18, 6), nullable=True),
+    )
     unit_price_output_per_1m: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
     unit_price_reasoning_per_1m: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
 
@@ -361,6 +459,8 @@ class TokenUsage(SQLModel, table=True):
 
     # usage counters
     input_tokens: int = Field(default=0)
+    cached_input_tokens: int = Field(default=0)
+    cache_write_tokens: int = Field(default=0)
     output_tokens: int = Field(default=0)
     reasoning_tokens: int = Field(default=0)
     web_search_calls: int = Field(default=0)
@@ -369,6 +469,8 @@ class TokenUsage(SQLModel, table=True):
     # cost breakdown (same currency as pricing)
     currency: str = Field(default="USD")
     cost_input: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    cost_cached_input: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
+    cost_cache_write: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
     cost_output: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
     cost_reasoning: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
     cost_web_search: Decimal = Field(sa_column=Column(Numeric(18, 6), nullable=False, default=0))
@@ -431,6 +533,7 @@ class RequestLedger(SQLModel, table=True):
     feature: str = Field(index=True)
     cost: float = Field(default=1.0)
     access_path: Optional[str] = Field(default=None, index=True)
+    workflow_kind: Optional[str] = Field(default=None, index=True)
 
     state: State = Field(default=State.reserved, index=True)
     tool_choice: Optional[str] = None     # e.g., "auto" or "image_generation"
@@ -478,6 +581,10 @@ class UserDocument(SQLModel, table=True):
         back_populates="document",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
+    folders: List["ChatFolderDocument"] = Relationship(
+        back_populates="document",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
     provider_artifacts: List["DocumentProviderArtifact"] = Relationship(
         back_populates="document",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
@@ -497,6 +604,26 @@ class ConversationDocument(SQLModel, table=True):
 
     __table_args__ = (
         UniqueConstraint("conversation_id", "document_id", name="uq_conversation_document"),
+    )
+
+
+class ChatFolderDocument(SQLModel, table=True):
+    __tablename__ = "chat_folder_document"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    folder_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("chat_folder.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    document_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("user_document.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    attached_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+
+    folder: ChatFolder = Relationship(back_populates="attached_documents")
+    document: UserDocument = Relationship(back_populates="folders")
+
+    __table_args__ = (
+        UniqueConstraint("folder_id", "document_id", name="uq_chat_folder_document"),
     )
 
 

@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.models import RequestLedger, ImageQualityPricing, utcnow_naive
+from app.db.models import RequestLedger, utcnow_naive
 from app.db.subscription_tiers import (
     SubscriptionTier,
     TierModelLimit,
@@ -14,8 +14,6 @@ from app.db.subscription_tiers import (
     UserSubscription,
     SubscriptionStatus,
     UsagePack,
-    UsagePackModelLimit,
-    UsagePackImageModelLimit,
     UserUsagePack,
     UsagePackSource,
     UsagePackStatus,
@@ -111,7 +109,7 @@ async def get_active_usage_packs(
             UserUsagePack.user_id == user_id,
             UserUsagePack.status == UsagePackStatus.active,
             (UserUsagePack.expires_at.is_(None)) | (UserUsagePack.expires_at > func.now()),
-            UsagePack.is_active == True,
+            UsagePack.is_active.is_(True),
         )
         .options(
             selectinload(UserUsagePack.pack)
@@ -326,7 +324,7 @@ async def remaining_pack_requests_for_model(
     pack: UserUsagePack,
     model_name: str,
 ) -> int:
-    limit = next((l for l in pack.pack.pack_model_limits if l.model_name == model_name), None)
+    limit = next((item for item in pack.pack.pack_model_limits if item.model_name == model_name), None)
     if not limit:
         return 0
 
@@ -355,7 +353,7 @@ async def remaining_pack_image_requests_for_model(
     pack: UserUsagePack,
     image_model: str,
 ) -> float:
-    limit = next((l for l in pack.pack.pack_image_model_limits if l.image_model == image_model), None)
+    limit = next((item for item in pack.pack.pack_image_model_limits if item.image_model == image_model), None)
     if not limit:
         return 0
 
@@ -789,7 +787,7 @@ async def list_image_entitlements_bulk(
     tier_allowed_models: dict[uuid.UUID, list[str]] = {}
     tier_energy_snapshots: dict[uuid.UUID, dict] = {}
     for sub in subs:
-        allowed = sorted({l.image_model for l in sub.tier.tier_image_model_limits})
+        allowed = sorted({limit.image_model for limit in sub.tier.tier_image_model_limits})
         tier_allowed_models[sub.tier.id] = allowed
         tier_usages[sub.tier.id] = await get_tier_image_usage_total(
             session,
@@ -827,7 +825,7 @@ async def list_image_entitlements_bulk(
     pack_usages: dict[uuid.UUID, float] = {}
     pack_allowed_models: dict[uuid.UUID, list[str]] = {}
     for pack in packs:
-        allowed = sorted({l.image_model for l in pack.pack.pack_image_model_limits})
+        allowed = sorted({limit.image_model for limit in pack.pack.pack_image_model_limits})
         pack_allowed_models[pack.id] = allowed
         pack_usages[pack.id] = await get_pack_image_usage_total(
             session,
@@ -845,7 +843,7 @@ async def list_image_entitlements_bulk(
         tier_entries = []
         for sub in sorted_subs:
             tier = sub.tier
-            limit = next((l for l in tier.tier_image_model_limits if l.image_model == image_model), None)
+            limit = next((item for item in tier.tier_image_model_limits if item.image_model == image_model), None)
             if not limit:
                 continue
 
@@ -870,8 +868,8 @@ async def list_image_entitlements_bulk(
             source = _tier_usage_source(tier)
             pacing = None
             energy_balance = tier_energy_snapshots.get(tier.id)
-            allowed_models = sorted({l.image_model for l in tier.tier_image_model_limits})
-            allowed_qualities = sorted({l.quality for l in tier.tier_image_quality_limits})
+            allowed_models = sorted({limit.image_model for limit in tier.tier_image_model_limits})
+            allowed_qualities = sorted({limit.quality for limit in tier.tier_image_quality_limits})
 
             tier_entries.append({
                 "kind": "tier",
@@ -898,7 +896,7 @@ async def list_image_entitlements_bulk(
 
         pack_entries = []
         for pack in sorted_packs:
-            limit = next((l for l in pack.pack.pack_image_model_limits if l.image_model == image_model), None)
+            limit = next((item for item in pack.pack.pack_image_model_limits if item.image_model == image_model), None)
             if not limit:
                 continue
 
@@ -1138,7 +1136,7 @@ async def select_image_entitlement(
 
 async def reserve_request(session, *, user_id, conversation_id, assistant_message_id,
                           request_id, model_name, feature, cost, tool_choice=None, tier_id=None,
-                          usage_pack_id=None, access_path=None):
+                          usage_pack_id=None, access_path=None, workflow_kind=None):
 
     # try insert; on duplicate (same request_id), just return the existing row
 
@@ -1146,7 +1144,7 @@ async def reserve_request(session, *, user_id, conversation_id, assistant_messag
                        assistant_message_id=assistant_message_id,
                        request_id=request_id, model_name=model_name,
                        feature=feature, tool_choice=tool_choice, state="reserved", cost=cost,
-                       access_path=access_path)
+                       access_path=access_path, workflow_kind=workflow_kind)
     session.add(rl)
     try:
         await session.commit()

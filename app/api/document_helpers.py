@@ -500,7 +500,10 @@ def _build_display_filename(*, original_filename: str, user: AppUser, uploaded_a
     original_stem = Path(original_basename).stem
 
     safe_stem = _safe_filename_part(original_stem, "document")
-    user_label = _safe_filename_part(user.telegram_username or str(user.telegram_id), "user")
+    user_label = _safe_filename_part(
+        user.telegram_username or (str(user.telegram_id) if user.telegram_id is not None else str(user.id)),
+        "user",
+    )
     timestamp = uploaded_at.strftime("%Y%m%d-%H%M%S")
 
     suffix = f"-{user_label}-{timestamp}{ext}"

@@ -1,6 +1,6 @@
 import fastapi_swagger_dark as fsd
 import sentry_sdk
-from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 import os
@@ -8,6 +8,8 @@ import os
 from app.api.access_codes import access_codes
 from app.api.admin_broadcast import admin_broadcast
 from app.api.auth import auth
+from app.api.account import account
+from app.api.health import health
 from app.api.chat_folders import router as chat_folders_router
 from app.api.chat_starters import chat_starters
 from app.api.conversion import conversion
@@ -19,6 +21,7 @@ from app.api.personalization import personalization
 from app.api.payments import payments
 from app.api.routes import router as chat_router
 from app.api.tiers import tiers
+from app.api.public_catalog import public_catalog
 from app.api.usage_packs import usage_packs
 from app.api.user_subscription import user_subscription
 from app.api.user_usage import user_usage
@@ -75,33 +78,34 @@ if settings.SENTRY_DSN:
             "metrics_aggregator": True,
         },
     )
-origins = [
-    "http://localhost:5172",
-    "http://127.0.0.1:5172",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-    "https://gpt-mini-app.lightny.pro",
-    "http://192.168.1.137:5173",
-    "http://192.168.1.137:4173",
-    "https://gpt-mini-app-ru.lightny.pro",
-    "https://gpt-mini-app-dev.lightny.pro",
-    "https://preview--chat-bot-telegram.lovable.app"
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=list(settings.CORS_ALLOWED_ORIGINS),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Last-Event-ID",
+        "Sentry-Trace",
+        "Baggage",
+        CANARY_HEADER_NAME,
+    ],
 )
 
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["gpt-mini-app-api.lightny.pro", "*.lightny.pro", "localhost", "192.168.1.137", "*.kosh.games"],
+    allowed_hosts=[
+        "gpt-mini-app-api.lightny.pro",
+        "*.lightny.pro",
+        "lightny.ru",
+        "*.lightny.ru",
+        "localhost",
+        "127.0.0.1",
+        "192.168.1.137",
+        "*.kosh.games",
+    ],
 )
 
 
@@ -123,9 +127,11 @@ async def attach_canary_request_context(request: Request, call_next):
 dark = APIRouter()
 fsd.install(dark, path="/docs")
 app.include_router(dark)
+app.include_router(health)
 app.include_router(chat_router, prefix="/api/v1", tags=['conversations'])
 app.include_router(chat_folders_router, prefix="/api/v1", tags=['chat-folders'])
 app.include_router(auth, prefix="/api/v1")
+app.include_router(account, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
 app.include_router(documents, prefix="/api/v1")
 app.include_router(user_usage, prefix="/api/v1")
@@ -137,6 +143,7 @@ app.include_router(usage_packs, prefix="/api/v1")
 app.include_router(payments, prefix="/api/v1")
 app.include_router(metrics, prefix="/api/v1")
 app.include_router(models_catalog, prefix="/api/v1")
+app.include_router(public_catalog, prefix="/api/v1")
 app.include_router(whats_new, prefix="/api/v1")
 app.include_router(admin_broadcast, prefix="/api/v1")
 app.include_router(personalization, prefix="/api/v1")

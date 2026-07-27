@@ -247,6 +247,8 @@ async def _retry_delay_s(attempt: int, base: float = 0.8, cap: float = 8.0) -> f
 @dataclass
 class UsageTracker:
     input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
     web_search_calls: int = 0
@@ -258,6 +260,16 @@ class UsageTracker:
             return
 
         self.input_tokens = usage.input_tokens or self.input_tokens
+        input_tokens_details = getattr(usage, "input_tokens_details", None)
+        if input_tokens_details:
+            self.cached_input_tokens = (
+                getattr(input_tokens_details, "cached_tokens", None)
+                or self.cached_input_tokens
+            )
+            self.cache_write_tokens = (
+                getattr(input_tokens_details, "cache_write_tokens", None)
+                or self.cache_write_tokens
+            )
         total_output_tokens = usage.output_tokens or self.output_tokens
 
         output_tokens_details = getattr(usage, "output_tokens_details", None)
@@ -781,6 +793,8 @@ async def stream_normalized_openai_response(
                 reasoning_tokens=usage.reasoning_tokens,
                 web_search_calls=usage.web_search_calls,
                 images_generated=usage.images_generated,
+                cached_input_tokens=usage.cached_input_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
             )
         if chain_attempted and user_id:
             if chain_succeeded:
@@ -850,6 +864,8 @@ async def stream_normalized_openai_response(
                 reasoning_tokens=usage.reasoning_tokens,
                 web_search_calls=usage.web_search_calls,
                 images_generated=usage.images_generated,
+                cached_input_tokens=usage.cached_input_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
             )
         raise
 

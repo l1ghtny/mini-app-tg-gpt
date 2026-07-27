@@ -479,6 +479,7 @@ async def _select_recipients(session: AsyncSession, filters: BroadcastFilters, l
             isouter=True,
         )
         .join(SubscriptionTier, SubscriptionTier.id == UserSubscription.tier_id, isouter=True)
+        .where(AppUser.telegram_id.is_not(None))
         .order_by(UserSubscription.started_at.desc().nulls_last(), AppUser.id.asc())
     )
 

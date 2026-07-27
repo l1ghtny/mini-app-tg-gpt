@@ -15,7 +15,7 @@ python = ">=3.12,<3.15"
 openai = "^2.36.0"
 python-dotenv = ">=1.0.1"
 sqlmodel = ">=0.0.25"
-SQLAlchemy = ">=2.0.30"
+SQLAlchemy = {version = ">=2.0.50,<2.1", extras = ["asyncio"]}
 python-telegram-bot = ">=21.4"
 requests = ">=2.31.0"
 typing_extensions = ">=4.11.0"
@@ -40,6 +40,7 @@ google-genai = ">=1.55.0"
 socksio = ">=1.0,<2.0"
 aiohttp-socks = ">=0.10,<0.11"
 fastembed = ">=0.8,<1.0"
+greenlet = ">=3.5.1,<4"
 
 
 [build-system]

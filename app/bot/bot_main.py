@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.version import APP_VERSION
 from app.db.database import engine
 from app.db.models import AppUser
+from app.api.identity_helpers import consume_telegram_link
 from app.core.metrics import track_event
 
 # Configure logging
@@ -125,8 +126,33 @@ async def cmd_start(message: types.Message):
 
     track_event_send = False
 
-    args = message.text.split("?start=")
-    payload = args[1] if len(args) > 1 else None
+    text = message.text or ""
+    if "?start=" in text:
+        payload = text.split("?start=", 1)[1]
+    else:
+        command_parts = text.split(maxsplit=1)
+        payload = command_parts[1] if len(command_parts) > 1 else None
+
+    if payload and payload.startswith("link_"):
+        async with AsyncSession(engine) as session:
+            challenge = await consume_telegram_link(
+                session,
+                token=payload.removeprefix("link_"),
+                telegram_id=telegram_id,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name,
+                username=message.from_user.username,
+            )
+        if challenge and challenge.status == "linked":
+            await message.answer("✅ Account linked. You can return to Lightny in your browser.")
+        elif challenge and challenge.status == "conflict":
+            await message.answer(
+                f"This Telegram account already belongs to another Lightny account. "
+                f"Nothing was merged. Contact support@lightny.pro and include reference {challenge.id}."
+            )
+        else:
+            await message.answer("This account-linking link is invalid or expired. Create a new one in Lightny settings.")
+        return
 
     campaign_param = None
     if payload:

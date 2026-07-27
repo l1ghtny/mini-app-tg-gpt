@@ -18,6 +18,13 @@ AllowedToolChoices = Literal[
 ]
 PremiumSampleKind = Literal["flagship_text"]
 SearchMode = Literal["quick", "standard", "deep"]
+WorkflowKind = Literal[
+    "quick_answer",
+    "writing_analysis",
+    "compare_decide",
+    "research_sources",
+    "document_analysis",
+]
 
 
 ImageQualitySetting = Literal["low", "medium", "high"]
@@ -92,6 +99,7 @@ class NewMessageRequest(BaseModel):
     reasoning_effort: Optional[str] = None
     search_mode: Optional[SearchMode] = None
     premium_sample_kind: Optional[PremiumSampleKind] = None
+    workflow_kind: Optional[WorkflowKind] = None
 
     @field_validator("model", mode="before")
     @classmethod

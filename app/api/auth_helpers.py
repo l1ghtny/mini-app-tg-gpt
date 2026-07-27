@@ -18,8 +18,17 @@ async def process_login(
     *,
     telegram_profile: dict | None = None,
 ) -> tuple[str, bool]:
-    result = await session.exec(select(models.AppUser).where(models.AppUser.telegram_id == telegram_id))
-    user = result.first()
+    user = (await session.exec(
+        select(models.AppUser).where(models.AppUser.telegram_id == telegram_id)
+    )).first()
+    identity = (await session.exec(
+        select(models.UserIdentity).where(
+            models.UserIdentity.provider == "telegram",
+            models.UserIdentity.subject == str(telegram_id),
+        )
+    )).first()
+    if not user and identity:
+        user = await session.get(models.AppUser, identity.user_id)
     username = telegram_profile.get("username") if telegram_profile else None
     first_name = telegram_profile.get("first_name") if telegram_profile else None
     last_name = telegram_profile.get("last_name") if telegram_profile else None
@@ -32,10 +41,20 @@ async def process_login(
             telegram_last_name=last_name,
         )
         session.add(user)
+        await session.flush()
+        identity = models.UserIdentity(
+            user_id=user.id,
+            provider="telegram",
+            subject=str(telegram_id),
+        )
+        session.add(identity)
         await session.commit()
         await session.refresh(user)
     else:
         changed = False
+        if user.telegram_id != telegram_id:
+            user.telegram_id = telegram_id
+            changed = True
         if username is not None and username != user.telegram_username:
             user.telegram_username = username
             changed = True
@@ -45,10 +64,29 @@ async def process_login(
         if last_name is not None and last_name != user.telegram_last_name:
             user.telegram_last_name = last_name
             changed = True
+        if not identity:
+            identity = models.UserIdentity(
+                user_id=user.id,
+                provider="telegram",
+                subject=str(telegram_id),
+            )
+            session.add(identity)
+            changed = True
+        else:
+            identity.last_used_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            session.add(identity)
+            changed = True
         if changed:
             session.add(user)
             await session.commit()
 
+
+    bonus_granted = await ensure_starter_bundle(session, user)
+    access_token = create_access_token(data={"sub": str(user.id)})
+    return access_token, bonus_granted
+
+
+async def ensure_starter_bundle(session: AsyncSession, user: models.AppUser) -> bool:
     active_sub = await get_current_subscription(session, user.id)
     bonus_granted = False
 
@@ -85,5 +123,4 @@ async def process_login(
     else:
         logger.info("user %s has an active subscription", user.id)
 
-    access_token = create_access_token(data={"sub": str(user.id)})
-    return access_token, bonus_granted
+    return bonus_granted

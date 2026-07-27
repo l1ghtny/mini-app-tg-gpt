@@ -15,7 +15,7 @@ class PricingService:
             select(AiModelPricing).where(
                 AiModelPricing.provider == provider,
                 AiModelPricing.model_name == model_name,
-                AiModelPricing.is_active == True,
+                AiModelPricing.is_active.is_(True),
             )
         )
         return result.first()
@@ -36,20 +36,48 @@ class PricingService:
         reasoning_tokens: int,
         web_search_calls: int,
         images_generated: int,
-    ) -> Tuple[str, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal]:
+        cached_input_tokens: int = 0,
+        cache_write_tokens: int = 0,
+    ) -> Tuple[str, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal]:
         pricing = await self.get_pricing(provider, model_name)
         currency = pricing.currency if pricing else "USD"
         ui = pricing.unit_price_input_per_1m if pricing else Decimal("0")
+        uci = pricing.unit_price_cached_input_per_1m if pricing else None
+        ucw = pricing.unit_price_cache_write_per_1m if pricing else None
         uo = pricing.unit_price_output_per_1m if pricing else Decimal("0")
         ur = pricing.unit_price_reasoning_per_1m if pricing else Decimal("0")
         us = pricing.unit_price_web_search_call if pricing else Decimal("0")
         im = pricing.unit_price_image_generation if pricing else Decimal("0")
 
-        cost_input = self.cost_per_1m(ui, input_tokens)
+        cached_input_tokens = max(0, min(int(cached_input_tokens or 0), int(input_tokens or 0)))
+        uncached_input_tokens = max(0, int(input_tokens or 0) - cached_input_tokens)
+        cost_input = self.cost_per_1m(ui, uncached_input_tokens)
+        # Falling back to the normal input price is deliberately conservative:
+        # a model without an explicit cache rate must never look artificially cheap.
+        cost_cached_input = self.cost_per_1m(uci if uci is not None else ui, cached_input_tokens)
+        cost_cache_write = self.cost_per_1m(ucw if ucw is not None else ui, cache_write_tokens)
         cost_output = self.cost_per_1m(uo, output_tokens)
         cost_reasoning = self.cost_per_1m(ur, reasoning_tokens)
         cost_web_search = (us * Decimal(web_search_calls)).quantize(Decimal("0.000001")) if us else Decimal("0")
         cost_images = (im * Decimal(images_generated)).quantize(Decimal("0.000001")) if im else Decimal("0")
-        total = (cost_input + cost_output + cost_reasoning + cost_web_search + cost_images).quantize(Decimal("0.000001"))
+        total = (
+            cost_input
+            + cost_cached_input
+            + cost_cache_write
+            + cost_output
+            + cost_reasoning
+            + cost_web_search
+            + cost_images
+        ).quantize(Decimal("0.000001"))
 
-        return currency, cost_input, cost_output, cost_reasoning, cost_web_search, cost_images, total
+        return (
+            currency,
+            cost_input,
+            cost_cached_input,
+            cost_cache_write,
+            cost_output,
+            cost_reasoning,
+            cost_web_search,
+            cost_images,
+            total,
+        )

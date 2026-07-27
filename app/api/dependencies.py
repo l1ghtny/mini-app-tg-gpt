@@ -1,6 +1,6 @@
-﻿from typing import Any
+import uuid
 
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from redis.asyncio import Redis
@@ -8,21 +8,53 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
-from app.db.models import AppUser
-from app.redis.settings import settings as redis_settings
-from app.db.database import get_session
 from app.db import models
+from app.db.database import get_session
+from app.db.models import AppUser
+from app.api.session_helpers import resolve_browser_session
 from app.redis.event_bus import RedisEventBus
+from app.redis.settings import settings as redis_settings
 from app.services.subscription_check.entitlements import (
     get_active_subscriptions,
     get_active_usage_packs,
     select_text_entitlement,
 )
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/debug-login", scheme_name="Bearer")
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="/api/v1/auth/debug-login",
+    scheme_name="Bearer",
+    auto_error=False,
+)
+
+
+async def _user_from_token(token: str, session: AsyncSession) -> AppUser | None:
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        raw_user_id: str | None = payload.get("sub")
+        if not raw_user_id:
+            return None
+        user_id = uuid.UUID(raw_user_id)
+    except (JWTError, ValueError):
+        return None
+
+    result = await session.exec(select(models.AppUser).where(models.AppUser.id == user_id))
+    user = result.first()
+    return user if user and user.deleted_at is None else None
+
+
+def _request_credential(request: Request, bearer_token: str | None) -> str | None:
+    if bearer_token:
+        return bearer_token
+    cookie_token = request.cookies.get(settings.AUTH_COOKIE_NAME)
+    if cookie_token and request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if origin not in settings.CORS_ALLOWED_ORIGINS:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="untrusted_origin")
+    return cookie_token
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    token: str | None = Depends(oauth2_scheme),
     session: AsyncSession = Depends(get_session),
 ) -> AppUser:
     credentials_exception = HTTPException(
@@ -30,18 +62,36 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    result = await session.exec(select(models.AppUser).where(models.AppUser.id == user_id))
-    user = result.first()
+    credential = _request_credential(request, token)
+    if token:
+        user = await _user_from_token(credential, session) if credential else None
+    else:
+        resolved = await resolve_browser_session(session, credential) if credential else None
+        user = resolved[0] if resolved else None
     if user is None:
         raise credentials_exception
+    return user
+
+
+async def get_optional_current_user(
+    request: Request,
+    token: str | None = Depends(oauth2_scheme),
+    session: AsyncSession = Depends(get_session),
+) -> AppUser | None:
+    credential = _request_credential(request, token)
+    if not credential:
+        return None
+    if token:
+        user = await _user_from_token(credential, session)
+    else:
+        resolved = await resolve_browser_session(session, credential)
+        user = resolved[0] if resolved else None
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 

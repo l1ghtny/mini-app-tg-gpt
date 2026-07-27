@@ -105,8 +105,8 @@ TEXT_MODEL_DISPLAY_NAMES: dict[str, tuple[str, str]] = {
     "gemini-3.1-flash-lite": ("Gemini 3.1 Flash Lite", "Gemini 3.1 Flash Lite"),
     "gemini-3.5-flash": ("Gemini 3.5 Flash", "Gemini 3.5 Flash"),
     "gemini-3.1-pro-preview": ("Gemini 3.1 Pro", "Gemini 3.1 Pro"),
-    "sonar": ("AI Search with sources", "??-????? ? ???????????"),
-    "sonar-pro": ("Deep AI Search", "???????? ??-?????"),
+    "sonar": ("AI Search with sources", "AI-поиск с источниками"),
+    "sonar-pro": ("Deep AI Search", "Глубокий AI-поиск"),
 }
 
 TEXT_USAGE_BUCKET_BY_MODEL: dict[str, str] = {}

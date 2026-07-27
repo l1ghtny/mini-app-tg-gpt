@@ -22,12 +22,16 @@ async def log_usage(
     reasoning_tokens: int,
     web_search_calls: int,
     images_generated: int,
+    cached_input_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> None:
     pricing = PricingService(session)
 
     (
         currency,
         cost_input,
+        cost_cached_input,
+        cost_cache_write,
         cost_output,
         cost_reasoning,
         cost_web_search,
@@ -41,6 +45,8 @@ async def log_usage(
         reasoning_tokens=reasoning_tokens,
         web_search_calls=web_search_calls,
         images_generated=images_generated,
+        cached_input_tokens=cached_input_tokens,
+        cache_write_tokens=cache_write_tokens,
     )
 
     usage_row = TokenUsage(
@@ -52,12 +58,16 @@ async def log_usage(
         status=status,
         error_message=error_message,
         input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
+        cache_write_tokens=cache_write_tokens,
         output_tokens=output_tokens,
         reasoning_tokens=reasoning_tokens,
         web_search_calls=web_search_calls,
         images_generated=images_generated,
         currency=currency,
         cost_input=cost_input,
+        cost_cached_input=cost_cached_input,
+        cost_cache_write=cost_cache_write,
         cost_output=cost_output,
         cost_reasoning=cost_reasoning,
         cost_web_search=cost_web_search,

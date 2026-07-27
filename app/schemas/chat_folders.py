@@ -10,6 +10,7 @@ class ChatFolderBase(BaseModel):
         default=None,
         validation_alias=AliasChoices("prompt", "system_prompt"),
     )
+    document_ids: List[uuid.UUID] = Field(default_factory=list)
 
 class ChatFolderCreate(ChatFolderBase):
     pass
@@ -20,6 +21,7 @@ class ChatFolderUpdate(BaseModel):
         default=None,
         validation_alias=AliasChoices("prompt", "system_prompt"),
     )
+    document_ids: Optional[List[uuid.UUID]] = None
 
 class ChatFolder(ChatFolderBase):
     id: uuid.UUID

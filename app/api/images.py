@@ -347,6 +347,9 @@ async def prepare_image_share(
     image_url = asset.public_url if asset else content.value
     result_id = str(asset.id if asset else content.id)
 
+    if current_user.telegram_id is None:
+        raise HTTPException(status_code=409, detail="telegram_identity_required")
+
     # Call Telegram savePreparedInlineMessage
     token = os.getenv("BOT_TOKEN")
     if not token or token == "mock_token":
@@ -407,4 +410,3 @@ async def prepare_image_share(
             str(current_user.id),
         )
         raise HTTPException(status_code=502, detail="Telegram prepare-share unavailable") from exc
-
