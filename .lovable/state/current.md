@@ -1,5 +1,18 @@
 # Current State
 
+## 2026-07-31 Telegram Mini App regression audit
+
+- Audited frontend commit `b3430a8` against the Telegram `initData` path: the passkey changes are confined to web/passkey handlers and do not change Telegram authentication, bearer tokens, chat, streaming, account lookup, or backend runtime code.
+- Executed a correctly signed disposable Telegram Mini App login against the isolated backend, disposable PostgreSQL database, and live Redis. `/api/v1/auth/telegram` returned 200, issued a bearer token, and `/api/v1/auth/me` returned the same Telegram ID.
+- Found and fixed one Mini App presentation regression from portaling toasts outside `#root`: the toast viewport now applies Telegram fullscreen safe-area variables directly, preventing notifications from overlapping device or Telegram UI insets.
+- Focused backend authentication/passkey/identity suite: 23 tests passed in the shared test configuration; the one production-mode debug-delivery assertion also passed when run with explicit `TEST_ENV=0 DEBUG_MODE=0`.
+- Frontend verification after the safe-area fix: all 19 Vitest tests passed, production build passed, and targeted ESLint passed.
+
+### Next steps
+
+1. Test the release candidate once inside a real Telegram iOS/Android client before production rollout; browser simulation cannot reproduce Telegram's native bridge lifecycle exactly.
+2. Consider making Telegram `initData` take precedence over an existing browser-session cookie inside a Telegram container; the current restore-first order predates this passkey change but deserves a separate identity-safety review.
+
 ## 2026-07-31 passkey local-origin diagnosis and UX fix
 
 - Reproduced passkey registration in the in-app browser and captured the exact WebAuthn failure: `SecurityError: This is an invalid domain.` The challenge endpoint returned successfully; the numeric `127.0.0.1` relying-party domain caused the browser rejection before verification.
