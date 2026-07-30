@@ -1,0 +1,8 @@
+{
+  "folders": [
+    { "name": "backend", "path": "." },
+    { "name": "frontend", "path": "../chat-bot-telegram" },
+    { "name": "seo", "path": "../chat-search-link" }
+  ],
+  "settings": {}
+}

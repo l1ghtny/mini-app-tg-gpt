@@ -35,10 +35,16 @@ _normalize_proxy_env_aliases()
 class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    GEMINI_API_BASE_URL: str = os.getenv("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
+    GEMINI_API_BASE_URL: str = os.getenv(
+        "GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
+    )
     PERPLEXITY_API_KEY: str = os.getenv("PERPLEXITY_API_KEY", "")
-    PERPLEXITY_API_BASE_URL: str = os.getenv("PERPLEXITY_API_BASE_URL", "https://api.perplexity.ai")
-    PERPLEXITY_SEARCH_CONTEXT_SIZE: str = os.getenv("PERPLEXITY_SEARCH_CONTEXT_SIZE", "low")
+    PERPLEXITY_API_BASE_URL: str = os.getenv(
+        "PERPLEXITY_API_BASE_URL", "https://api.perplexity.ai"
+    )
+    PERPLEXITY_SEARCH_CONTEXT_SIZE: str = os.getenv(
+        "PERPLEXITY_SEARCH_CONTEXT_SIZE", "low"
+    )
     GEMINI_PROXY_URL: str = (
         os.getenv("GEMINI_PROXY_URL")
         or os.getenv("GOOGLE_PROXY_URL")
@@ -46,7 +52,9 @@ class Settings:
         or os.getenv("all_proxy")
         or os.getenv("http_proxy")
     )
-    DATABASE_URL: str = os.getenv("TEST_DATABASE_URL") if TEST_ENV else os.getenv("DATABASE_URL")
+    DATABASE_URL: str = (
+        os.getenv("TEST_DATABASE_URL") if TEST_ENV else os.getenv("DATABASE_URL")
+    )
     DATABASE_READ_URL: str = (
         os.getenv("TEST_DATABASE_URL")
         if TEST_ENV
@@ -86,10 +94,60 @@ class Settings:
         ).split(",")
         if origin.strip()
     )
-    WEB_AUTH_ENABLED: bool = os.getenv("WEB_AUTH_ENABLED", "False").lower() in ("true", "1")
+    WEB_AUTH_ENABLED: bool = os.getenv("WEB_AUTH_ENABLED", "False").lower() in (
+        "true",
+        "1",
+    )
     WEB_AUTH_LINK_TTL_MINUTES: int = int(os.getenv("WEB_AUTH_LINK_TTL_MINUTES", "15"))
     WEB_AUTH_CALLBACK_URL: str = os.getenv("WEB_AUTH_CALLBACK_URL", "")
     WEB_AUTH_FROM_EMAIL: str = os.getenv("WEB_AUTH_FROM_EMAIL", "")
+    TELEGRAM_OIDC_ENABLED: bool = os.getenv(
+        "TELEGRAM_OIDC_ENABLED", "False"
+    ).lower() in ("true", "1")
+    TELEGRAM_OIDC_CLIENT_ID: str = os.getenv("TELEGRAM_OIDC_CLIENT_ID", "").strip()
+    TELEGRAM_OIDC_CLIENT_SECRET: str = os.getenv(
+        "TELEGRAM_OIDC_CLIENT_SECRET", ""
+    ).strip()
+    TELEGRAM_OIDC_REDIRECT_URI: str = os.getenv(
+        "TELEGRAM_OIDC_REDIRECT_URI", ""
+    ).strip()
+    TELEGRAM_OIDC_SCOPES: str = os.getenv(
+        "TELEGRAM_OIDC_SCOPES",
+        "openid profile telegram:bot_access",
+    ).strip()
+    TELEGRAM_OIDC_STATE_TTL_SECONDS: int = int(
+        os.getenv("TELEGRAM_OIDC_STATE_TTL_SECONDS", "600")
+    )
+    TELEGRAM_OIDC_HTTP_TIMEOUT_SECONDS: float = float(
+        os.getenv("TELEGRAM_OIDC_HTTP_TIMEOUT_SECONDS", "10")
+    )
+    TELEGRAM_OIDC_ISSUER: str = os.getenv(
+        "TELEGRAM_OIDC_ISSUER", "https://oauth.telegram.org"
+    )
+    TELEGRAM_OIDC_AUTH_URL: str = os.getenv(
+        "TELEGRAM_OIDC_AUTH_URL", "https://oauth.telegram.org/auth"
+    )
+    TELEGRAM_OIDC_TOKEN_URL: str = os.getenv(
+        "TELEGRAM_OIDC_TOKEN_URL", "https://oauth.telegram.org/token"
+    )
+    TELEGRAM_OIDC_JWKS_URL: str = os.getenv(
+        "TELEGRAM_OIDC_JWKS_URL",
+        "https://oauth.telegram.org/.well-known/jwks.json",
+    )
+    PASSKEY_RP_ID: str = os.getenv("PASSKEY_RP_ID", "").strip().lower()
+    PASSKEY_RP_NAME: str = (
+        os.getenv("PASSKEY_RP_NAME", "AIwithUI").strip() or "AIwithUI"
+    )
+    PASSKEY_CHALLENGE_TTL_SECONDS: int = int(
+        os.getenv("PASSKEY_CHALLENGE_TTL_SECONDS", "300")
+    )
+    PASSKEY_ALLOWED_ORIGINS: tuple[str, ...] = tuple(
+        origin.strip().rstrip("/")
+        for origin in os.getenv(
+            "PASSKEY_ALLOWED_ORIGINS", ",".join(CORS_ALLOWED_ORIGINS)
+        ).split(",")
+        if origin.strip()
+    )
     AUTH_COOKIE_NAME: str = os.getenv("AUTH_COOKIE_NAME", "lightny_session")
     AUTH_COOKIE_SECURE: bool = os.getenv(
         "AUTH_COOKIE_SECURE",
@@ -99,7 +157,9 @@ class Settings:
     AUTH_COOKIE_DOMAIN: str | None = os.getenv("AUTH_COOKIE_DOMAIN") or None
     BROWSER_SESSION_TTL_DAYS: int = int(os.getenv("BROWSER_SESSION_TTL_DAYS", "30"))
     AUTH_COOKIE_MAX_AGE_SECONDS: int = int(
-        os.getenv("AUTH_COOKIE_MAX_AGE_SECONDS", str(BROWSER_SESSION_TTL_DAYS * 24 * 60 * 60))
+        os.getenv(
+            "AUTH_COOKIE_MAX_AGE_SECONDS", str(BROWSER_SESSION_TTL_DAYS * 24 * 60 * 60)
+        )
     )
     WEB_AUTH_TRUSTED_PROXY_CIDRS: tuple[str, ...] = tuple(
         cidr.strip()
@@ -128,12 +188,25 @@ class Settings:
     WEBAPP_URL: str = os.getenv("WEBAPP_URL")
     BOT_TOKEN_TEST_BOT: str = os.getenv("BOT_TOKEN_TEST_BOT")
     BROADCAST_ADMIN_TOKEN: str = os.getenv("BROADCAST_ADMIN_TOKEN", "")
-    BROADCAST_ADMIN_TELEGRAM_ALLOWLIST: str = os.getenv("BROADCAST_ADMIN_TELEGRAM_ALLOWLIST", "")
-    OPENAI_CHAINING_ENABLED: bool = os.getenv("OPENAI_CHAINING_ENABLED", "False").lower() in ("true", "1")
-    OPENAI_CHAIN_MAX_INACTIVITY_DAYS: int = int(os.getenv("OPENAI_CHAIN_MAX_INACTIVITY_DAYS", "14"))
+    BROADCAST_ADMIN_TELEGRAM_ALLOWLIST: str = os.getenv(
+        "BROADCAST_ADMIN_TELEGRAM_ALLOWLIST", ""
+    )
+    OPENAI_CHAINING_ENABLED: bool = os.getenv(
+        "OPENAI_CHAINING_ENABLED", "False"
+    ).lower() in ("true", "1")
+    OPENAI_CHAIN_MAX_INACTIVITY_DAYS: int = int(
+        os.getenv("OPENAI_CHAIN_MAX_INACTIVITY_DAYS", "14")
+    )
     DOCUMENT_PROVIDER_DEFAULT: str = os.getenv("DOCUMENT_PROVIDER_DEFAULT", "openai")
-    GOOGLE_DOCUMENTS_ENABLED: bool = os.getenv("GOOGLE_DOCUMENTS_ENABLED", "False").lower() in ("true", "1")
-    DOCUMENT_PROVIDER_FALLBACK_ENABLED: bool = os.getenv("DOCUMENT_PROVIDER_FALLBACK_ENABLED", "True").lower() in ("true", "1")
-    DOCUMENT_DUAL_INDEX_ENABLED: bool = os.getenv("DOCUMENT_DUAL_INDEX_ENABLED", "False").lower() in ("true", "1")
+    GOOGLE_DOCUMENTS_ENABLED: bool = os.getenv(
+        "GOOGLE_DOCUMENTS_ENABLED", "False"
+    ).lower() in ("true", "1")
+    DOCUMENT_PROVIDER_FALLBACK_ENABLED: bool = os.getenv(
+        "DOCUMENT_PROVIDER_FALLBACK_ENABLED", "True"
+    ).lower() in ("true", "1")
+    DOCUMENT_DUAL_INDEX_ENABLED: bool = os.getenv(
+        "DOCUMENT_DUAL_INDEX_ENABLED", "False"
+    ).lower() in ("true", "1")
+
 
 settings = Settings()

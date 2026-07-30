@@ -18,24 +18,28 @@ Release order is backend migration, backend canary, browser app canary, Telegram
    .venv/bin/python scripts/release/pilot_preflight.py
    ```
 
-3. Confirm `WEB_AUTH_CALLBACK_URL`, `WEBAPP_URL`, CORS origins, secure cookie settings, trusted proxy CIDRs, SMTP delivery, Sentry DSN, frontend API URL, `VITE_SUPPORT_EMAIL`, bot username, and public-site URL.
-4. Confirm the migration head is `v1a2b3c4d5e6` and take a PostgreSQL backup before applying it.
+3. In BotFather, configure **Bot Settings → Web Login** with the browser origin and the exact backend callback URL. Store the resulting client ID and secret only in the backend deployment secret.
+4. Confirm `WEB_AUTH_CALLBACK_URL`, `WEBAPP_URL`, CORS origins, secure cookie settings, trusted proxy CIDRs, SMTP delivery, Sentry DSN, frontend API URL, `VITE_SUPPORT_EMAIL`, bot username, and public-site URL.
+5. Confirm `TELEGRAM_OIDC_ENABLED=true`, the Telegram OIDC client ID/secret/callback, `PASSKEY_RP_ID`, and exact `PASSKEY_ALLOWED_ORIGINS`.
+6. Confirm the migration head is `w1a2b3c4d5e6` and take a PostgreSQL backup before applying it.
 
 ## Backend first
 
 1. Run `alembic upgrade head` as the migration job.
 2. Deploy the backend canary.
-3. Verify email request/verify, cookie reload, session listing/revocation, logout, account export, and a harmless Telegram login.
-4. Verify a browser account can create a Telegram link challenge. Use dedicated test identities for linked and conflict outcomes.
-5. Check Sentry, structured logs, 5xx rate, stream errors, payment webhooks, and database/Redis saturation before promotion.
+3. Verify Telegram browser OIDC login resolves the same internal user ID as the Telegram Mini App, then verify cookie reload, session listing/revocation, logout, and passkey enrollment/login.
+4. Verify email request/verify and account export as fallback/lifecycle paths.
+5. Verify a browser account can create a Telegram link challenge. Use dedicated test identities for linked and conflict outcomes.
+6. Check Sentry, structured logs, 5xx rate, stream errors, payment webhooks, and database/Redis saturation before promotion.
 
 ## Browser and Telegram clients
 
 1. Deploy the browser app canary with the backend URL and trust/support variables verified above.
 2. Run the Playwright pilot suite against the canary URL.
-3. Verify desktop and mobile login, prompt handoff, reload, settings controls, support fallback, and logout manually once.
-4. Open the Telegram Mini App with a canary user and verify login, existing chats, send/stream, and the account-link completion message.
-5. Promote the frontend only while the backend canary remains healthy.
+3. Verify desktop and mobile Telegram login, email fallback, prompt handoff, reload, settings controls, support fallback, and logout manually once.
+4. Open the Telegram Mini App with the same canary user and verify the same internal account, existing chats, plan/usage, browser-to-Mini-App and Mini-App-to-browser chat visibility, and send/stream.
+5. Enroll a passkey, sign out, and sign back in with the passkey without opening Telegram or sending email.
+6. Promote the frontend only while the backend canary remains healthy.
 
 ## Public trust pages
 

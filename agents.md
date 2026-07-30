@@ -6,6 +6,7 @@ This file is the working guide for agents in the backend repo.
 
 - Backend repo (this root): [`G:\0\Coding_projects\Python\PycharmProjects\mini-app-tg-gpt`](G:/0/Coding_projects/Python/PycharmProjects/mini-app-tg-gpt)
 - Frontend repo (reference only): [`G:\0\Coding_projects\frontend\gpt-mini-app-frontend-lovable`](G:/0/Coding_projects/frontend/gpt-mini-app-frontend-lovable)
+- SEO repo: [`/Users/lightny/0/coding/PersonalProjects/chat-search-link`](/Users/lightny/0/coding/PersonalProjects/chat-search-link)
 - Shared project memory folder currently lives in the frontend repo: `.lovable/`
 
 This backend repo should be usable independently. Treat the frontend repo as supporting context only.
@@ -44,6 +45,13 @@ This backend repo should be usable independently. Treat the frontend repo as sup
   - recovery/resume: `src/lib/streamRecovery.ts`
 - Error and product telemetry is integrated with Sentry.
 - Deployment includes canary routing hooks (`src/lib/canary.ts`, `k8s/`, `scripts/release/`).
+
+### SEO (`chat-search-link`)
+
+- Russian-first TanStack Start site for organic acquisition.
+- Positions AI with UI as one product with a full web app and a Telegram Mini App.
+- Web CTAs point to the browser app; Telegram CTAs preserve start-only deep links.
+- Copy must follow the real backend catalog, entitlement rules, document behavior, and web-auth rollout state.
 
 ## Current Architectural Principles
 

@@ -57,6 +57,7 @@ async def issue_magic_link(
     *,
     email: str,
     target_user: models.AppUser | None,
+    debug_delivery: bool | None = None,
 ) -> str | None:
     normalized = normalize_email(email)
     token = secrets.token_urlsafe(32)
@@ -70,7 +71,9 @@ async def issue_magic_link(
     session.add(challenge)
     await session.commit()
 
-    if settings.DEBUG_MODE or settings.TEST_ENV:
+    if debug_delivery is None:
+        debug_delivery = settings.DEBUG_MODE or settings.TEST_ENV
+    if debug_delivery:
         return token
 
     try:

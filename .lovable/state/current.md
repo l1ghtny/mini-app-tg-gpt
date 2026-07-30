@@ -1,5 +1,32 @@
 # Current State
 
+## 2026-07-30 closed-alpha Telegram browser login
+
+- Added Telegram authorization-code OIDC with PKCE, one-time Redis state, nonce validation, JWKS signature verification, pinned issuer/audience, and safe local return paths.
+- Browser Telegram login now resolves through the same `process_login` path as the Mini App and issues the existing HttpOnly browser-session cookie.
+- Added release preflight checks for Telegram OIDC and passkey configuration; updated the release runbook to migration head `w1a2b3c4d5e6` and the real cross-surface acceptance flow.
+- Focused backend tests pass (`14 passed` after the final OIDC verification test); PostgreSQL-backed browser session/linking/canonical Telegram identity tests pass (`4 passed` against `tg-bot-test`).
+- Frontend follow-up implemented in `chat-bot-telegram`: Telegram is the primary browser sign-in, passkey and email remain available, and a successful Telegram login prompts passkey enrollment.
+- Audited the complete backend/frontend dirty worktrees as one release candidate. Changed backend files pass Ruff, focused auth tests pass (`14 passed`), and the PostgreSQL identity/session suite passes (`4 passed`) against the isolated `tg-bot-test` database.
+- The legacy full backend suite is not a clean repository-wide gate: three unchanged test files are non-UTF-8, many database tests require an explicitly exported `TEST_DATABASE_URL`, and two unchanged Google proxy tests currently fail independently of this tranche.
+
+### Remaining rollout configuration
+
+1. In BotFather Web Login, register the browser origin and exact backend callback URL.
+2. Add `TELEGRAM_OIDC_CLIENT_ID`, `TELEGRAM_OIDC_CLIENT_SECRET`, `TELEGRAM_OIDC_REDIRECT_URI`, `TELEGRAM_OIDC_ENABLED=true`, `PASSKEY_RP_ID`, and `PASSKEY_ALLOWED_ORIGINS` to the backend deployment secret.
+3. Run the production preflight, migrate to `w1a2b3c4d5e6`, deploy backend before frontend, and perform the real Telegram browser/Mini App/passkey acceptance flow.
+
+## 2026-07-29 home composer aurora visibility
+
+- Restored the home-page composer glow without reintroducing the former rectangular blur artifacts.
+- Root cause: the radial gradients still existed, but their focal point sat 170 px below the viewport, so the visible area contained only the nearly transparent tail behind the fixed composer.
+- Raised the focal region, tightened the inner highlight, and increased the primary-color depth while keeping the implementation as layered CSS radial gradients with no blur filter.
+- Verification: frontend production build and `git diff --check` pass; the running `http://127.0.0.1:4175/` preview returns HTTP 200 and serves the updated gradient values.
+
+### Next steps
+
+1. Visually review the authenticated dark-theme home screen after a hard refresh and fine-tune only the opacity if the new treatment feels too strong or too subtle on the user's display.
+
 ## 2026-07-27 pilot blockers P0.1-P0.5 implementation
 
 - Added server-side, opaque browser sessions with a 30-day lifetime, logout revocation, session listing, individual revocation, and logout-other-devices. Bearer JWTs remain available for Telegram/API compatibility but are no longer stored by browser email/debug login.

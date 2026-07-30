@@ -41,6 +41,8 @@ socksio = ">=1.0,<2.0"
 aiohttp-socks = ">=0.10,<0.11"
 fastembed = ">=0.8,<1.0"
 greenlet = ">=3.5.1,<4"
+webauthn = ">=2.2,<3"
+httpx = ">=0.28,<0.29"
 
 
 [build-system]

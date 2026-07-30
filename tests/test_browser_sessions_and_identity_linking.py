@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.identity_helpers import consume_telegram_link, issue_telegram_link
+from app.api.auth_helpers import process_login
 from app.api.session_helpers import (
     create_browser_session,
     resolve_browser_session,
@@ -12,6 +13,8 @@ from app.api.session_helpers import (
 )
 from app.core.config import settings
 from app.db.models import AppUser
+from app.db.models import UserIdentity
+from sqlmodel import select
 
 
 def _test_db_url() -> str:
@@ -93,4 +96,42 @@ async def test_telegram_link_conflict_never_merges_accounts():
         assert consumed.conflicting_user_id == existing.id
         await session.refresh(target)
         assert target.telegram_id is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_browser_telegram_login_reuses_existing_bot_account(monkeypatch):
+    monkeypatch.setattr(settings, "STARTER_BUNDLE_NAME", "free")
+    engine = create_async_engine(_test_db_url(), future=True, echo=False)
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        existing = AppUser(telegram_id=799123452, telegram_first_name="Bot user")
+        session.add(existing)
+        await session.commit()
+        await session.refresh(existing)
+
+        _, _ = await process_login(
+            session,
+            799123452,
+            telegram_profile={
+                "first_name": "Browser user",
+                "last_name": "Tester",
+                "username": "same_friend",
+            },
+        )
+
+        users = (
+            await session.exec(select(AppUser).where(AppUser.telegram_id == 799123452))
+        ).all()
+        identity = (
+            await session.exec(
+                select(UserIdentity).where(
+                    UserIdentity.provider == "telegram",
+                    UserIdentity.subject == "799123452",
+                )
+            )
+        ).one()
+        assert len(users) == 1
+        assert users[0].id == existing.id
+        assert users[0].telegram_first_name == "Browser user"
+        assert identity.user_id == existing.id
     await engine.dispose()
