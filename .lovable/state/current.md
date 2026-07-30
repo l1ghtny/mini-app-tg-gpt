@@ -1,5 +1,18 @@
 # Current State
 
+## 2026-07-31 passkey local-origin diagnosis and UX fix
+
+- Reproduced passkey registration in the in-app browser and captured the exact WebAuthn failure: `SecurityError: This is an invalid domain.` The challenge endpoint returned successfully; the numeric `127.0.0.1` relying-party domain caused the browser rejection before verification.
+- Frontend passkey registration and sign-in now detect numeric-IP origins before starting a ceremony, show actionable English/Russian guidance, classify browser/security failures, and report non-cancellation failures to Sentry.
+- The custom toast provider now portals to `document.body`, so settings errors render above Radix dialogs instead of behind the modal. Browser screenshot verification passed.
+- Local E2E web/auth/passkey origins now use `localhost`, including `PASSKEY_RP_ID=localhost`; the browser reached the native WebAuthn authenticator ceremony with backend challenge issuance and Redis state working.
+- Frontend verification: all 19 Vitest tests passed, production build passed, and ESLint completed with 0 errors and 29 pre-existing warnings.
+
+### Next steps
+
+1. Complete the native authenticator confirmation and subsequent passkey sign-in in Safari or Chrome on the final HTTPS origin.
+2. Ensure production `PASSKEY_RP_ID` is the deployed web domain and `PASSKEY_ALLOWED_ORIGINS` contains its exact HTTPS origin.
+
 ## 2026-07-30 single-friend browser acceptance complete
 
 - Verified the configured Redis on `192.168.100.7` and dependency-aware backend readiness after Docker was enabled on the host.
