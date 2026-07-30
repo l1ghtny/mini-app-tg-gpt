@@ -9,6 +9,8 @@
 - Frontend follow-up implemented in `chat-bot-telegram`: Telegram is the primary browser sign-in, passkey and email remain available, and a successful Telegram login prompts passkey enrollment.
 - Audited the complete backend/frontend dirty worktrees as one release candidate. Changed backend files pass Ruff, focused auth tests pass (`14 passed`), and the PostgreSQL identity/session suite passes (`4 passed`) against the isolated `tg-bot-test` database.
 - The legacy full backend suite is not a clean repository-wide gate: three unchanged test files are non-UTF-8, many database tests require an explicitly exported `TEST_DATABASE_URL`, and two unchanged Google proxy tests currently fail independently of this tranche.
+- With the disposable `TEST_DATABASE_URL` configured, simulated the production migration transition from `v1a2b3c4d5e6` to `w1a2b3c4d5e6`. Alembic initially detected a `created_at` nullability mismatch; the passkey model now explicitly matches the migration's non-null contract, and the final drift check reports no new operations.
+- Reran all 18 changed authentication, passkey, Telegram OIDC, session and identity tests against the disposable PostgreSQL database after the schema fix; they pass.
 
 ### Remaining rollout configuration
 

@@ -154,7 +154,8 @@ class PasskeyCredential(SQLModel, table=True):
     backed_up: bool = Field(default=False)
     name: str = Field(default="Passkey")
     created_at: datetime = Field(
-        default_factory=utcnow_naive, sa_column=Column(DateTime, index=True)
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, nullable=False, index=True),
     )
     last_used_at: Optional[datetime] = Field(
         default=None, sa_column=Column(DateTime, nullable=True, index=True)
