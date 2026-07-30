@@ -1,5 +1,21 @@
 # Current State
 
+## 2026-07-30 single-friend browser acceptance complete
+
+- Verified the configured Redis on `192.168.100.7` and dependency-aware backend readiness after Docker was enabled on the host.
+- Ran the committed frontend locally against an isolated backend using `TEST_DATABASE_URL`; authenticated through the no-email debug magic-link UI and confirmed the HttpOnly browser session survives reload.
+- Browser-tested onboarding, task workflows, real OpenAI chat/SSE completion and reload persistence, settings, Russian/light/dark UI, subscription overview/plans, document upload/indexing, and 390 px mobile layouts. Payments and Telegram linking were intentionally excluded.
+- Found and fixed the document-workflow integration bug: the frontend attached documents but sent `default_tools: []`, disabling backend file search. The workflow now requests `file_search`; a real uploaded synthetic document returned its exact `ORANGE-731` code through OpenAI file search.
+- Corrected Russian project search terminology and document-retention plurals; localized close, text-selection, and image-energy accessibility labels; added missing accessible titles/descriptions to the tested dialogs.
+- Passkey registration options and challenge issuance work, but the in-app browser cannot complete the native Face ID, Touch ID, or device-PIN ceremony. Complete passkey acceptance in a normal Safari or Chrome session.
+- Frontend verification after fixes: 17 Vitest tests passed, production build passed, ESLint completed with 0 errors and 29 pre-existing warnings. Browser logs have no new dialog accessibility warnings; only expected non-Telegram WebApp and React Router future warnings remain.
+
+### Next steps
+
+1. Test passkey creation and subsequent sign-in in Safari or Chrome on the final HTTPS origin.
+2. Manually test Telegram linking and payments as explicitly reserved for the owner.
+3. Configure production Telegram OIDC/passkey secrets and origins, migrate, deploy backend before frontend, then repeat the canary smoke test before promotion.
+
 ## 2026-07-30 closed-alpha Telegram browser login
 
 - Added Telegram authorization-code OIDC with PKCE, one-time Redis state, nonce validation, JWKS signature verification, pinned issuer/audience, and safe local return paths.
