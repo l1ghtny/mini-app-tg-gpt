@@ -1,5 +1,18 @@
 # Current State
 
+## 2026-07-31 Telegram identity precedence hardened
+
+- Frontend `AuthGate` now processes signed Telegram Mini App `initData` before web callback or browser-session restoration, so a persisted cookie for account A cannot override the current Telegram account B.
+- A Telegram authentication failure no longer falls back to the stale browser cookie; retry remains possible from the unauthenticated Telegram error state.
+- Telegram display/profile fields are only overlaid when the canonical backend user's Telegram ID matches the Telegram bridge user ID.
+- Added four component regressions covering stale-cookie precedence, failed-Telegram no-fallback, missing signed data in a Telegram container, and unchanged ordinary browser-session restoration.
+- Frontend verification: all 23 Vitest tests passed, production build passed, and ESLint completed with 0 errors and the same 29 pre-existing warnings.
+
+### Next steps
+
+1. Smoke-test the committed frontend inside a real Telegram iOS/Android client before deployment.
+2. Deploy through the existing canary path and verify a known Telegram user's chat list after reload before promotion.
+
 ## 2026-07-31 Telegram Mini App regression audit
 
 - Audited frontend commit `b3430a8` against the Telegram `initData` path: the passkey changes are confined to web/passkey handlers and do not change Telegram authentication, bearer tokens, chat, streaming, account lookup, or backend runtime code.
