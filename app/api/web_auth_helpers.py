@@ -174,8 +174,8 @@ async def build_user_profile(session: AsyncSession, user: models.AppUser) -> dic
         "last_name": user.telegram_last_name,
         "username": user.telegram_username,
         "email": email,
-        "language_code": None,
-        "photo_url": None,
+        "language_code": user.preferred_language,
+        "photo_url": user.telegram_photo_url,
         "subscription_tier": tier_name,
         "auth_providers": providers,
     }

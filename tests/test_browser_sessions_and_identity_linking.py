@@ -6,6 +6,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.identity_helpers import consume_telegram_link, issue_telegram_link
 from app.api.auth_helpers import process_login
+from app.api.web_auth_helpers import build_user_profile
 from app.api.session_helpers import (
     create_browser_session,
     resolve_browser_session,
@@ -116,6 +117,8 @@ async def test_browser_telegram_login_reuses_existing_bot_account(monkeypatch):
                 "first_name": "Browser user",
                 "last_name": "Tester",
                 "username": "same_friend",
+                "language_code": "ru-RU",
+                "photo_url": "https://cdn.example/friend.jpg",
             },
         )
 
@@ -133,5 +136,10 @@ async def test_browser_telegram_login_reuses_existing_bot_account(monkeypatch):
         assert len(users) == 1
         assert users[0].id == existing.id
         assert users[0].telegram_first_name == "Browser user"
+        assert users[0].preferred_language == "ru"
+        assert users[0].telegram_photo_url == "https://cdn.example/friend.jpg"
+        profile = await build_user_profile(session, users[0])
+        assert profile["language_code"] == "ru"
+        assert profile["photo_url"] == "https://cdn.example/friend.jpg"
         assert identity.user_id == existing.id
     await engine.dispose()

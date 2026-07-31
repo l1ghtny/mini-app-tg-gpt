@@ -225,6 +225,7 @@ async def complete_telegram_oidc(
             "username": claims.get("preferred_username"),
             "first_name": claims.get("given_name") or claims.get("name"),
             "last_name": claims.get("family_name"),
+            "photo_url": claims.get("picture"),
         },
         return_to=saved["return_to"],
     )

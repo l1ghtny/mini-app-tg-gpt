@@ -19,7 +19,7 @@ async def send_web_login_link(email: str, login_url: str) -> None:
         raise RuntimeError("Web authentication email delivery is not configured")
 
     message = EmailMessage()
-    message["Subject"] = "Sign in to AI with UI / Вход в AI with UI"
+    message["Subject"] = "Sign in to Lightny AI / Вход в Lightny AI"
     message["From"] = settings.WEB_AUTH_FROM_EMAIL
     message["To"] = email
     message.set_content(

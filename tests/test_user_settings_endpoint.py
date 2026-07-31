@@ -57,6 +57,7 @@ async def test_user_settings_get_and_put():
         assert payload["default_image_model"] == "gpt-image-1.5"
         assert payload["default_thinking"] is True
         assert payload["default_document_provider"] == "openai"
+        assert payload["language"] is None
         assert payload["onboarding_state"] == {}
 
         # 2. Put text model change only (should coerce image model to google default)
@@ -112,7 +113,16 @@ async def test_user_settings_get_and_put():
         payload = response.json()
         assert payload["default_document_provider"] == "google"
 
-        # 7. Onboarding events are merged without erasing model preferences.
+        # 7. Language is an account preference shared by every authenticated surface.
+        response = await client.put(
+            "/api/v1/user/settings",
+            json={"language": "ru"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["language"] == "ru"
+
+        # 8. Onboarding events are merged without erasing model preferences.
         response = await client.put(
             "/api/v1/user/settings",
             json={
@@ -128,7 +138,7 @@ async def test_user_settings_get_and_put():
         assert payload["onboarding_state"]["try_folders"]["dismissed_at"]
         assert payload["default_document_provider"] == "google"
 
-        # 8. A later event preserves earlier items and timestamps.
+        # 9. A later event preserves earlier items and timestamps.
         welcome_seen_at = payload["onboarding_state"]["welcome"]["seen_at"]
         response = await client.put(
             "/api/v1/user/settings",
@@ -143,10 +153,56 @@ async def test_user_settings_get_and_put():
         assert payload["onboarding_state"]["welcome"]["seen_at"] == welcome_seen_at
         assert payload["onboarding_state"]["desktop_fullscreen_hint"]["seen_at"]
 
+        # 10. First-chat progress stores completion plus constrained resume context.
+        response = await client.put(
+            "/api/v1/user/settings",
+            json={
+                "onboarding_events": [
+                    {
+                        "item": "first_chat_workflow",
+                        "action": "completed",
+                        "flow_version": 1,
+                        "surface": "web_desktop",
+                        "choice": "research_sources",
+                    },
+                    {
+                        "item": "first_chat_prompt",
+                        "action": "completed",
+                        "flow_version": 1,
+                        "surface": "web_desktop",
+                    },
+                ]
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        workflow_state = payload["onboarding_state"]["first_chat_workflow"]
+        assert workflow_state["completed_at"]
+        assert workflow_state["flow_version"] == 1
+        assert workflow_state["surface"] == "web_desktop"
+        assert workflow_state["choice"] == "research_sources"
+        assert payload["onboarding_state"]["first_chat_prompt"]["completed_at"]
+
+        # Explicitly replaying a skipped guide makes it resumable again.
+        response = await client.put(
+            "/api/v1/user/settings",
+            json={
+                "onboarding_events": [
+                    {"item": "first_chat_guide", "action": "dismissed"},
+                    {"item": "first_chat_guide", "action": "seen"},
+                ]
+            },
+        )
+        assert response.status_code == 200
+        guide_state = response.json()["onboarding_state"]["first_chat_guide"]
+        assert guide_state["seen_at"]
+        assert guide_state["dismissed_at"] is None
+
         response = await client.get("/api/v1/user/settings")
         assert response.status_code == 200
         payload = response.json()
         assert payload["default_document_provider"] == "google"
+        assert payload["language"] == "ru"
         assert payload["onboarding_state"]["welcome"]["seen_at"] == welcome_seen_at
 
     await engine.dispose()

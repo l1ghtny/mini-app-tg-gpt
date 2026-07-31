@@ -12,6 +12,13 @@ from app.services.subscription_check.entitlements import get_current_subscriptio
 logger = settings.custom_logger
 
 
+def _supported_language(language_code: object) -> str | None:
+    if not isinstance(language_code, str) or not language_code.strip():
+        return None
+    primary = language_code.strip().lower().split("-", 1)[0].split("_", 1)[0]
+    return "ru" if primary == "ru" else "en"
+
+
 async def process_login(
     session: AsyncSession,
     telegram_id: int,
@@ -32,6 +39,10 @@ async def process_login(
     username = telegram_profile.get("username") if telegram_profile else None
     first_name = telegram_profile.get("first_name") if telegram_profile else None
     last_name = telegram_profile.get("last_name") if telegram_profile else None
+    photo_url = telegram_profile.get("photo_url") if telegram_profile else None
+    language = _supported_language(
+        telegram_profile.get("language_code") if telegram_profile else None
+    )
 
     if not user:
         user = models.AppUser(
@@ -39,6 +50,8 @@ async def process_login(
             telegram_username=username,
             telegram_first_name=first_name,
             telegram_last_name=last_name,
+            telegram_photo_url=photo_url,
+            preferred_language=language,
         )
         session.add(user)
         await session.flush()
@@ -63,6 +76,12 @@ async def process_login(
             changed = True
         if last_name is not None and last_name != user.telegram_last_name:
             user.telegram_last_name = last_name
+            changed = True
+        if photo_url is not None and photo_url != user.telegram_photo_url:
+            user.telegram_photo_url = photo_url
+            changed = True
+        if user.preferred_language is None and language is not None:
+            user.preferred_language = language
             changed = True
         if not identity:
             identity = models.UserIdentity(

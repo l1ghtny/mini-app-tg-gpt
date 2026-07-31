@@ -38,7 +38,16 @@ def _apply_onboarding_events(current_user: AppUser, events) -> None:
     occurred_at = datetime.now(UTC).isoformat()
     for event in events:
         item_state = dict(state.get(event.item, {}))
+        if event.action in {"seen", "completed"}:
+            # An explicit replay or later completion supersedes an earlier skip.
+            item_state.pop("dismissed_at", None)
         item_state[f"{event.action}_at"] = occurred_at
+        if event.flow_version is not None:
+            item_state["flow_version"] = event.flow_version
+        if event.surface is not None:
+            item_state["surface"] = event.surface
+        if event.choice is not None:
+            item_state["choice"] = event.choice
         state[event.item] = item_state
     current_user.onboarding_state = state
 
@@ -59,6 +68,7 @@ async def get_user_settings(
     current_user: AppUser = Depends(get_current_user),
 ):
     return UserSettingsResponse(
+        language=getattr(current_user, "preferred_language", None),
         default_text_model=canonicalize_text_model(current_user.default_text_model or "gpt-5.4-nano"),
         default_image_model=current_user.default_image_model or "gpt-image-1.5",
         default_document_provider=(getattr(current_user, "default_document_provider", None) or "openai"),
@@ -98,6 +108,8 @@ async def update_user_settings(
     current_user.default_text_model = text_model
     current_user.default_image_model = image_model
     current_user.default_document_provider = document_provider
+    if request.language is not None:
+        current_user.preferred_language = request.language
     if request.default_thinking is not None:
         current_user.default_thinking = bool(request.default_thinking)
     _apply_onboarding_events(current_user, request.onboarding_events)
@@ -107,6 +119,7 @@ async def update_user_settings(
     await session.refresh(current_user)
 
     return UserSettingsResponse(
+        language=getattr(current_user, "preferred_language", None),
         default_text_model=current_user.default_text_model,
         default_image_model=current_user.default_image_model,
         default_document_provider=(getattr(current_user, "default_document_provider", None) or "openai"),

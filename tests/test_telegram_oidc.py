@@ -89,6 +89,7 @@ async def test_oidc_completion_consumes_state_once_and_uses_verified_profile(
             "preferred_username": "friend",
             "given_name": "Pilot",
             "family_name": "Tester",
+            "picture": "https://cdn.example/pilot.jpg",
         }
     )
     monkeypatch.setattr(telegram_oidc, "_exchange_code", exchange)
@@ -104,6 +105,7 @@ async def test_oidc_completion_consumes_state_once_and_uses_verified_profile(
         "username": "friend",
         "first_name": "Pilot",
         "last_name": "Tester",
+        "photo_url": "https://cdn.example/pilot.jpg",
     }
     exchange.assert_awaited_once()
     verify.assert_awaited_once()
@@ -151,7 +153,12 @@ async def test_oidc_callback_sets_browser_session_for_resolved_telegram_user(
     user = AppUser(telegram_id=799100201, telegram_first_name="Pilot")
     resolved = TelegramOidcIdentity(
         telegram_id=799100201,
-        profile={"username": "friend", "first_name": "Pilot", "last_name": None},
+        profile={
+            "username": "friend",
+            "first_name": "Pilot",
+            "last_name": None,
+            "photo_url": "https://cdn.example/pilot.jpg",
+        },
         return_to="/",
     )
     monkeypatch.setattr(

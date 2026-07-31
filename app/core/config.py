@@ -136,7 +136,7 @@ class Settings:
     )
     PASSKEY_RP_ID: str = os.getenv("PASSKEY_RP_ID", "").strip().lower()
     PASSKEY_RP_NAME: str = (
-        os.getenv("PASSKEY_RP_NAME", "AIwithUI").strip() or "AIwithUI"
+        os.getenv("PASSKEY_RP_NAME", "Lightny AI").strip() or "Lightny AI"
     )
     PASSKEY_CHALLENGE_TTL_SECONDS: int = int(
         os.getenv("PASSKEY_CHALLENGE_TTL_SECONDS", "300")

@@ -40,6 +40,8 @@ class AppUser(SQLModel, table=True):
     telegram_username: Optional[str] = Field(default=None, index=True)
     telegram_first_name: Optional[str] = Field(default=None)
     telegram_last_name: Optional[str] = Field(default=None)
+    telegram_photo_url: Optional[str] = Field(default=None)
+    preferred_language: Optional[str] = Field(default=None)
     has_sent_first_message: bool = Field(default=False)
     campaign: Optional[str] = Field(default=None, index=True)
     deleted_at: Optional[datetime] = Field(

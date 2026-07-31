@@ -143,7 +143,7 @@ async def begin_passkey_registration(
     display_name = (
         identity.email
         if identity and identity.email
-        else user.telegram_username or user.telegram_first_name or "AIwithUI user"
+        else user.telegram_username or user.telegram_first_name or "Lightny AI user"
     )
     options = generate_registration_options(
         rp_id=rp_id,

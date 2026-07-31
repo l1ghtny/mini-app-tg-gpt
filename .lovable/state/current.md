@@ -824,3 +824,55 @@ Deploy and canary the browser-ready authentication foundation across the backend
 - Monitor TeamCity build/migration/deploy jobs, validate zero-weight canaries, run real app/chat/SSE checks, and promote only after evidence is clean.
 - Have the user confirm the production WebAuthn biometric ceremony; automated checks can validate only the surrounding API/browser flow.
 - Before a broad public rollout, separately approve and deploy a source-IP-preserving ingress path; the current MicroK8s host-port path rewrites the edge peer to loopback, so ingress cannot safely recover each public client's address.
+
+## 2026-07-31 lightny.ru marketing-site rollout
+
+### Completed
+
+- Pushed `chat-search-link` through commit `3b713723e9557d5854d91d9bcd3ece40a078579a` with a production Dockerfile, MicroK8s deployment/service/ingress, and TeamCity pipeline source.
+- Created TeamCity build configuration `TelegramMiniAppProject_LightnyWebsiteDeploy` with a private GitHub VCS root backed by a repository-scoped read-only deploy key.
+- TeamCity build `5860` built and pushed `lightny-website:2`, deployed two ready pods across nodes 2 and 3, and passed in-pod checks for `/`, `/privacy`, `/terms`, `/account-and-data`, and `/sitemap.xml`.
+- Changed only the SPB nginx `location /` upstream to `http://10.77.0.1:80` with `Host: lightny.ru`; preserved API, image, WebSocket, and XHTTP routes. Rollback copy: `/etc/nginx/sites-available/lightny.ru.pre-marketing-20260731-1102`.
+- Public verification passed for the marketing and legal routes, sitemap/robots, canonical host, browser-app CTAs, and representative `/api/v1/models/catalog`; desktop and 390x844 browser structure/menu checks passed with no console errors.
+
+### Next steps
+
+- Automatic production deployment is now explicitly approved and enabled: TeamCity has one `vcsTrigger` for the default branch with queue optimization, and enabling it did not queue an extra build.
+- SEO/conversion audit found three release-priority gaps before paid acquisition: Russian browser locales such as `ru-RU` fall back to English on the app login screen; login copy mentions email when production email auth is hidden; and SEO task links preserve a prompt but do not activate the corresponding search/document/image workflow.
+- Add real cross-domain funnel measurement before changing copy: SEO CTA click -> app landing -> auth success -> first completed message -> subscription, carrying `source` and `entry` throughout.
+- Submit `https://lightny.ru/sitemap.xml` to Yandex Webmaster and Google Search Console; the new domain currently has no visible `site:lightny.ru` results.
+
+## 2026-07-31 browser brand and email copy follow-up
+
+### Completed
+
+- Changed the default passkey relying-party display name and passkey fallback user label to Lightny AI.
+- Changed the passwordless login email subject to Lightny AI while preserving the explicit on-page confirmation safety step.
+
+### Verification
+
+- Ruff passed for the changed backend files.
+- Focused PostgreSQL auth/passkey suite passed: 16 tests.
+
+### Next steps
+
+- Deploy the backend copy/config defaults before or together with the coordinated frontend and SEO release.
+
+## 2026-07-31 account language and Telegram profile photo
+
+### Completed
+
+- Added an account-level `preferred_language` preference with `en`/`ru` validation and user-settings API support.
+- Persisted validated Mini App `photo_url` and Telegram OIDC `picture` claims as `telegram_photo_url`.
+- Returned saved language and Telegram photo through every `/auth/me`-style profile response, including passkey and browser-session restores.
+- Added migration `y1a2b3c4d5e6` after the account-onboarding migration.
+
+### Verification
+
+- Ruff passed for the complete changed backend surface.
+- The final 23-test auth, passkey, Telegram OIDC, user-settings, identity-linking, profile, and message release matrix passed against `TEST_DATABASE_URL`.
+
+### Next steps
+
+- Deploy migration `y1a2b3c4d5e6` before the frontend that sends the account language field.
+- Existing users receive their Telegram photo on their next Mini App or Telegram OIDC authentication; the initials fallback remains for users without a shared photo.
