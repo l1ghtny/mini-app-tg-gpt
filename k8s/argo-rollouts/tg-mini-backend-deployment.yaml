@@ -58,6 +58,9 @@ spec:
           httpGet:
             path: /health/ready
             port: 8000
+            httpHeaders:
+            - name: Host
+              value: 127.0.0.1
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 1
@@ -67,6 +70,9 @@ spec:
           httpGet:
             path: /health/live
             port: 8000
+            httpHeaders:
+            - name: Host
+              value: 127.0.0.1
           initialDelaySeconds: 20
           periodSeconds: 20
           timeoutSeconds: 1
@@ -76,6 +82,9 @@ spec:
           httpGet:
             path: /health/live
             port: 8000
+            httpHeaders:
+            - name: Host
+              value: 127.0.0.1
           periodSeconds: 5
           timeoutSeconds: 1
           successThreshold: 1

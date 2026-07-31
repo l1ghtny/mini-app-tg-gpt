@@ -10,7 +10,7 @@ spec:
     namespace: gpt
   source:
     repoURL: https://github.com/l1ghtny/mini-app-tg-gpt
-    targetRevision: development
+    targetRevision: master
     path: k8s/argo-rollouts
   syncPolicy:
     automated:
