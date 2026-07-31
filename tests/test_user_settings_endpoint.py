@@ -57,6 +57,7 @@ async def test_user_settings_get_and_put():
         assert payload["default_image_model"] == "gpt-image-1.5"
         assert payload["default_thinking"] is True
         assert payload["default_document_provider"] == "openai"
+        assert payload["onboarding_state"] == {}
 
         # 2. Put text model change only (should coerce image model to google default)
         response = await client.put(
@@ -111,9 +112,41 @@ async def test_user_settings_get_and_put():
         payload = response.json()
         assert payload["default_document_provider"] == "google"
 
+        # 7. Onboarding events are merged without erasing model preferences.
+        response = await client.put(
+            "/api/v1/user/settings",
+            json={
+                "onboarding_events": [
+                    {"item": "welcome", "action": "seen"},
+                    {"item": "try_folders", "action": "dismissed"},
+                ]
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["onboarding_state"]["welcome"]["seen_at"]
+        assert payload["onboarding_state"]["try_folders"]["dismissed_at"]
+        assert payload["default_document_provider"] == "google"
+
+        # 8. A later event preserves earlier items and timestamps.
+        welcome_seen_at = payload["onboarding_state"]["welcome"]["seen_at"]
+        response = await client.put(
+            "/api/v1/user/settings",
+            json={
+                "onboarding_events": [
+                    {"item": "desktop_fullscreen_hint", "action": "seen"}
+                ]
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["onboarding_state"]["welcome"]["seen_at"] == welcome_seen_at
+        assert payload["onboarding_state"]["desktop_fullscreen_hint"]["seen_at"]
+
         response = await client.get("/api/v1/user/settings")
         assert response.status_code == 200
         payload = response.json()
         assert payload["default_document_provider"] == "google"
+        assert payload["onboarding_state"]["welcome"]["seen_at"] == welcome_seen_at
 
     await engine.dispose()

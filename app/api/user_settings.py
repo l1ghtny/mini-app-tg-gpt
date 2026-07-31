@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -17,6 +19,28 @@ from app.services.model_registry import (
 
 user_settings = APIRouter(tags=["user/settings"], prefix="/user/settings")
 _ALLOWED_DOCUMENT_PROVIDERS = {"openai", "google"}
+
+
+def _onboarding_state(current_user: AppUser) -> dict:
+    raw = getattr(current_user, "onboarding_state", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _apply_onboarding_events(current_user: AppUser, events) -> None:
+    if not events:
+        return
+
+    state = {
+        key: dict(value)
+        for key, value in _onboarding_state(current_user).items()
+        if isinstance(value, dict)
+    }
+    occurred_at = datetime.now(UTC).isoformat()
+    for event in events:
+        item_state = dict(state.get(event.item, {}))
+        item_state[f"{event.action}_at"] = occurred_at
+        state[event.item] = item_state
+    current_user.onboarding_state = state
 
 
 def _provider_mismatch_detail(*, model: str, image_model: str) -> dict[str, str]:
@@ -39,6 +63,7 @@ async def get_user_settings(
         default_image_model=current_user.default_image_model or "gpt-image-1.5",
         default_document_provider=(getattr(current_user, "default_document_provider", None) or "openai"),
         default_thinking=bool(getattr(current_user, "default_thinking", True)),
+        onboarding_state=_onboarding_state(current_user),
     )
 
 
@@ -75,6 +100,7 @@ async def update_user_settings(
     current_user.default_document_provider = document_provider
     if request.default_thinking is not None:
         current_user.default_thinking = bool(request.default_thinking)
+    _apply_onboarding_events(current_user, request.onboarding_events)
 
     session.add(current_user)
     await session.commit()
@@ -85,4 +111,5 @@ async def update_user_settings(
         default_image_model=current_user.default_image_model,
         default_document_provider=(getattr(current_user, "default_document_provider", None) or "openai"),
         default_thinking=bool(getattr(current_user, "default_thinking", True)),
+        onboarding_state=_onboarding_state(current_user),
     )

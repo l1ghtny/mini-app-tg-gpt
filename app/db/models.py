@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Numeric,
+    text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -50,6 +51,12 @@ class AppUser(SQLModel, table=True):
     default_image_model: str = Field(default="gpt-image-1.5")
     default_document_provider: str = Field(default="openai")
     default_thinking: bool = Field(default=True)
+    onboarding_state: dict = Field(
+        default_factory=dict,
+        sa_column=Column(
+            JSONB, nullable=False, server_default=text("'{}'::jsonb")
+        ),
+    )
 
     conversations: List["Conversation"] = Relationship(back_populates="user")
     folders: List["ChatFolder"] = Relationship(back_populates="user")
