@@ -4,7 +4,6 @@ import sys
 import types as pytypes
 import uuid
 import pytest
-import aiohttp
 from python_socks import ProxyType
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -700,8 +699,6 @@ async def test_google_proxy_is_forwarded_to_genai_http_options(monkeypatch):
     monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
     monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", "socks5h://warp-proxy:1080")
     monkeypatch.setattr(google_service, "_module_available", lambda name: True)
-    aiohttp_client = aiohttp.ClientSession()
-    monkeypatch.setattr(google_service, "_build_google_aiohttp_client", lambda proxy_url: aiohttp_client)
 
     interactions = MockInteractionsResource()
     captured = {}
@@ -736,8 +733,7 @@ async def test_google_proxy_is_forwarded_to_genai_http_options(monkeypatch):
     assert captured["http_options"].client_args["proxy"] == "socks5h://warp-proxy:1080"
     assert captured["http_options"].async_client_args["proxy"] == "socks5h://warp-proxy:1080"
     assert captured["http_options"].async_client_args["trust_env"] is True
-    assert captured["http_options"].aiohttp_client is aiohttp_client
-    assert aiohttp_client.closed is True
+    assert captured["http_options"].aiohttp_client is None
 
 
 def test_google_socks_proxy_requires_socksio(monkeypatch):
@@ -748,12 +744,13 @@ def test_google_socks_proxy_requires_socksio(monkeypatch):
         google_service._build_google_http_options()
 
 
-def test_google_socks_proxy_requires_aiohttp_socks(monkeypatch):
+def test_google_socks_proxy_does_not_require_aiohttp_socks_for_httpx_transport(monkeypatch):
     monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", "socks5h://warp-proxy:1080")
     monkeypatch.setattr(google_service, "_module_available", lambda name: name == "socksio")
 
-    with pytest.raises(RuntimeError, match="aiohttp-socks"):
-        google_service._build_google_http_options()
+    options = google_service._build_google_http_options()
+    assert options is not None
+    assert options.async_client_args["proxy"] == "socks5h://warp-proxy:1080"
 
 
 @pytest.mark.parametrize(

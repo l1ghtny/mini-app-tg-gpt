@@ -770,3 +770,33 @@ Deploy and canary the browser-ready authentication foundation across the backend
 - Configure backend `WEB_AUTH_ENABLED`, callback URL, SMTP credentials, and the browser origin allowlist; configure frontend `VITE_WEB_AUTH_ENABLED` and `VITE_WEB_APP_URL`.
 - Apply `poetry run alembic upgrade head`, deploy backend first, then deploy frontend and canary email request, link consumption, account linking, chat send/SSE resume, billing, and logout.
 - Add challenge cleanup/retention and migrate bearer-token storage to secure HttpOnly cookies before treating browser authentication as fully hardened.
+
+## 2026-07-31 lightny.ru browser rollout checkpoint
+
+### Objective
+
+- Release the accumulated backend/frontend browser-pilot work through TeamCity and Argo Rollouts without disrupting Telegram Mini App users.
+
+### Completed
+
+- Added `app.lightny.ru -> 193.233.251.127` in Timeweb DNS and issued an unattended Let's Encrypt certificate through the SPB nginx server.
+- Added dedicated SPB nginx virtual hosts for app, API, and image traffic; fixed TLS session reuse across the shared multi-SNI MicroK8s ingress; verified frontend and representative FastAPI routes through `https://app.lightny.ru`.
+- Renewed the `api.lightny.ru` + `images.lightny.ru` certificate with the nginx authenticator and disabled only the unused manual `www.lightny.ru` renewal file recoverably.
+- Added explicit one-pod, zero-weight canary scale steps to backend and frontend Rollouts while preserving Argo CD ownership annotations; cleared stale scaled-down candidates and applied the strategies live.
+- Patched production `backend-env` for `app.lightny.ru`, secure cookies, passkey RP/origin, browser auth, Telegram OIDC disabled, and the new image base URL. Existing stable pods were not restarted.
+- Moved the frontend Sentry build credential out of the TeamCity script into a masked environment parameter. TeamCity now builds for `app.lightny.ru`, enables browser/passkey auth, and hides unconfigured Telegram OIDC and email methods.
+- Completed a fresh pgBackRest differential backup job before migration.
+- Frontend validation: 23 tests passed, TypeScript passed, production build passed, and the passkey-only login screen was visually checked in a local browser.
+- Converted three legacy CP1252 Python test files to UTF-8 so pytest collection works on Python 3.14. Backend compilation and Alembic offline SQL from `n1a2b3c4d5e6` to `w1a2b3c4d5e6` passed.
+- Backend full suite passed against the disposable PostgreSQL database and live Redis: 211 passed, 2 skipped, 6 warnings in 28m26s. Focused Ruff checks for all touched Python files and `git diff --check` also passed.
+
+### In progress
+
+- Commit and push the two validated release candidates, then deploy through TeamCity and Argo Rollouts.
+
+### Next steps
+
+- Commit both repositories and push backend `master` plus frontend `main`.
+- Monitor TeamCity build/migration/deploy jobs, validate zero-weight canaries, run real app/chat/SSE checks, and promote only after evidence is clean.
+- Have the user confirm the production WebAuthn biometric ceremony; automated checks can validate only the surrounding API/browser flow.
+- Before a broad public rollout, separately approve and deploy a source-IP-preserving ingress path; the current MicroK8s host-port path rewrites the edge peer to loopback, so ingress cannot safely recover each public client's address.

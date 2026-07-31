@@ -1,5 +1,4 @@
 import os
-import uuid
 
 import pytest
 from sqlalchemy import text
@@ -98,6 +97,7 @@ async def test_search_worker_processes_jobs_and_stores_user_scoped_rows(monkeypa
     test_db_url = os.getenv("TEST_DATABASE_URL")
     assert test_db_url
     engine = create_async_engine(test_db_url, future=True, echo=False)
+    monkeypatch.setattr(conversation_search, "engine", engine)
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
         owner = AppUser(telegram_id=721111101)

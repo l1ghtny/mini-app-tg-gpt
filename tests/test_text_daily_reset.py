@@ -55,7 +55,7 @@ async def test_text_usage_daily_limits_reset_at_utc_midnight():
                 feature="text",
                 cost=1.0,
                 state=m.State.consumed,
-                created_at=now - timedelta(hours=1),
+                    created_at=now,
             )
         )
         session.add(
@@ -81,7 +81,11 @@ async def test_text_usage_daily_limits_reset_at_utc_midnight():
     nano_model = next(model for model in response.models if model.model == "gpt-5.4-nano")
     assert nano_model.display_name == "Fast"
     assert nano_model.display_name_ru == "Быстрый"
-    assert nano_model.bucket_models == ["gpt-5.4-nano", "gemini-3.1-flash-lite"]
+    assert nano_model.bucket_models == [
+        "gpt-5.4-nano",
+        "gpt-5-nano",
+        "gemini-3.1-flash-lite",
+    ]
     assert nano_model.total_remaining == 4
     assert nano_model.next_reset_at is not None
     assert nano_model.next_reset_at.utcoffset() == timedelta(0)
@@ -173,7 +177,11 @@ async def test_text_usage_merges_openai_and_google_pair_into_shared_bucket():
     bucket = bucket_rows[0]
     assert bucket.display_name == "Fast"
     assert bucket.display_name_ru == "Быстрый"
-    assert bucket.bucket_models == ["gpt-5.4-nano", "gemini-3.1-flash-lite"]
+    assert bucket.bucket_models == [
+        "gpt-5.4-nano",
+        "gpt-5-nano",
+        "gemini-3.1-flash-lite",
+    ]
     assert bucket.total_remaining == 23
     assert bucket.selected is not None
     assert bucket.selected.used == 2

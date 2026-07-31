@@ -65,4 +65,4 @@ async def test_generate_and_publish_with_b64_image_real_r2(monkeypatch):
         )
         row = res.first()
         assert row is not None
-        print(f"\nR2 URL (stream?upload?db): {row.value}")  # <— full URL printed
+        print(f"\nR2 URL (stream?upload?db): {row.value}")  # <â€” full URL printed

@@ -1,12 +1,18 @@
 from typing import Any, AsyncGenerator
 
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
 
 
 def _create_db_engine(url: str):
+    if settings.TEST_ENV:
+        # pytest-asyncio creates a fresh event loop per test. Reusing asyncpg
+        # pooled connections across those loops causes false cross-loop
+        # failures and can hide the result of background-worker tests.
+        return create_async_engine(url, echo=False, poolclass=NullPool)
     return create_async_engine(
         url,
         echo=False,

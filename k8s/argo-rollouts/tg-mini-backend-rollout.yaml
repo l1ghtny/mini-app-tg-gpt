@@ -3,6 +3,8 @@ kind: Service
 metadata:
   name: tg-mini-backend-canary
   namespace: gpt
+  annotations:
+    argocd.argoproj.io/tracking-id: tg-mini-backend-rollouts:/Service:gpt/tg-mini-backend-canary
 spec:
   type: ClusterIP
   selector:
@@ -17,6 +19,8 @@ kind: Rollout
 metadata:
   name: tg-mini-backend
   namespace: gpt
+  annotations:
+    argocd.argoproj.io/tracking-id: tg-mini-backend-rollouts:argoproj.io/Rollout:gpt/tg-mini-backend
 spec:
   replicas: 2
   revisionHistoryLimit: 10
@@ -43,6 +47,8 @@ spec:
             nginx.ingress.kubernetes.io/canary-by-header-pattern: ^tg-(207078380|353963715)$
             nginx.ingress.kubernetes.io/canary-weight: "0"
       steps:
+        - setCanaryScale:
+            replicas: 1
         - setWeight: 0
         - pause: {}
         - setWeight: 5

@@ -39,7 +39,7 @@ async def test_r2_upload_and_db_persist_roundtrip(tmp_path):
             b64 = base64.b64encode(f.read()).decode("ascii")
 
         url = await helpers.upload_openai_image_to_r2(b64, prefix="gen")
-        print(f"\nR2 URL (upload): {url}")  # <— full URL printed
+        print(f"\nR2 URL (upload): {url}")  # <â€” full URL printed
 
         ordinal = 1
         await helpers.save_image_url_to_db(url, ordinal, msg.id)
@@ -54,4 +54,4 @@ async def test_r2_upload_and_db_persist_roundtrip(tmp_path):
         row = res.first()
         assert row is not None
         assert row.value == url
-        print(f"R2 URL (db row): {row.value}")  # <— full URL printed
+        print(f"R2 URL (db row): {row.value}")  # <â€” full URL printed
