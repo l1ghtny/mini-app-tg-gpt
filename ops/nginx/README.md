@@ -1,6 +1,6 @@
 # Lightny SPB edge
 
-The public `lightny.ru` hostnames terminate TLS on the SPB nginx server and proxy application traffic through AmneziaWG to the MicroK8s ingress on `10.77.0.1:443`.
+The public `lightny.ru` hostnames terminate TLS on the SPB nginx server and proxy application traffic through AmneziaWG to the source-preserving MicroK8s ingress service on `10.77.0.1:30445`.
 
 Files:
 

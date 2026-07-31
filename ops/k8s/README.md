@@ -5,11 +5,23 @@ forwarded headers only from the SPB AmneziaWG peer (`10.77.0.2`). Keep this CIDR
 narrow: adding public address ranges would allow clients to spoof their source
 address.
 
-The current edge path uses the controller's host port `443`. MicroK8s rewrites
-that connection to loopback, so ingress cannot safely recover the public client
-address from `X-Forwarded-For`. Keep IP-based browser-auth rate limits disabled
-or conservative until a separately approved source-IP-preserving service is
+`ingress-awg-service.yaml` exposes ingress HTTPS on node port `30445` with
+`externalTrafficPolicy: Local`. The SPB edge connects to `10.77.0.1:30445`,
+and the public application path no longer depends on the controller's host port
+`443`. MicroK8s' default ingress controller still applies host-port
+masquerading after NodePort routing, so ingress currently records the peer as
+loopback. Keep IP-based browser-auth rate limits disabled or conservative until
+a dedicated no-hostPort AWG ingress controller is separately approved and
 deployed.
+
+```sh
+kubectl apply --server-side -f ops/k8s/ingress-awg-service.yaml
+```
+
+The Argo CD rollout applications track the branches used by TeamCity:
+backend `master` in `mini-app-tg-gpt` and frontend `main` in
+`chat-bot-telegram`. Do not point them back to legacy `development` sources;
+otherwise self-healing silently removes release-safety changes.
 
 The production `backend-env` Secret also needs these non-secret values:
 

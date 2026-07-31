@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-ingress-awg
+  namespace: ingress
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    name: nginx-ingress-microk8s
+  ports:
+  - name: https-awg
+    protocol: TCP
+    port: 443
+    targetPort: https
+    nodePort: 30445
