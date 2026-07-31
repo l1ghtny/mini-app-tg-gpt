@@ -1,5 +1,29 @@
 # Current State
 
+## 2026-07-31 backend health restart loop stopped
+
+- Root cause: Argo applied the new HTTP health probes to backend image `251`,
+  whose runtime rejected `/health/live` with HTTP 400, so the isolated canary
+  repeatedly failed its startup probe and kubelet restarted it.
+- Backend manifest commit `3a6fbad` stages the already successful TeamCity
+  image `262` for the API only; the conversation-search worker and stable API
+  replicas remain on `251`.
+- Argo replaced the failing canary with `tg-mini-backend-74484d859c-km29t`.
+  It is Ready with zero restarts; `/health/live` and `/health/ready` both return
+  HTTP 200.
+- The backend rollout is paused at step 2 with three Ready pods and no public
+  canary weight. A canary-routed Telegram OIDC start request returns 302, while
+  the unchanged stable image returns 404, proving isolation.
+
+### Next steps
+
+1. Smoke-test authenticated browser and Telegram Mini App flows against backend
+   image `262` using the configured canary header.
+2. Stage frontend image `119` at zero public weight and verify that browser
+   Telegram login redirects through Telegram OIDC and returns with a session.
+3. Promote backend and frontend only after the real cross-surface checks pass;
+   update the conversation-search worker image separately.
+
 ## 2026-07-31 Telegram identity precedence hardened
 
 - Frontend `AuthGate` now processes signed Telegram Mini App `initData` before web callback or browser-session restoration, so a persisted cookie for account A cannot override the current Telegram account B.
