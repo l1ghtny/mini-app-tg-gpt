@@ -876,3 +876,21 @@ Deploy and canary the browser-ready authentication foundation across the backend
 
 - Deploy migration `y1a2b3c4d5e6` before the frontend that sends the account language field.
 - Existing users receive their Telegram photo on their next Mini App or Telegram OIDC authentication; the initials fallback remains for users without a shared photo.
+
+## 2026-07-31 coordinated production release
+
+### Completed
+
+- Pushed backend feature commit `ae85312` to `master`.
+- TeamCity backend build `5871` (`#267`) succeeded for that exact revision.
+- TeamCity migration run `5875` (`#139`) reused build `5871`, upgraded the production database successfully, and deployed backend image `localhost:32000/tg-mini-app-backend:267`.
+
+### In progress
+
+- Persist backend image `267` in GitOps, validate the zero-weight canary, and promote it before releasing the matching frontend.
+
+### Next steps
+
+- Verify backend canary readiness, authenticated/public API behavior, and logs, then promote the Rollout fully.
+- Release and promote the matching frontend, then deploy the consented attribution update to `lightny.ru`.
+- Confirm the production WebAuthn biometric ceremony manually after the frontend rollout.
