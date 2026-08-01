@@ -7,6 +7,7 @@ import app.api.auth as auth_api
 from app.api.auth import (
     MagicLinkRequest,
     _enforce_magic_link_rate_limits,
+    _enforce_passkey_rate_limits,
     _resolve_client_ip,
 )
 from app.api.dependencies import _request_credential, get_optional_current_user
@@ -99,6 +100,46 @@ async def test_untrusted_forwarded_header_does_not_create_shared_ip_limit(monkey
 
     assert redis.incr.await_count == 2
     assert all(":ip:" not in call.args[0] for call in redis.incr.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_passkey_limits_prefer_account_and_challenge_before_ip(monkeypatch):
+    monkeypatch.setattr(settings, "PASSKEY_CHALLENGE_TTL_SECONDS", 300)
+    redis = AsyncMock()
+    redis.incr.side_effect = [1, 1, 1, 1]
+    account_id = AppUser(telegram_id=799000004).id
+
+    await _enforce_passkey_rate_limits(
+        redis,
+        _request("198.51.100.8"),
+        account_id=account_id,
+        challenge_id="ceremony-id",
+    )
+
+    keys = [call.args[0] for call in redis.incr.await_args_list]
+    assert keys[0] == "rl:passkey:global"
+    assert keys[1].startswith("rl:passkey:account:")
+    assert keys[2].startswith("rl:passkey:challenge:")
+    assert keys[3].startswith("rl:passkey:ip:")
+    assert [call.args for call in redis.expire.await_args_list] == [
+        (keys[0], 3600),
+        (keys[1], 3600),
+        (keys[2], 300),
+        (keys[3], 3600),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_passkey_ip_limit_is_a_higher_secondary_guard():
+    redis = AsyncMock()
+    redis.incr.side_effect = [1, 121]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _enforce_passkey_rate_limits(redis, _request("198.51.100.8"))
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == "too_many_passkey_attempts"
+    assert redis.incr.await_args_list[1].args[0].startswith("rl:passkey:ip:")
 
 
 @pytest.mark.asyncio

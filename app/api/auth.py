@@ -212,17 +212,53 @@ def _allow_debug_magic_link(request: Request) -> bool:
     return _allow_local_debug_request(request)
 
 
-async def _enforce_passkey_rate_limits(redis: Redis, request: Request) -> None:
-    keys = [("rl:passkey:global", 2000)]
+async def _enforce_passkey_rate_limits(
+    redis: Redis,
+    request: Request,
+    *,
+    account_id: uuid.UUID | None = None,
+    challenge_id: str | None = None,
+) -> None:
+    keys = [("rl:passkey:global", 2000, 3600)]
+    if account_id:
+        account_hash = hashlib.sha256(str(account_id).encode()).hexdigest()
+        keys.append((f"rl:passkey:account:{account_hash}", 30, 3600))
+    if challenge_id:
+        challenge_hash = hashlib.sha256(challenge_id.encode()).hexdigest()
+        keys.append(
+            (
+                f"rl:passkey:challenge:{challenge_hash}",
+                3,
+                settings.PASSKEY_CHALLENGE_TTL_SECONDS,
+            )
+        )
     ip = _resolve_client_ip(request)
     if ip:
-        keys.append((f"rl:passkey:ip:{hashlib.sha256(ip.encode()).hexdigest()}", 60))
-    for key, limit in keys:
+        keys.append(
+            (f"rl:passkey:ip:{hashlib.sha256(ip.encode()).hexdigest()}", 120, 3600)
+        )
+    for key, limit, ttl in keys:
         current = await redis.incr(key)
         if current == 1:
-            await redis.expire(key, 3600)
+            await redis.expire(key, ttl)
         if current > limit:
             raise HTTPException(status_code=429, detail="too_many_passkey_attempts")
+
+
+async def _passkey_account_id(
+    session: AsyncSession, credential: dict[str, Any]
+) -> uuid.UUID | None:
+    credential_id = credential.get("id") if isinstance(credential, dict) else None
+    if not isinstance(credential_id, str) or not credential_id:
+        return None
+    passkey = (
+        await session.exec(
+            select(models.PasskeyCredential).where(
+                models.PasskeyCredential.credential_id == credential_id
+            )
+        )
+    ).first()
+    return passkey.user_id if passkey else None
 
 
 @auth.post("/telegram", response_model=Token)
@@ -447,6 +483,7 @@ async def passkey_registration_options(
 ):
     if not settings.WEB_AUTH_ENABLED:
         raise HTTPException(status_code=404, detail="Not Found")
+    await _enforce_passkey_rate_limits(redis, request, account_id=current_user.id)
     origin, rp_id = resolve_passkey_context(request)
     ceremony_id, options = await begin_passkey_registration(
         session,
@@ -461,12 +498,19 @@ async def passkey_registration_options(
 @auth.post("/passkeys/registration/verify", response_model=PasskeyView)
 async def passkey_registration_verify(
     payload: PasskeyRegistrationFinish,
+    request: Request,
     current_user: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
     if not settings.WEB_AUTH_ENABLED:
         raise HTTPException(status_code=404, detail="Not Found")
+    await _enforce_passkey_rate_limits(
+        redis,
+        request,
+        account_id=current_user.id,
+        challenge_id=payload.ceremony_id,
+    )
     passkey = await finish_passkey_registration(
         session,
         redis,
@@ -505,6 +549,13 @@ async def passkey_authentication_verify(
 ):
     if not settings.WEB_AUTH_ENABLED:
         raise HTTPException(status_code=404, detail="Not Found")
+    account_id = await _passkey_account_id(session, payload.credential)
+    await _enforce_passkey_rate_limits(
+        redis,
+        request,
+        account_id=account_id,
+        challenge_id=payload.ceremony_id,
+    )
     user, _ = await finish_passkey_authentication(
         session,
         redis,

@@ -1,20 +1,27 @@
 # MicroK8s production edge settings
 
-`nginx-ingress-trusted-proxy-configmap.yaml` allows ingress-nginx to consume
-forwarded headers only from the SPB AmneziaWG peer (`10.77.0.2`). Keep this CIDR
-narrow: adding public address ranges would allow clients to spoof their source
-address.
+`nginx-ingress-awg-controller.yaml` runs a dedicated controller without
+`hostNetwork` or `hostPort`. It watches only the `gpt` namespace and mirrors the
+existing `public` ingress class, so Argo Rollouts continues to own the stable and
+canary Ingress objects.
 
-`ingress-awg-service.yaml` exposes ingress HTTPS on node port `30445` with
-`externalTrafficPolicy: Local`. The SPB edge connects to `10.77.0.1:30445`,
-and the public application path no longer depends on the controller's host port
-`443`. MicroK8s' default ingress controller still applies host-port
-masquerading after NodePort routing, so ingress currently records the peer as
-loopback. Keep IP-based browser-auth rate limits disabled or conservative until
-a dedicated no-hostPort AWG ingress controller is separately approved and
-deployed.
+`nginx-ingress-trusted-proxy-configmap.yaml` allows that controller to consume
+forwarded headers only from the SPB AmneziaWG peer (`10.77.0.2/32`). Keep this
+CIDR exact: adding public address ranges would allow direct clients to spoof
+their source address.
+
+`ingress-awg-service.yaml` exposes the dedicated controller on node port
+`30445` with `externalTrafficPolicy: Local`. The SPB edge connects to
+`10.77.0.1:30445`. Rollback only requires restoring that service's selector to
+`name: nginx-ingress-microk8s`; the default hostPort controller remains running.
+
+The SPB Nginx locations include `ops/nginx/lightny-proxy-headers.conf`, which
+overwrites client-supplied forwarding headers with `$remote_addr`. Do not use
+`$proxy_add_x_forwarded_for` at this public trust boundary.
 
 ```sh
+kubectl apply --server-side -f ops/k8s/nginx-ingress-trusted-proxy-configmap.yaml
+kubectl apply --server-side -f ops/k8s/nginx-ingress-awg-controller.yaml
 kubectl apply --server-side -f ops/k8s/ingress-awg-service.yaml
 ```
 
@@ -33,7 +40,7 @@ The production `backend-env` Secret also needs these non-secret values:
 - `PASSKEY_ALLOWED_ORIGINS=https://app.lightny.ru`
 - `AUTH_COOKIE_SECURE=true`
 - `AUTH_COOKIE_SAMESITE=lax`
-- `WEB_AUTH_TRUSTED_PROXY_CIDRS=10.1.0.0/16`
+- `WEB_AUTH_TRUSTED_PROXY_CIDRS=10.1.0.0/16,10.77.0.2/32`
 - `R2_PUBLIC_BASE_URL=https://app.lightny.ru/images/`
 
 Email and Telegram OIDC login must remain hidden in the frontend until their

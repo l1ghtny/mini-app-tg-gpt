@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: nginx-load-balancer-microk8s-conf
+  name: nginx-ingress-awg-conf
   namespace: ingress
 data:
   use-forwarded-headers: "true"
