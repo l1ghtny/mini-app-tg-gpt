@@ -902,6 +902,8 @@ Deploy and canary the browser-ready authentication foundation across the backend
 - Deployed a dedicated ingress-nginx DaemonSet with no `hostNetwork` or
   `hostPort`; the existing `30445` NodePort now selects those pods with
   `externalTrafficPolicy: Local`.
+- Restricted controller HTTPS to the SPB AWG peer with a NetworkPolicy; direct
+  public access to node port `30445` now times out while SPB/AWG returns 200.
 - Scoped the controller to the `gpt` namespace through a namespace selector and
   dedicated RBAC while leaving Argo-owned stable/canary Ingress objects intact.
 - Restricted ingress real-IP trust to the exact SPB AWG peer `10.77.0.2/32` and
@@ -915,12 +917,19 @@ Deploy and canary the browser-ready authentication foundation across the backend
 - Backend image `267` was restarted safely after the trusted-proxy update and is
   Healthy with two Ready replicas.
 
-### In progress
+### Release completed
 
-- Change passkey limiting from global plus 60/hour IP to global, account,
-  challenge, and a higher 120/hour secondary IP guard.
-- Focused auth/passkey tests pass (`12 passed`); source/config validation and
-  release of the limiter change remain.
+- Passkey limits now use global (2,000/hour), account (30/hour), one-time
+  challenge (3 within the challenge TTL), and a higher 120/hour secondary IP
+  guard.
+- Focused auth/passkey tests pass (`12 passed`); Ruff, formatting, Python
+  compilation, Kubernetes server-side dry-run, and SPB `nginx -t` pass.
+- Commit `9081186` built successfully as TeamCity `5912/#269`; GitOps commit
+  `5dd9ba2` was promoted through a zero-weight canary. Argo is Synced/Healthy
+  with exactly two Ready image-269 pods.
+- Stable public health, passkey challenge issuance, frontend loading, and
+  browser login rendering pass. The browser console has no errors; only the
+  pre-existing Telegram WebApp version warnings remain.
 
 ### Rollback
 
@@ -933,7 +942,7 @@ Deploy and canary the browser-ready authentication foundation across the backend
 
 ### Next steps
 
-1. Run final manifest, lint, and focused route checks for the limiter change.
-2. Commit and push the durable controller, SPB Nginx, and limiter changes.
-3. Build/deploy the backend limiter revision through TeamCity and Argo canary,
-   then repeat public health and passkey challenge checks.
+1. Retain the Kubernetes and SPB Nginx rollback copies through the first public
+   traffic window.
+2. Monitor passkey 429 rates and dedicated ingress errors after release; no
+   further rollout action is required for this change.

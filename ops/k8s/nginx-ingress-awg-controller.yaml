@@ -235,3 +235,26 @@ spec:
             memory: 96Mi
           limits:
             memory: 256Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nginx-ingress-awg
+  namespace: ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nginx-ingress-awg
+      app.kubernetes.io/component: controller
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - ipBlock:
+        cidr: 10.77.0.2/32
+    ports:
+    - protocol: TCP
+      port: 443
+  - ports:
+    - protocol: TCP
+      port: 10254

@@ -14,6 +14,9 @@ their source address.
 `30445` with `externalTrafficPolicy: Local`. The SPB edge connects to
 `10.77.0.1:30445`. Rollback only requires restoring that service's selector to
 `name: nginx-ingress-microk8s`; the default hostPort controller remains running.
+The controller manifest also restricts HTTPS ingress to `10.77.0.2/32`, so the
+NodePort cannot be used through a cluster node's public address. Health port
+`10254` remains reachable for Kubernetes probes.
 
 The SPB Nginx locations include `ops/nginx/lightny-proxy-headers.conf`, which
 overwrites client-supplied forwarding headers with `$remote_addr`. Do not use
