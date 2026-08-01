@@ -41,7 +41,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
       - name: api
-        image: localhost:32000/tg-mini-app-backend:267
+        image: localhost:32000/tg-mini-app-backend:269
         imagePullPolicy: Always
         env:
         - name: HTTPS_PROXY
