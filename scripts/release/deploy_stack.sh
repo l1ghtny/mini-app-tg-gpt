@@ -62,8 +62,21 @@ wait_for_deployment_image() {
   return 1
 }
 
+retry_aborted_rollout() {
+  local rollout="$1"
+  local progressing_reason=""
+
+  progressing_reason="$(kubectl get rollout "${rollout}" -n "${K8S_NAMESPACE}" \
+    -o jsonpath='{range .status.conditions[?(@.type=="Progressing")]}{.reason}{end}')"
+  if [[ "${progressing_reason}" == "RolloutAborted" ]]; then
+    echo "Retrying previously aborted rollout ${rollout}."
+    kubectl argo rollouts retry rollout "${rollout}" -n "${K8S_NAMESPACE}"
+  fi
+}
+
 patch_application_image "${BACKEND_APPLICATION}" "${backend_image}"
 wait_for_deployment_image tg-mini-backend "${backend_image}"
+retry_aborted_rollout tg-mini-backend
 kubectl argo rollouts status tg-mini-backend -n "${K8S_NAMESPACE}" --timeout "${ROLLOUT_TIMEOUT}"
 
 kubectl rollout status deployment/conversation-search-worker -n "${K8S_NAMESPACE}" \
@@ -80,6 +93,7 @@ kubectl rollout status deployment/tg-gpt-bot-commands -n "${K8S_NAMESPACE}" \
 
 patch_application_image "${FRONTEND_APPLICATION}" "${frontend_image}"
 wait_for_deployment_image tg-mini-frontend "${frontend_image}"
+retry_aborted_rollout tg-mini-frontend
 kubectl argo rollouts status tg-mini-frontend -n "${K8S_NAMESPACE}" --timeout "${ROLLOUT_TIMEOUT}"
 
 backend_actual="$(kubectl get deployment tg-mini-backend -n "${K8S_NAMESPACE}" -o jsonpath='{.spec.template.spec.containers[0].image}')"
