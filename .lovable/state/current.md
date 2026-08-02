@@ -956,18 +956,18 @@ Deploy and canary the browser-ready authentication foundation across the backend
 - Added deterministic backend and frontend canary health probes; the frontend now publishes `/health.json`.
 - Added registry preflight and immutable image verification to prevent migration Jobs from being created for missing tags.
 - Documented the `beta.app.lightny.ru` shared-history architecture and phased implementation plan.
+- Created `LightnyReleaseFlow` in TeamCity with both private repositories attached and enabled its default-branch change trigger.
+- TeamCity run `#4` completed all four jobs successfully. It built and migrated release `4`, then automatically promoted backend and frontend through all three Argo readiness gates without manual intervention.
+- Argo CD is Synced/Healthy on backend image `4` and frontend image `4`; both Rollouts are Healthy with their current revisions marked stable. The conversation-search worker, bot-command worker, cleanup CronJob, and subscription CronJob use backend image `4`.
+- The bot-command worker exposed a pre-existing 256 MiB memory ceiling during post-release verification. Its limit was raised live to 512 MiB, after which the replacement pod became Ready with zero restarts; `deploy_stack.sh` now preserves that limit on future releases.
+- Disabled legacy TeamCity VCS triggers `TRIGGER_7` on `MiniAppTgGpt_BuildBackend` and `TRIGGER_8` on `TelegramMiniAppProject_TgMiniFrontendNewUI_Build`; the replacement pipeline is now the only automatic release path for either repository's default branch.
 
 ### Risks / blockers
 
-- The versioned TeamCity pipeline is not safe to activate until these backend and frontend changes are committed and available to its VCS checkouts.
-- TeamCity currently shows the Pipelines EAP access screen for `Telegram-mini-app-project`; access must be enabled before `LightnyReleaseFlow` can be imported there.
-- The backend and frontend VCS roots currently live in sibling child projects. Move them to the common parent before import so the unified pipeline can reference both IDs without copying credentials.
-- The existing frontend Sentry auth token is scoped to the old build configuration; add it as a password parameter on the new pipeline to preserve source-map uploads.
-- Live migration Job `tg-mini-backend-140` was observed in `ImagePullBackOff`: tag `272` exists, but its OCI index references a missing Linux/amd64 manifest. The new build disables provenance indexes and the preflight recursively validates the runtime manifest and blobs. No production resource was deleted or mutated during this redesign.
+- No activation blocker remains. The first default-branch-triggered run still needs runtime verification before this migration is considered closed.
 
 ### Next steps
 
-1. Validate both Argo manifests with the live CRDs using server-side dry-run and validate the pipeline YAML in TeamCity.
-2. Commit/push both repositories, import `LightnyReleaseFlow`, and run one manual end-to-end release.
-3. Disable old build triggers only after the replacement produces a green, runtime-verified release.
-4. Implement beta Phase 1 guardrails before provisioning shared-production-data beta workloads.
+1. Commit and push the persisted 512 MiB bot-worker limit, then confirm the new default-branch trigger starts exactly one `LightnyReleaseFlow` run and the legacy builds remain idle.
+2. Runtime-verify that triggered run, including both Rollouts, all workers, both CronJobs, and public health endpoints.
+3. Implement beta Phase 1 guardrails before provisioning shared-production-data beta workloads.

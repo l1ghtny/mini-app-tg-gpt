@@ -84,6 +84,8 @@ kubectl rollout status deployment/conversation-search-worker -n "${K8S_NAMESPACE
 
 kubectl set image deployment/tg-gpt-bot-commands -n "${K8S_NAMESPACE}" \
   "bot=${backend_image}"
+kubectl set resources deployment/tg-gpt-bot-commands -n "${K8S_NAMESPACE}" \
+  --limits="cpu=250m,memory=${BOT_COMMANDS_MEMORY_LIMIT:-512Mi}"
 kubectl set image cronjob/cleanup-derived-images -n "${K8S_NAMESPACE}" \
   "cleanup-derived=${backend_image}"
 kubectl set image cronjob/subscription-check -n "${K8S_NAMESPACE}" \
