@@ -946,3 +946,28 @@ Deploy and canary the browser-ready authentication foundation across the backend
    traffic window.
 2. Monitor passkey 429 rates and dedicated ingress errors after release; no
    further rollout action is required for this change.
+
+## 2026-08-02 unified release flow and shared-history beta
+
+### Completed
+
+- Added a versioned TeamCity pipeline definition that builds backend and frontend images in parallel, verifies the backend image before migration, and deploys the API, frontend, conversation-search worker, bot-command worker, and both backend CronJobs.
+- Replaced indefinite production canary pauses and named-user header routing with automatic 0% readiness analysis, timed 20% and 100% stages, automatic completion, and deadline aborts.
+- Added deterministic backend and frontend canary health probes; the frontend now publishes `/health.json`.
+- Added registry preflight and immutable image verification to prevent migration Jobs from being created for missing tags.
+- Documented the `beta.app.lightny.ru` shared-history architecture and phased implementation plan.
+
+### Risks / blockers
+
+- The versioned TeamCity pipeline is not safe to activate until these backend and frontend changes are committed and available to its VCS checkouts.
+- TeamCity currently shows the Pipelines EAP access screen for `Telegram-mini-app-project`; access must be enabled before `LightnyReleaseFlow` can be imported there.
+- The backend and frontend VCS roots currently live in sibling child projects. Move them to the common parent before import so the unified pipeline can reference both IDs without copying credentials.
+- The existing frontend Sentry auth token is scoped to the old build configuration; add it as a password parameter on the new pipeline to preserve source-map uploads.
+- Live migration Job `tg-mini-backend-140` was observed in `ImagePullBackOff`: tag `272` exists, but its OCI index references a missing Linux/amd64 manifest. The new build disables provenance indexes and the preflight recursively validates the runtime manifest and blobs. No production resource was deleted or mutated during this redesign.
+
+### Next steps
+
+1. Validate both Argo manifests with the live CRDs using server-side dry-run and validate the pipeline YAML in TeamCity.
+2. Commit/push both repositories, import `LightnyReleaseFlow`, and run one manual end-to-end release.
+3. Disable old build triggers only after the replacement produces a green, runtime-verified release.
+4. Implement beta Phase 1 guardrails before provisioning shared-production-data beta workloads.

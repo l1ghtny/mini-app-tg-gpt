@@ -1,0 +1,171 @@
+jobs:
+  build_backend:
+    name: 1. Build Backend Image
+    runs-on: self-hosted
+    steps:
+      - type: script
+        name: Docker build and push backend
+        script-content: |-
+          #!/bin/bash
+          set -euo pipefail
+
+          cd backend
+          if [ -n "${DOCKER_HOST:-}" ]; then
+            PUSH_REGISTRY="registry.container-registry.svc.cluster.local:5000"
+          else
+            PUSH_REGISTRY="localhost:32000"
+          fi
+
+          IMAGE="$PUSH_REGISTRY/tg-mini-app-backend"
+          TAG="%build.number%"
+
+          push_with_retry() {
+            local image="$1"
+            local delay=2
+            for attempt in 1 2 3 4 5; do
+              if docker push "$image"; then
+                return 0
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                return 1
+              fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+
+          docker build --provenance=false -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          push_with_retry "$IMAGE:$TAG"
+          push_with_retry "$IMAGE:latest"
+    repositories:
+      - MiniAppTgGpt_HttpsGithubComL1ghtnyMiniAppTgGptRefsHeadsMaster:
+          path: backend
+          enabled: true
+      - main:
+          enabled: false
+
+  build_frontend:
+    name: 2. Build Frontend Image
+    runs-on: self-hosted
+    steps:
+      - type: script
+        name: Docker build and push frontend
+        script-content: |-
+          #!/bin/bash
+          set -euo pipefail
+
+          cd frontend
+          if [ -n "${DOCKER_HOST:-}" ]; then
+            PUSH_REGISTRY="registry.container-registry.svc.cluster.local:5000"
+          else
+            PUSH_REGISTRY="localhost:32000"
+          fi
+
+          IMAGE="$PUSH_REGISTRY/tg-mini-frontend-new"
+          TAG="%build.number%"
+          SENTRY_ARGS=()
+          if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
+            SENTRY_ARGS+=(--build-arg "SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN")
+          fi
+
+          push_with_retry() {
+            local image="$1"
+            local delay=2
+            for attempt in 1 2 3 4 5; do
+              if docker push "$image"; then
+                return 0
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                return 1
+              fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+
+          docker build --provenance=false \
+            --build-arg VITE_API_URL="https://app.lightny.ru" \
+            --build-arg VITE_WEB_AUTH_ENABLED="true" \
+            --build-arg VITE_TELEGRAM_OIDC_ENABLED="true" \
+            --build-arg VITE_EMAIL_AUTH_ENABLED="false" \
+            --build-arg VITE_WEB_APP_URL="https://app.lightny.ru" \
+            --build-arg VITE_PUBLIC_SITE_URL="https://lightny.ru" \
+            --build-arg VITE_SUPPORT_EMAIL="support@lightny.pro" \
+            --build-arg VITE_SENTRY_DSN="https://1ac498f4dab1ac99e6559131b50b9c74@o4510481798004736.ingest.de.sentry.io/4510481918132304" \
+            --build-arg VITE_SENTRY_ENVIRONMENT="production_main_server" \
+            --build-arg VITE_STARTER_BUNDLE_NAME="Welcoming Bonus" \
+            --build-arg VITE_SENTRY_REPLAY_ENABLED="true" \
+            --build-arg VITE_SENTRY_FEEDBACK_SCREENSHOT="true" \
+            --build-arg VITE_APP_VERSION="tg-mini-frontend@$TAG" \
+            --build-arg VITE_TEST="false" \
+            --build-arg VITE_BOT_USERNAME="AIwithUIbot" \
+            "${SENTRY_ARGS[@]}" \
+            -t "$IMAGE:$TAG" \
+            -t "$IMAGE:latest" \
+            .
+          push_with_retry "$IMAGE:$TAG"
+          push_with_retry "$IMAGE:latest"
+    repositories:
+      - TelegramMiniAppProject_TgMiniFrontendNewUI_HttpsGithubComL1ghtnyTgMiniFrontendRefsHeadsMaster:
+          path: frontend
+          enabled: true
+      - main:
+          enabled: false
+
+  run_migrations:
+    name: 3. Verify Backend Image and Run Migrations
+    runs-on: self-hosted
+    dependencies:
+      - build_backend
+    steps:
+      - type: script
+        name: Run Alembic migration job
+        script-content: |-
+          #!/bin/bash
+          set -euo pipefail
+
+          cd backend
+          export K8S_TOOLS_DIR="$PWD/.teamcity-tools"
+          export PATH="$K8S_TOOLS_DIR:$PATH"
+          bash scripts/release/install_k8s_tools.sh
+
+          export IMAGE_TAG="%job.build_backend.build.number%"
+          export JOB_SUFFIX="$IMAGE_TAG"
+          export DEPLOY_ENV="production"
+          bash scripts/release/run_migration.sh
+    repositories:
+      - MiniAppTgGpt_HttpsGithubComL1ghtnyMiniAppTgGptRefsHeadsMaster:
+          path: backend
+          enabled: true
+      - main:
+          enabled: false
+
+  deploy:
+    name: 4. Deploy API, Frontend, and Workers
+    runs-on: self-hosted
+    dependencies:
+      - build_backend
+      - build_frontend
+      - run_migrations
+    steps:
+      - type: script
+        name: Reconcile Argo applications and worker images
+        script-content: |-
+          #!/bin/bash
+          set -euo pipefail
+
+          cd backend
+          export K8S_TOOLS_DIR="$PWD/.teamcity-tools"
+          export PATH="$K8S_TOOLS_DIR:$PATH"
+          bash scripts/release/install_k8s_tools.sh
+
+          export BACKEND_TAG="%job.build_backend.build.number%"
+          export FRONTEND_TAG="%job.build_frontend.build.number%"
+          bash scripts/release/deploy_stack.sh
+        format-stderr-as-error: true
+    repositories:
+      - MiniAppTgGpt_HttpsGithubComL1ghtnyMiniAppTgGptRefsHeadsMaster:
+          path: backend
+          enabled: true
+      - main:
+          enabled: false

@@ -1,3 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: tg-mini-backend-readiness
+  namespace: gpt
+  annotations:
+    argocd.argoproj.io/tracking-id: tg-mini-backend-rollouts:argoproj.io/AnalysisTemplate:gpt/tg-mini-backend-readiness
+spec:
+  metrics:
+    - name: candidate-readiness
+      count: 5
+      interval: 5s
+      failureLimit: 2
+      successCondition: result.status == "ready"
+      provider:
+        web:
+          url: http://tg-mini-backend-canary.gpt.svc.cluster.local/health/ready
+          timeoutSeconds: 4
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -24,6 +43,8 @@ metadata:
 spec:
   replicas: 2
   revisionHistoryLimit: 10
+  progressDeadlineSeconds: 900
+  progressDeadlineAbort: true
   selector:
     matchLabels:
       app: tg-mini-backend
@@ -42,18 +63,22 @@ spec:
       trafficRouting:
         nginx:
           stableIngress: tg-mini-backend
-          canaryIngressAnnotations:
-            nginx.ingress.kubernetes.io/canary-by-header: X-Canary-User
-            nginx.ingress.kubernetes.io/canary-by-header-pattern: ^tg-(207078380|353963715)$
-            nginx.ingress.kubernetes.io/canary-weight: "0"
       steps:
         - setCanaryScale:
             replicas: 1
         - setWeight: 0
-        - pause: {}
-        - setWeight: 5
-        - pause: {}
+        - analysis:
+            templates:
+              - templateName: tg-mini-backend-readiness
         - setWeight: 20
-        - pause: {}
-        - setWeight: 50
-        - pause: {}
+        - pause:
+            duration: 2m
+        - analysis:
+            templates:
+              - templateName: tg-mini-backend-readiness
+        - setWeight: 100
+        - pause:
+            duration: 2m
+        - analysis:
+            templates:
+              - templateName: tg-mini-backend-readiness

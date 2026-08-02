@@ -2,7 +2,7 @@
 set -euo pipefail
 
 K8S_NAMESPACE="${K8S_NAMESPACE:-gpt}"
-DEPLOY_ENV="${DEPLOY_ENV:-beta}"
+DEPLOY_ENV="${DEPLOY_ENV:-production}"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-localhost:32000}"
 IMAGE_NAME="${IMAGE_NAME:-tg-mini-app-backend}"
 IMAGE_TAG="${IMAGE_TAG:-${BUILD_NUMBER:-}}"
@@ -10,6 +10,7 @@ SECRET_NAME="${SECRET_NAME:-backend-env}"
 JOB_SUFFIX="${JOB_SUFFIX:-${BUILD_NUMBER:-}}"
 JOB_TIMEOUT="${JOB_TIMEOUT:-300s}"
 JOB_TEMPLATE="${JOB_TEMPLATE:-k8s/migrate-job.yaml.tpl}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -z "${IMAGE_TAG}" ]]; then
   echo "ERROR: IMAGE_TAG is required (or BUILD_NUMBER)." >&2
@@ -29,6 +30,11 @@ fi
 JOB_NAME="tg-mini-backend-${JOB_SUFFIX}"
 tmpfile="$(mktemp)"
 trap 'rm -f "$tmpfile"' EXIT
+
+IMAGE_NAME="${IMAGE_NAME}" IMAGE_TAG="${IMAGE_TAG}" \
+  "${script_dir}/verify_registry_image.sh"
+
+kubectl delete -n "${K8S_NAMESPACE}" "job/${JOB_NAME}" --ignore-not-found=true
 
 sed \
   -e "s/__K8S_NAMESPACE__/${K8S_NAMESPACE}/g" \
