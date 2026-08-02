@@ -16,4 +16,4 @@ install -m 0755 kubectl-argo-rollouts-linux-amd64 "${K8S_TOOLS_DIR}/kubectl-argo
 rm kubectl-argo-rollouts-linux-amd64
 
 "${K8S_TOOLS_DIR}/kubectl" version --client
-"${K8S_TOOLS_DIR}/kubectl" argo rollouts version --client
+"${K8S_TOOLS_DIR}/kubectl" argo rollouts version
