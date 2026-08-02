@@ -104,6 +104,7 @@ app.add_middleware(
         "localhost",
         "127.0.0.1",
         "192.168.1.137",
+        "tg-mini-backend-canary.gpt.svc.cluster.local",
         "*.kosh.games",
     ],
 )

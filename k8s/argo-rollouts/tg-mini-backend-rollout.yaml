@@ -16,9 +16,6 @@ spec:
         web:
           url: http://tg-mini-backend-canary.gpt.svc.cluster.local/health/ready
           timeoutSeconds: 4
-          headers:
-            - key: Host
-              value: gpt-mini-app-api.lightny.pro
 ---
 apiVersion: v1
 kind: Service
