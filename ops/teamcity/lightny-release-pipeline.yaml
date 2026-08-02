@@ -38,11 +38,9 @@ jobs:
           push_with_retry "$IMAGE:$TAG"
           push_with_retry "$IMAGE:latest"
     repositories:
-      - MiniAppTgGpt_HttpsGithubComL1ghtnyMiniAppTgGptRefsHeadsMaster:
+      - main:
           path: backend
           enabled: true
-      - main:
-          enabled: false
 
   build_frontend:
     name: 2. Build Frontend Image
@@ -54,7 +52,6 @@ jobs:
           #!/bin/bash
           set -euo pipefail
 
-          cd frontend
           if [ -n "${DOCKER_HOST:-}" ]; then
             PUSH_REGISTRY="registry.container-registry.svc.cluster.local:5000"
           else
@@ -83,6 +80,9 @@ jobs:
             done
           }
 
+          rm -rf frontend
+          git clone --depth 1 --branch main https://github.com/l1ghtny/chat-bot-telegram.git frontend
+          cd frontend
           docker build --provenance=false \
             --build-arg VITE_API_URL="https://app.lightny.ru" \
             --build-arg VITE_WEB_AUTH_ENABLED="true" \
@@ -106,9 +106,6 @@ jobs:
           push_with_retry "$IMAGE:$TAG"
           push_with_retry "$IMAGE:latest"
     repositories:
-      - TelegramMiniAppProject_TgMiniFrontendNewUI_HttpsGithubComL1ghtnyTgMiniFrontendRefsHeadsMaster:
-          path: frontend
-          enabled: true
       - main:
           enabled: false
 
@@ -134,11 +131,9 @@ jobs:
           export DEPLOY_ENV="production"
           bash scripts/release/run_migration.sh
     repositories:
-      - MiniAppTgGpt_HttpsGithubComL1ghtnyMiniAppTgGptRefsHeadsMaster:
+      - main:
           path: backend
           enabled: true
-      - main:
-          enabled: false
 
   deploy:
     name: 4. Deploy API, Frontend, and Workers
@@ -164,8 +159,6 @@ jobs:
           bash scripts/release/deploy_stack.sh
         format-stderr-as-error: true
     repositories:
-      - MiniAppTgGpt_HttpsGithubComL1ghtnyMiniAppTgGptRefsHeadsMaster:
+      - main:
           path: backend
           enabled: true
-      - main:
-          enabled: false
