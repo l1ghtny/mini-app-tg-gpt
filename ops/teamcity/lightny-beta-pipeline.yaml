@@ -20,7 +20,7 @@ jobs:
           docker build --provenance=false -t "$IMAGE:$TAG" .
           docker push "$IMAGE:$TAG"
     repositories:
-      - MiniAppTgGpt_HttpsGithubComL1ghtnyMiniAppTgGptRefsHeadsMaster:
+      - main:
           path: backend
           enabled: true
 
@@ -90,6 +90,6 @@ jobs:
           bash scripts/release/deploy_beta.sh
         format-stderr-as-error: true
     repositories:
-      - MiniAppTgGpt_HttpsGithubComL1ghtnyMiniAppTgGptRefsHeadsMaster:
+      - main:
           path: backend
           enabled: true
