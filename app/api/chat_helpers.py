@@ -56,6 +56,7 @@ from app.services.subscription_check.entitlements import (
 from app.services.subscription_check.pacing import get_image_quality_pricing
 from app.services.subscription_check.realtime_check import create_tools_list
 from app.services.image_assets import (
+    detach_assets_from_conversation_ids,
     detach_assets_from_message_content_ids,
     link_content_to_existing_asset_by_url,
 )
@@ -727,6 +728,7 @@ async def handle_delete_conversation(
         include_content=False,
     )
     await _detach_linked_assets_for_messages(session, messages)
+    await detach_assets_from_conversation_ids(session, [conversation_id])
     await session.flush()
 
     await session.delete(conversation)

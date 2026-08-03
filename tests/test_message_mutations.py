@@ -3,6 +3,7 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -139,6 +140,21 @@ async def test_delete_conversation_detaches_linked_image_assets():
     assert test_db_url
 
     engine = create_async_engine(test_db_url, future=True, echo=False)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "ALTER TABLE image_asset "
+                "DROP CONSTRAINT image_asset_conversation_id_fkey"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE image_asset "
+                "ADD CONSTRAINT image_asset_conversation_id_fkey "
+                "FOREIGN KEY (conversation_id) REFERENCES conversation (id)"
+            )
+        )
+
     async with AsyncSession(engine, expire_on_commit=False) as session:
         owner = m.AppUser(telegram_id=721000037)
         session.add(owner)
@@ -168,8 +184,21 @@ async def test_delete_conversation_detaches_linked_image_assets():
             status="active",
         )
         session.add(asset)
+        detached_from_message_asset = m.ImageAsset(
+            user_id=owner.id,
+            conversation_id=conversation.id,
+            message_content_id=None,
+            bucket="bucket",
+            key="images/free/generated/aa/detached-delete-conversation.png",
+            public_url="https://cdn.example/detached-delete-conversation.png",
+            source="generated",
+            retention_policy="free_30d",
+            status="active",
+        )
+        session.add(detached_from_message_asset)
         await session.commit()
         await session.refresh(asset)
+        await session.refresh(detached_from_message_asset)
 
         await handle_delete_conversation(
             conversation_id=conversation.id,
@@ -185,6 +214,14 @@ async def test_delete_conversation_detaches_linked_image_assets():
         assert detached_asset is not None
         assert detached_asset.message_content_id is None
         assert detached_asset.conversation_id is None
+
+        detached_asset_without_message = await session.get(
+            m.ImageAsset,
+            detached_from_message_asset.id,
+        )
+        assert detached_asset_without_message is not None
+        assert detached_asset_without_message.message_content_id is None
+        assert detached_asset_without_message.conversation_id is None
 
 
 @pytest.mark.asyncio

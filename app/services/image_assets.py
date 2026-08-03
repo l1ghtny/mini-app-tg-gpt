@@ -313,6 +313,25 @@ async def detach_assets_from_message_content_ids(
         session.add(asset)
 
 
+async def detach_assets_from_conversation_ids(
+    session: AsyncSession,
+    conversation_ids: Sequence[uuid.UUID],
+) -> None:
+    if not conversation_ids:
+        return
+
+    assets = (
+        await session.exec(
+            select(ImageAsset).where(
+                ImageAsset.conversation_id.in_(list(conversation_ids))
+            )
+        )
+    ).all()
+    for asset in assets:
+        asset.conversation_id = None
+        session.add(asset)
+
+
 async def mark_asset_status(
     session: AsyncSession,
     asset: ImageAsset,
