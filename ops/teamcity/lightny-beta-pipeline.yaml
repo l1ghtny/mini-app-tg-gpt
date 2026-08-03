@@ -20,7 +20,7 @@ jobs:
           docker build --provenance=false -t "$IMAGE:$TAG" .
           docker push "$IMAGE:$TAG"
     repositories:
-      - main:
+      - TelegramMiniAppProject_LightnyBackendBeta:
           path: backend
           enabled: true
 
@@ -64,7 +64,7 @@ jobs:
             .
           docker push "$IMAGE:$TAG"
     repositories:
-      - TelegramMiniAppProject_TgMiniFrontendNewUI_HttpsGithubComL1ghtnyTgMiniFrontendRefsHeadsMaster:
+      - TelegramMiniAppProject_LightnyFrontendBeta:
           path: frontend
           enabled: true
 
@@ -91,6 +91,6 @@ jobs:
           bash scripts/release/deploy_beta.sh
         format-stderr-as-error: true
     repositories:
-      - main:
+      - TelegramMiniAppProject_LightnyBackendBeta:
           path: backend
           enabled: true
