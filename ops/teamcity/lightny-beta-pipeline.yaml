@@ -57,6 +57,7 @@ jobs:
             --build-arg VITE_SENTRY_FEEDBACK_SCREENSHOT="false" \
             --build-arg VITE_APP_VERSION="tg-mini-frontend@$TAG" \
             --build-arg VITE_DEPLOYMENT_CHANNEL="beta" \
+            --build-arg VITE_VOICE_TRANSCRIPTION_ENABLED="true" \
             --build-arg VITE_TEST="false" \
             --build-arg VITE_BOT_USERNAME="AIwithUIbot" \
             -t "$IMAGE:$TAG" \

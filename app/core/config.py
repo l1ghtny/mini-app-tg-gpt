@@ -63,6 +63,30 @@ class Settings:
     BETA_ALLOW_EMAIL_DELIVERY: bool = os.getenv(
         "BETA_ALLOW_EMAIL_DELIVERY", "False"
     ).lower() in ("true", "1")
+    VOICE_TRANSCRIPTION_ENABLED: bool = os.getenv(
+        "VOICE_TRANSCRIPTION_ENABLED", "False"
+    ).lower() in ("true", "1")
+    VOICE_TRANSCRIPTION_MODEL: str = os.getenv(
+        "VOICE_TRANSCRIPTION_MODEL", "gpt-transcribe"
+    ).strip()
+    VOICE_TRANSCRIPTION_MAX_BYTES: int = int(
+        os.getenv("VOICE_TRANSCRIPTION_MAX_BYTES", str(10 * 1024 * 1024))
+    )
+    VOICE_TRANSCRIPTION_MAX_DURATION_SECONDS: int = int(
+        os.getenv("VOICE_TRANSCRIPTION_MAX_DURATION_SECONDS", "300")
+    )
+    VOICE_TRANSCRIPTION_TIMEOUT_SECONDS: float = float(
+        os.getenv("VOICE_TRANSCRIPTION_TIMEOUT_SECONDS", "60")
+    )
+    VOICE_TRANSCRIPTION_RATE_LIMIT_PER_HOUR: int = int(
+        os.getenv("VOICE_TRANSCRIPTION_RATE_LIMIT_PER_HOUR", "30")
+    )
+    VOICE_TRANSCRIPTION_RESULT_TTL_SECONDS: int = int(
+        os.getenv("VOICE_TRANSCRIPTION_RESULT_TTL_SECONDS", "600")
+    )
+    VOICE_TRANSCRIPTION_COST_PER_MINUTE_USD: str = os.getenv(
+        "VOICE_TRANSCRIPTION_COST_PER_MINUTE_USD", "0.006"
+    ).strip()
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     GEMINI_API_BASE_URL: str = os.getenv(

@@ -38,6 +38,7 @@ class SubscriptionTier(SQLModel, table=True):
     daily_image_energy: int = Field(default=0)
     monthly_docs: int = Field(default=0)
     monthly_deepsearch: int = Field(default=0)
+    monthly_transcription_minutes: int = Field(default=0)
     max_active_docs: int = Field(default=0)
     max_storage_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))
     max_file_size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))

@@ -122,6 +122,10 @@ spec:
               value: socks5://warp-proxy:1080
             - name: HTTP_PROXY
               value: socks5://warp-proxy:1080
+            - name: VOICE_TRANSCRIPTION_ENABLED
+              value: "true"
+            - name: VOICE_TRANSCRIPTION_MODEL
+              value: gpt-transcribe
           envFrom:
             - secretRef:
                 name: backend-beta-env

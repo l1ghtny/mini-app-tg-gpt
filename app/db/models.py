@@ -760,7 +760,7 @@ class RequestLedger(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("user_id", "request_id", name="uq_user_reqid"),
         CheckConstraint(
-            "feature IN ('text','image','doc','deepsearch','web_search')",
+            "feature IN ('text','image','doc','deepsearch','web_search','transcription')",
             name="ck_request_feature",
         ),
     )
