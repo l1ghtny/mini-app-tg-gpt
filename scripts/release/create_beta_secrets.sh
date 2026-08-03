@@ -75,7 +75,6 @@ jq \
       metadata: {name: $secret_name, namespace: $namespace},
       type: "Opaque",
       data: {
-        BOT_TOKEN: $source.BOT_TOKEN,
         DATABASE_URL: $source.DATABASE_URL,
         GEMINI_API_KEY: $source.GEMINI_API_KEY,
         IMAGE_FETCH_PROXY_ALLOWED_HOSTS: $source.IMAGE_FETCH_PROXY_ALLOWED_HOSTS,
