@@ -1,6 +1,7 @@
 import fastapi_swagger_dark as fsd
 import sentry_sdk
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 import os
@@ -28,29 +29,23 @@ from app.api.user_usage import user_usage
 from app.api.user_settings import user_settings
 from app.api.whats_new import whats_new
 from app.core.config import settings
+from app.core.deployment_channel import blocked_beta_action
 from app.core.sentry_setup import build_sentry_openai_integrations
 from app.core.version import APP_VERSION
 
 logger = settings.custom_logger
-CANARY_HEADER_NAME = os.getenv("CANARY_HEADER_NAME", "X-Canary-User").strip() or "X-Canary-User"
-CANARY_ALLOWED_TG_IDS = {
-    raw.strip()
-    for raw in os.getenv("CANARY_TG_IDS", "").split(",")
-    if raw.strip()
-}
-CANARY_ALLOWED_HEADER_VALUES = {f"tg-{telegram_id}" for telegram_id in CANARY_ALLOWED_TG_IDS}
-
-
-
-
-
-
-
-app = FastAPI(
-    title="Telegram ChatGPT API",
-    version=APP_VERSION,
-    docs_url=None
+CANARY_HEADER_NAME = (
+    os.getenv("CANARY_HEADER_NAME", "X-Canary-User").strip() or "X-Canary-User"
 )
+CANARY_ALLOWED_TG_IDS = {
+    raw.strip() for raw in os.getenv("CANARY_TG_IDS", "").split(",") if raw.strip()
+}
+CANARY_ALLOWED_HEADER_VALUES = {
+    f"tg-{telegram_id}" for telegram_id in CANARY_ALLOWED_TG_IDS
+}
+
+
+app = FastAPI(title="Telegram ChatGPT API", version=APP_VERSION, docs_url=None)
 if CANARY_ALLOWED_TG_IDS:
     logger.info(
         "Canary routing header enabled: %s (%s user ids)",
@@ -62,15 +57,17 @@ else:
 
 
 if settings.SENTRY_DSN:
-    logger.info(f'Initializing Sentry in {settings.ENVIRONMENT}')
+    logger.info(f"Initializing Sentry in {settings.ENVIRONMENT}")
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
         release=app.version,
         # Capture only 10% of transactions for performance monitoring
-        traces_sample_rate=0.1 if settings.ENVIRONMENT in ("production", "production_main_server") else 1.0,
+        traces_sample_rate=0.1
+        if settings.ENVIRONMENT in ("production", "production_main_server")
+        else 1.0,
         # Capture 100% of errors (this is the default, but good to know)
-        send_default_pii=True, # send info about http calls (includes AI, currently using for openAI costs)
+        send_default_pii=True,  # send info about http calls (includes AI, currently using for openAI costs)
         integrations=build_sentry_openai_integrations(logger),
         enable_logs=True,
         stream_gen_ai_spans=True,
@@ -111,10 +108,28 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def enforce_beta_guardrails(request: Request, call_next):
+    blocked_action = blocked_beta_action(request.url.path, request.method)
+    if blocked_action:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": "beta_action_disabled",
+                "action": blocked_action,
+            },
+        )
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def attach_canary_request_context(request: Request, call_next):
     canary_header_value = request.headers.get(CANARY_HEADER_NAME)
     if canary_header_value:
-        is_allowed = canary_header_value in CANARY_ALLOWED_HEADER_VALUES if CANARY_ALLOWED_HEADER_VALUES else False
+        is_allowed = (
+            canary_header_value in CANARY_ALLOWED_HEADER_VALUES
+            if CANARY_ALLOWED_HEADER_VALUES
+            else False
+        )
         with sentry_sdk.configure_scope() as scope:
             scope.set_tag("canary_header_name", CANARY_HEADER_NAME)
             scope.set_tag("canary_header_value", canary_header_value)
@@ -123,14 +138,15 @@ async def attach_canary_request_context(request: Request, call_next):
     response = await call_next(request)
     return response
 
+
 # -------------------------
 
 dark = APIRouter()
 fsd.install(dark, path="/docs")
 app.include_router(dark)
 app.include_router(health)
-app.include_router(chat_router, prefix="/api/v1", tags=['conversations'])
-app.include_router(chat_folders_router, prefix="/api/v1", tags=['chat-folders'])
+app.include_router(chat_router, prefix="/api/v1", tags=["conversations"])
+app.include_router(chat_folders_router, prefix="/api/v1", tags=["chat-folders"])
 app.include_router(auth, prefix="/api/v1")
 app.include_router(account, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")

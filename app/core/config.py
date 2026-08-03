@@ -33,6 +33,36 @@ _normalize_proxy_env_aliases()
 
 
 class Settings:
+    DEPLOYMENT_CHANNEL: str = (
+        os.getenv("DEPLOYMENT_CHANNEL", "production").strip().lower()
+    )
+    BETA_ALLOWED_USER_IDS: tuple[str, ...] = tuple(
+        user_id.strip().lower()
+        for user_id in os.getenv("BETA_ALLOWED_USER_IDS", "").split(",")
+        if user_id.strip()
+    )
+    BETA_ALLOW_PAYMENTS: bool = os.getenv("BETA_ALLOW_PAYMENTS", "False").lower() in (
+        "true",
+        "1",
+    )
+    BETA_ALLOW_ACCOUNT_DELETION: bool = os.getenv(
+        "BETA_ALLOW_ACCOUNT_DELETION", "False"
+    ).lower() in ("true", "1")
+    BETA_ALLOW_ADMIN_MUTATIONS: bool = os.getenv(
+        "BETA_ALLOW_ADMIN_MUTATIONS", "False"
+    ).lower() in ("true", "1")
+    BETA_ALLOW_EXTERNAL_SHARING: bool = os.getenv(
+        "BETA_ALLOW_EXTERNAL_SHARING", "False"
+    ).lower() in ("true", "1")
+    BETA_ALLOW_IDENTITY_MUTATIONS: bool = os.getenv(
+        "BETA_ALLOW_IDENTITY_MUTATIONS", "False"
+    ).lower() in ("true", "1")
+    BETA_ALLOW_ENTITLEMENT_MUTATIONS: bool = os.getenv(
+        "BETA_ALLOW_ENTITLEMENT_MUTATIONS", "False"
+    ).lower() in ("true", "1")
+    BETA_ALLOW_EMAIL_DELIVERY: bool = os.getenv(
+        "BETA_ALLOW_EMAIL_DELIVERY", "False"
+    ).lower() in ("true", "1")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     GEMINI_API_BASE_URL: str = os.getenv(

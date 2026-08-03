@@ -35,7 +35,7 @@ Writes in beta are real because PostgreSQL and R2 are shared. The UI must show a
 Beta is an optional preview lane, not a blocking manual gate for every release:
 
 - Production: `LightnyReleaseFlow` builds both repositories and performs the automatic Argo rollout.
-- Beta: a later `deploy_beta` job reuses immutable backend/frontend tags and updates the beta workloads only. It can follow a candidate branch or be started for a selected successful build.
+- Beta: the manual `LightnyBetaFlow` builds immutable `beta-*` backend/frontend tags from the selected repository revisions and updates only the beta workloads. It never runs migrations or background workers.
 - Promoting a beta-tested version means starting the production flow with those immutable tags; it does not copy data or rebuild images.
 
 ## Implementation phases
@@ -56,7 +56,7 @@ Beta is an optional preview lane, not a blocking manual gate for every release:
 
 ### Phase 3 — pipeline
 
-1. Extend `LightnyReleaseFlow` with a `deploy_beta` job that accepts successful immutable image tags.
+1. Create `LightnyBetaFlow` with parallel beta backend/frontend builds and a `deploy_beta` job.
 2. Verify both images exist before changing beta resources.
 3. Run beta health, login, conversation-list, send/stream/resume, upload-read, and logout smoke tests.
 4. Record the deployed backend/frontend tags visibly in TeamCity and Sentry.
@@ -76,3 +76,12 @@ Beta is an optional preview lane, not a blocking manual gate for every release:
 - Candidate failures cannot interrupt production pods, Redis streams, workers, or ingress.
 - No destructive or external side-effect endpoint is reachable from beta.
 - Beta deploy and rollback use immutable existing images and do not require a database copy.
+
+## Initial implementation
+
+- Backend access is restricted by internal account UUID after every supported authentication path and on every authenticated dependency.
+- Payments, account deletion, subscription/access-code changes, broadcasts, identity changes, email delivery, and Telegram image sharing fail closed in the beta deployment channel.
+- Both invited accounts already have passkeys, so the first release enables passkey login only. Telegram OIDC and email login remain disabled on beta.
+- `k8s/beta/lightny-beta.yaml.tpl` defines one frontend, one backend, a persistent dedicated Redis, same-host ingress, basic authentication, and ingress NetworkPolicies. It defines no worker or CronJob.
+- `scripts/release/create_beta_secrets.sh` derives a reduced secret from production without copying payment, broadcast, SMTP, or Telegram OIDC credentials.
+- `scripts/release/deploy_beta.sh` verifies immutable registry tags before applying the rendered workload manifest and running in-pod health checks.

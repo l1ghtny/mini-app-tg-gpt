@@ -7,6 +7,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
+from app.core.deployment_channel import ensure_deployment_user_allowed
 from app.db import models
 
 
@@ -23,6 +24,7 @@ async def create_browser_session(
     user: models.AppUser,
     request: Request | None = None,
 ) -> str:
+    ensure_deployment_user_allowed(user)
     token = secrets.token_urlsafe(32)
     now = _utcnow_naive()
     user_agent = request.headers.get("user-agent", "")[:512] if request else None

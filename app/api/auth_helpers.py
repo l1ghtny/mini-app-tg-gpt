@@ -4,9 +4,14 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
+from app.core.deployment_channel import ensure_deployment_user_allowed
 from app.core.security import create_access_token
 from app.db import models
-from app.db.subscription_tiers import SubscriptionStatus, SubscriptionTier, UserSubscription
+from app.db.subscription_tiers import (
+    SubscriptionStatus,
+    SubscriptionTier,
+    UserSubscription,
+)
 from app.services.subscription_check.entitlements import get_current_subscription
 
 logger = settings.custom_logger
@@ -25,17 +30,22 @@ async def process_login(
     *,
     telegram_profile: dict | None = None,
 ) -> tuple[str, bool]:
-    user = (await session.exec(
-        select(models.AppUser).where(models.AppUser.telegram_id == telegram_id)
-    )).first()
-    identity = (await session.exec(
-        select(models.UserIdentity).where(
-            models.UserIdentity.provider == "telegram",
-            models.UserIdentity.subject == str(telegram_id),
+    user = (
+        await session.exec(
+            select(models.AppUser).where(models.AppUser.telegram_id == telegram_id)
         )
-    )).first()
+    ).first()
+    identity = (
+        await session.exec(
+            select(models.UserIdentity).where(
+                models.UserIdentity.provider == "telegram",
+                models.UserIdentity.subject == str(telegram_id),
+            )
+        )
+    ).first()
     if not user and identity:
         user = await session.get(models.AppUser, identity.user_id)
+    ensure_deployment_user_allowed(user)
     username = telegram_profile.get("username") if telegram_profile else None
     first_name = telegram_profile.get("first_name") if telegram_profile else None
     last_name = telegram_profile.get("last_name") if telegram_profile else None
@@ -99,7 +109,6 @@ async def process_login(
             session.add(user)
             await session.commit()
 
-
     bonus_granted = await ensure_starter_bundle(session, user)
     access_token = create_access_token(data={"sub": str(user.id)})
     return access_token, bonus_granted
@@ -110,20 +119,26 @@ async def ensure_starter_bundle(session: AsyncSession, user: models.AppUser) -> 
     bonus_granted = False
 
     if not active_sub:
-        starter_history = (await session.exec(
-            select(UserSubscription)
-            .join(SubscriptionTier)
-            .where(
-                UserSubscription.user_id == user.id,
-                SubscriptionTier.name == settings.STARTER_BUNDLE_NAME,
+        starter_history = (
+            await session.exec(
+                select(UserSubscription)
+                .join(SubscriptionTier)
+                .where(
+                    UserSubscription.user_id == user.id,
+                    SubscriptionTier.name == settings.STARTER_BUNDLE_NAME,
+                )
             )
-        )).first()
+        ).first()
 
         if not starter_history:
             logger.info("user %s has no starter history", user.id)
-            starter_tier = (await session.exec(
-                select(SubscriptionTier).where(SubscriptionTier.name == settings.STARTER_BUNDLE_NAME)
-            )).first()
+            starter_tier = (
+                await session.exec(
+                    select(SubscriptionTier).where(
+                        SubscriptionTier.name == settings.STARTER_BUNDLE_NAME
+                    )
+                )
+            ).first()
 
             if starter_tier:
                 new_sub = UserSubscription(

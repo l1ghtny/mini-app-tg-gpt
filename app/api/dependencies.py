@@ -8,6 +8,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
+from app.core.deployment_channel import ensure_deployment_user_allowed
 from app.db import models
 from app.db.database import get_session
 from app.db.models import AppUser
@@ -29,7 +30,9 @@ oauth2_scheme = OAuth2PasswordBearer(
 
 async def _user_from_token(token: str, session: AsyncSession) -> AppUser | None:
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         raw_user_id: str | None = payload.get("sub")
         if not raw_user_id:
             return None
@@ -37,7 +40,9 @@ async def _user_from_token(token: str, session: AsyncSession) -> AppUser | None:
     except (JWTError, ValueError):
         return None
 
-    result = await session.exec(select(models.AppUser).where(models.AppUser.id == user_id))
+    result = await session.exec(
+        select(models.AppUser).where(models.AppUser.id == user_id)
+    )
     user = result.first()
     return user if user and user.deleted_at is None else None
 
@@ -49,8 +54,11 @@ def _request_credential(request: Request, bearer_token: str | None) -> str | Non
     if cookie_token and request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
         if origin not in settings.CORS_ALLOWED_ORIGINS:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="untrusted_origin")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="untrusted_origin"
+            )
     return cookie_token
+
 
 async def get_current_user(
     request: Request,
@@ -66,10 +74,13 @@ async def get_current_user(
     if token:
         user = await _user_from_token(credential, session) if credential else None
     else:
-        resolved = await resolve_browser_session(session, credential) if credential else None
+        resolved = (
+            await resolve_browser_session(session, credential) if credential else None
+        )
         user = resolved[0] if resolved else None
     if user is None:
         raise credentials_exception
+    ensure_deployment_user_allowed(user)
     return user
 
 
@@ -92,6 +103,7 @@ async def get_optional_current_user(
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    ensure_deployment_user_allowed(user)
     return user
 
 
@@ -104,9 +116,9 @@ async def get_bus(redis: Redis = Depends(get_redis)) -> RedisEventBus:
 
 
 async def rate_limit_check(
-        request: Request,
-        user: AppUser = Depends(get_current_user),
-        redis: Redis =Depends(get_redis)
+    request: Request,
+    user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
 ):
     """
     Spam Protection: Limits users to 60 requests per rolling hour.
@@ -130,7 +142,7 @@ async def rate_limit_check(
     if current > LIMIT:
         raise HTTPException(
             status_code=429,
-            detail="You are sending messages too fast. Please take a breather."
+            detail="You are sending messages too fast. Please take a breather.",
         )
 
     return True

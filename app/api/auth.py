@@ -42,6 +42,7 @@ from app.api.web_auth_helpers import (
     normalize_email,
 )
 from app.core.config import settings
+from app.core.deployment_channel import ensure_deployment_user_allowed
 from app.core.security import create_access_token, validate_telegram_data
 from app.db import models
 from app.db.database import get_session
@@ -465,6 +466,7 @@ async def verify_email_magic_link(
     access_token, bonus_granted, user = await consume_magic_link(
         session, token=payload.token
     )
+    ensure_deployment_user_allowed(user)
     set_session_cookie(response, await create_browser_session(session, user, request))
     return Token(
         access_token=access_token,
@@ -562,6 +564,7 @@ async def passkey_authentication_verify(
         ceremony_id=payload.ceremony_id,
         credential=payload.credential,
     )
+    ensure_deployment_user_allowed(user)
     access_token = create_access_token(data={"sub": str(user.id)})
     set_session_cookie(response, await create_browser_session(session, user, request))
     return Token(
