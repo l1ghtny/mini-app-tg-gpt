@@ -42,7 +42,10 @@ from app.api.web_auth_helpers import (
     normalize_email,
 )
 from app.core.config import settings
-from app.core.deployment_channel import ensure_deployment_user_allowed
+from app.core.deployment_channel import (
+    ensure_deployment_user_allowed,
+    is_beta_channel,
+)
 from app.core.security import create_access_token, validate_telegram_data
 from app.db import models
 from app.db.database import get_session
@@ -262,6 +265,17 @@ async def _passkey_account_id(
     return passkey.user_id if passkey else None
 
 
+async def _ensure_existing_beta_telegram_user_allowed(
+    session: AsyncSession, telegram_id: int
+) -> None:
+    if not is_beta_channel():
+        return
+    existing_user = (
+        await session.exec(select(AppUser).where(AppUser.telegram_id == telegram_id))
+    ).first()
+    ensure_deployment_user_allowed(existing_user)
+
+
 @auth.post("/telegram", response_model=Token)
 async def login_telegram(
     data: InitData,
@@ -275,6 +289,7 @@ async def login_telegram(
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    await _ensure_existing_beta_telegram_user_allowed(session, user_id)
     access_token, bonus_granted = await process_login(
         session,
         user_id,
@@ -283,6 +298,7 @@ async def login_telegram(
     user = (
         await session.exec(select(AppUser).where(AppUser.telegram_id == user_id))
     ).first()
+    ensure_deployment_user_allowed(user)
     set_session_cookie(response, await create_browser_session(session, user, request))
     return Token(
         access_token=access_token,
@@ -317,6 +333,7 @@ async def finish_telegram_oidc_login(
         )
     try:
         identity = await complete_telegram_oidc(redis, code=code, state=state)
+        await _ensure_existing_beta_telegram_user_allowed(session, identity.telegram_id)
         await process_login(
             session,
             identity.telegram_id,
@@ -329,6 +346,7 @@ async def finish_telegram_oidc_login(
         ).first()
         if not user:
             raise HTTPException(status_code=500, detail="telegram_login_user_missing")
+        ensure_deployment_user_allowed(user)
     except HTTPException:
         settings.custom_logger.warning("Telegram browser login failed", exc_info=True)
         return RedirectResponse(

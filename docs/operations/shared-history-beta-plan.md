@@ -22,7 +22,7 @@ Writes in beta are real because PostgreSQL and R2 are shared. The UI must show a
 
 ## Safety rules
 
-- Enforce the allowlist twice: at the edge and from the authenticated backend user ID. A hidden URL alone is not access control.
+- Enforce the allowlist before creating a beta browser session and again on every authenticated backend dependency. A hidden URL alone is not access control.
 - Disable payments, account deletion, broadcasts/admin mutations, webhook registration, and other irreversible/external actions through explicit beta environment flags.
 - Do not run beta-only database migrations. Use expand/contract migrations: deploy additive schema changes first, run beta and production code against the compatible schema, and remove old schema only after both have moved forward.
 - Keep cookies host-only and require a fresh beta login. Do not widen production cookies to `.app.lightny.ru`.
@@ -50,7 +50,7 @@ Beta is an optional preview lane, not a blocking manual gate for every release:
 
 1. Provision dedicated beta Redis and secrets.
 2. Add beta backend/frontend Deployments, Services, ingress, NetworkPolicies, and modest resource limits in the `gpt` namespace.
-3. Issue TLS and DNS for `beta.app.lightny.ru`; add edge allowlisting as the first barrier.
+3. Issue TLS and DNS for `beta.app.lightny.ru`; expose only the login surface until an allowlisted account authenticates.
 4. Configure the beta backend with production PostgreSQL/R2 and beta Redis/Sentry/cookie settings.
 5. Keep all CronJobs, bot consumers, and database-polling workers absent from the beta overlay.
 
@@ -81,7 +81,7 @@ Beta is an optional preview lane, not a blocking manual gate for every release:
 
 - Backend access is restricted by internal account UUID after every supported authentication path and on every authenticated dependency.
 - Payments, account deletion, subscription/access-code changes, broadcasts, identity changes, email delivery, and Telegram image sharing fail closed in the beta deployment channel.
-- Both invited accounts already have passkeys, so the first release enables passkey login only. Telegram OIDC and email login remain disabled on beta.
-- `k8s/beta/lightny-beta.yaml.tpl` defines one frontend, one backend, a persistent dedicated Redis, same-host ingress, basic authentication, and ingress NetworkPolicies. It defines no worker or CronJob.
-- `scripts/release/create_beta_secrets.sh` derives a reduced secret from production without copying payment, broadcast, SMTP, or Telegram OIDC credentials.
+- Both invited accounts can authenticate with Telegram OIDC or their existing passkeys. Email login remains disabled on beta.
+- `k8s/beta/lightny-beta.yaml.tpl` defines one frontend, one backend, a persistent dedicated Redis, same-host ingress, and ingress NetworkPolicies. It defines no worker or CronJob.
+- `scripts/release/create_beta_secrets.sh` derives a reduced secret from production, copying only the Telegram OIDC credentials needed for login while omitting payment, broadcast, and SMTP credentials.
 - `scripts/release/deploy_beta.sh` verifies immutable registry tags before applying the rendered workload manifest and running in-pod health checks.

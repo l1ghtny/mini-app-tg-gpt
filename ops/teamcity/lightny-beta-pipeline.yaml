@@ -45,7 +45,7 @@ jobs:
           docker build --provenance=false \
             --build-arg VITE_API_URL="https://beta.app.lightny.ru" \
             --build-arg VITE_WEB_AUTH_ENABLED="true" \
-            --build-arg VITE_TELEGRAM_OIDC_ENABLED="false" \
+            --build-arg VITE_TELEGRAM_OIDC_ENABLED="true" \
             --build-arg VITE_EMAIL_AUTH_ENABLED="false" \
             --build-arg VITE_WEB_APP_URL="https://beta.app.lightny.ru" \
             --build-arg VITE_PUBLIC_SITE_URL="https://lightny.ru" \

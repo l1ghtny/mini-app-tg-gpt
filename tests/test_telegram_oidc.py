@@ -171,10 +171,10 @@ async def test_oidc_callback_sets_browser_session_for_resolved_telegram_user(
     )
     monkeypatch.setattr(settings, "AUTH_COOKIE_SECURE", True)
 
-    result = AsyncMock()
+    result = Mock()
     result.first.return_value = user
-    session = AsyncMock()
-    session.exec.return_value = result
+    session = Mock()
+    session.exec = AsyncMock(return_value=result)
 
     response = await auth_api.finish_telegram_oidc_login(
         request=_request(),
@@ -195,3 +195,50 @@ async def test_oidc_callback_sets_browser_session_for_resolved_telegram_user(
         799100201,
         telegram_profile=resolved.profile,
     )
+
+
+@pytest.mark.asyncio
+async def test_beta_oidc_callback_rejects_unallowlisted_user_before_login(
+    monkeypatch,
+):
+    _configure(monkeypatch)
+    monkeypatch.setattr(settings, "DEPLOYMENT_CHANNEL", "beta")
+    monkeypatch.setattr(settings, "BETA_ALLOWED_USER_IDS", ())
+    resolved = TelegramOidcIdentity(
+        telegram_id=799100202,
+        profile={
+            "username": "uninvited",
+            "first_name": "Uninvited",
+            "last_name": None,
+            "photo_url": None,
+        },
+        return_to="/",
+    )
+    monkeypatch.setattr(
+        auth_api, "complete_telegram_oidc", AsyncMock(return_value=resolved)
+    )
+    login = AsyncMock(return_value=("bearer", False))
+    create_session = AsyncMock(return_value="browser-session")
+    monkeypatch.setattr(auth_api, "process_login", login)
+    monkeypatch.setattr(auth_api, "create_browser_session", create_session)
+
+    result = Mock()
+    result.first.return_value = None
+    session = Mock()
+    session.exec = AsyncMock(return_value=result)
+
+    response = await auth_api.finish_telegram_oidc_login(
+        request=_request(),
+        code="code",
+        state="state",
+        session=session,
+        redis=FakeRedis(),
+    )
+
+    assert response.status_code == 302
+    assert (
+        response.headers["location"] == "https://app.lightny.ru/?telegram_login=error"
+    )
+    assert "set-cookie" not in response.headers
+    login.assert_not_awaited()
+    create_session.assert_not_awaited()

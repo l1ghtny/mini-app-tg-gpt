@@ -5,8 +5,6 @@ K8S_NAMESPACE="${K8S_NAMESPACE:-gpt}"
 SOURCE_SECRET="${SOURCE_SECRET:-backend-env}"
 BETA_SECRET="${BETA_SECRET:-backend-beta-env}"
 BETA_ALLOWED_USER_IDS="${BETA_ALLOWED_USER_IDS:?BETA_ALLOWED_USER_IDS is required}"
-BETA_BASIC_AUTH_USER="${BETA_BASIC_AUTH_USER:-lightny-beta}"
-BETA_CREDENTIAL_OUTPUT_FILE="${BETA_CREDENTIAL_OUTPUT_FILE:-}"
 
 case "${BETA_ALLOWED_USER_IDS}" in
   *[!a-fA-F0-9,-]*)
@@ -36,26 +34,10 @@ if [[ -z "${beta_secret_key}" ]]; then
   beta_secret_key="$(openssl rand -hex 64)"
 fi
 
-basic_password="${BETA_BASIC_AUTH_PASSWORD:-}"
-if kubectl get secret tg-mini-beta-basic-auth -n "${K8S_NAMESPACE}" >/dev/null 2>&1; then
-  basic_auth_line="$(decode_secret_key tg-mini-beta-basic-auth auth)"
-else
-  if [[ -z "${basic_password}" ]]; then
-    basic_password="$(openssl rand -hex 16)"
-  fi
-  basic_auth_line="$(htpasswd -nbB "${BETA_BASIC_AUTH_USER}" "${basic_password}")"
-fi
-
 printf 'REDIS_PASSWORD=%s\n' "${redis_password}" >"${tmp_dir}/redis.env"
 kubectl create secret generic tg-mini-beta-redis-auth \
   -n "${K8S_NAMESPACE}" \
   --from-env-file="${tmp_dir}/redis.env" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-printf '%s\n' "${basic_auth_line}" >"${tmp_dir}/auth"
-kubectl create secret generic tg-mini-beta-basic-auth \
-  -n "${K8S_NAMESPACE}" \
-  --from-file="auth=${tmp_dir}/auth" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl get secret "${SOURCE_SECRET}" -n "${K8S_NAMESPACE}" -o json >"${tmp_dir}/source.json"
@@ -92,6 +74,8 @@ jq \
         R2_SECRET_ACCESS_KEY: $source.R2_SECRET_ACCESS_KEY,
         SENTRY_DSN: $source.SENTRY_DSN,
         STARTER_BUNDLE: $source.STARTER_BUNDLE,
+        TELEGRAM_OIDC_CLIENT_ID: $source.TELEGRAM_OIDC_CLIENT_ID,
+        TELEGRAM_OIDC_CLIENT_SECRET: $source.TELEGRAM_OIDC_CLIENT_SECRET,
         DEPLOYMENT_CHANNEL: ($deployment_channel | @base64),
         BETA_ALLOWED_USER_IDS: ($allowed_user_ids | @base64),
         REDIS_URL: ($redis_url | @base64),
@@ -100,7 +84,8 @@ jq \
         WEBAPP_URL: ($webapp_url | @base64),
         WEB_AUTH_ENABLED: ("true" | @base64),
         DEBUG_MODE: ("false" | @base64),
-        TELEGRAM_OIDC_ENABLED: ("false" | @base64),
+        TELEGRAM_OIDC_ENABLED: ("true" | @base64),
+        TELEGRAM_OIDC_REDIRECT_URI: (($webapp_url + "/api/v1/auth/telegram/oidc/callback") | @base64),
         CORS_ALLOWED_ORIGINS: ($webapp_url | @base64),
         PASSKEY_RP_ID: ("app.lightny.ru" | @base64),
         PASSKEY_ALLOWED_ORIGINS: ($webapp_url | @base64),
@@ -113,12 +98,4 @@ jq \
   ' "${tmp_dir}/source.json" >"${tmp_dir}/beta-secret.json"
 kubectl apply -f "${tmp_dir}/beta-secret.json"
 
-if [[ -n "${BETA_CREDENTIAL_OUTPUT_FILE}" && -n "${basic_password}" ]]; then
-  umask 077
-  {
-    printf 'username=%s\n' "${BETA_BASIC_AUTH_USER}"
-    printf 'password=%s\n' "${basic_password}"
-  } >"${BETA_CREDENTIAL_OUTPUT_FILE}"
-fi
-
-echo "Beta secrets are configured without payment, broadcast, SMTP, or Telegram OIDC credentials."
+echo "Beta secrets are configured with Telegram OIDC and without payment, broadcast, or SMTP credentials."
