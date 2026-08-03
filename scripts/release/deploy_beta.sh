@@ -40,7 +40,7 @@ kubectl rollout status deployment/tg-mini-beta-frontend -n "${K8S_NAMESPACE}" \
   --timeout="${DEPLOYMENT_TIMEOUT}"
 
 kubectl exec -n "${K8S_NAMESPACE}" deployment/tg-mini-beta-backend -c api -- \
-  python -c 'import json, urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8000/health/ready", timeout=5)))'
+  python -c 'import json, urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler({})); print(json.load(opener.open("http://127.0.0.1:8000/health/ready", timeout=5)))'
 kubectl exec -n "${K8S_NAMESPACE}" deployment/tg-mini-beta-frontend -c web -- \
   wget -qO- http://127.0.0.1/health.json
 
