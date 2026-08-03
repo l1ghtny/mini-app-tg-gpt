@@ -252,7 +252,7 @@ metadata:
   namespace: gpt
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
-    kubernetes.io/ingress.class: public
+    kubernetes.io/ingress.class: public-awg
     nginx.ingress.kubernetes.io/auth-type: basic
     nginx.ingress.kubernetes.io/auth-secret: tg-mini-beta-basic-auth
     nginx.ingress.kubernetes.io/auth-realm: "Lightny beta"
@@ -262,7 +262,7 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
-  ingressClassName: public
+  ingressClassName: public-awg
   rules:
     - host: beta.app.lightny.ru
       http:
