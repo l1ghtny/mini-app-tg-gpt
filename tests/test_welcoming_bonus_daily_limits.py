@@ -53,6 +53,7 @@ def test_public_tier_response_exposes_daily_welcoming_bonus_limits():
     assert fast_limit.requests_limit == 15
     assert fast_limit.daily_requests_limit == 15
     assert response.daily_image_energy == 80
+    assert response.monthly_transcription_minutes == 0
     assert response.image_energy_max == 400
     assert all(limit.requests_limit == -1 for limit in response.tier_image_model_limits)
 

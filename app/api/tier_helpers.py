@@ -210,6 +210,9 @@ def _build_tier_response(
         price_cents=tier.price_cents,
         monthly_images=tier.monthly_images,
         monthly_docs=tier.monthly_docs,
+        monthly_transcription_minutes=int(
+            getattr(tier, "monthly_transcription_minutes", 0) or 0
+        ),
         max_active_docs=int(getattr(tier, "max_active_docs", 0) or 0),
         max_storage_bytes=int(getattr(tier, "max_storage_bytes", 0) or 0),
         max_file_size_bytes=int(getattr(tier, "max_file_size_bytes", 0) or 0),
