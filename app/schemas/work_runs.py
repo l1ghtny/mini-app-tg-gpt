@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import uuid
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.services.work_runs.contracts import (
     WorkRunErrorCode,
     WorkRunKind,
-    WorkRunStage,
     WorkRunStatus,
+    get_work_run_definition,
 )
 
 
@@ -18,23 +18,6 @@ class OfferComparisonOptions(BaseModel):
 
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     output_language: Literal["ru", "en"] = "ru"
-    required_columns: list[str] = Field(default_factory=list, max_length=20)
-
-    @field_validator("required_columns")
-    @classmethod
-    def normalize_required_columns(cls, values: list[str]) -> list[str]:
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            value = value.strip()
-            if not value:
-                raise ValueError("required columns cannot be blank")
-            key = value.casefold()
-            if key in seen:
-                raise ValueError("required columns must be unique")
-            seen.add(key)
-            normalized.append(value)
-        return normalized
 
 
 class CreateWorkRunRequest(BaseModel):
@@ -43,7 +26,7 @@ class CreateWorkRunRequest(BaseModel):
     kind: WorkRunKind
     conversation_id: uuid.UUID | None = None
     folder_id: uuid.UUID | None = None
-    document_ids: list[uuid.UUID] = Field(min_length=2, max_length=5)
+    document_ids: list[uuid.UUID]
     instructions: str | None = Field(default=None, max_length=4000)
     options: OfferComparisonOptions = Field(default_factory=OfferComparisonOptions)
 
@@ -65,11 +48,26 @@ class CreateWorkRunRequest(BaseModel):
         value = value.strip()
         return value or None
 
+    @model_validator(mode="after")
+    def enforce_workflow_document_limits(self) -> Self:
+        definition = get_work_run_definition(self.kind)
+        document_count = len(self.document_ids)
+        if not definition.min_documents <= document_count <= definition.max_documents:
+            raise ValueError(
+                f"{self.kind} requires between {definition.min_documents} "
+                f"and {definition.max_documents} documents"
+            )
+        return self
+
 
 class WorkRunAcceptedResponse(BaseModel):
     id: uuid.UUID
     status: WorkRunStatus
-    stage: WorkRunStage
+    stage: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
     stream_url: str
 
 
@@ -84,4 +82,3 @@ class WorkRunCapabilitiesResponse(BaseModel):
 class WorkRunErrorResponse(BaseModel):
     error_code: WorkRunErrorCode
     retryable: bool = False
-

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
-from typing import Mapping
 
 
 class WorkRunKind(StrEnum):
@@ -22,21 +20,6 @@ class WorkRunStatus(StrEnum):
     CANCELLING = "cancelling"
     CANCELLED = "cancelled"
     REFUNDED = "refunded"
-
-
-class WorkRunStage(StrEnum):
-    ACCEPTED = "accepted"
-    RESERVING_ALLOWANCE = "reserving_allowance"
-    WAITING_FOR_WORKER = "waiting_for_worker"
-    LOADING_SOURCES = "loading_sources"
-    NORMALIZING_DATA = "normalizing_data"
-    RENDERING_ARTIFACT = "rendering_artifact"
-    VALIDATING_ARTIFACT = "validating_artifact"
-    STORING_ARTIFACT = "storing_artifact"
-    COMPLETED = "completed"
-    CANCELLING = "cancelling"
-    CANCELLED = "cancelled"
-    FAILED = "failed"
 
 
 class WorkRunErrorCode(StrEnum):
@@ -61,6 +44,8 @@ class WorkRunErrorCode(StrEnum):
 
 @dataclass(frozen=True)
 class WorkRunDefinition:
+    """Code-versioned technical constraints for one workflow kind."""
+
     kind: WorkRunKind
     version: int
     min_documents: int
@@ -68,87 +53,98 @@ class WorkRunDefinition:
     accepted_extensions: frozenset[str]
     artifact_kind: str
     artifact_mime_type: str
-    reserved_units: int
+    stages: tuple[str, ...]
 
 
-WORK_RUN_DEFINITIONS: Mapping[WorkRunKind, WorkRunDefinition] = MappingProxyType(
-    {
-        WorkRunKind.OFFER_COMPARISON_XLSX: WorkRunDefinition(
-            kind=WorkRunKind.OFFER_COMPARISON_XLSX,
-            version=1,
-            min_documents=2,
-            max_documents=5,
-            accepted_extensions=frozenset({".csv", ".xlsx"}),
-            artifact_kind="offer_comparison_xlsx",
-            artifact_mime_type=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
-            reserved_units=1,
-        )
-    }
-)
-
-
-_ALLOWED_STATUS_TRANSITIONS: Mapping[WorkRunStatus, frozenset[WorkRunStatus]] = (
-    MappingProxyType(
-        {
-            WorkRunStatus.ACCEPTED: frozenset(
-                {
-                    WorkRunStatus.RESERVED,
-                    WorkRunStatus.FAILED,
-                    WorkRunStatus.CANCELLED,
-                }
-            ),
-            WorkRunStatus.RESERVED: frozenset(
-                {
-                    WorkRunStatus.QUEUED,
-                    WorkRunStatus.FAILED,
-                    WorkRunStatus.CANCELLED,
-                    WorkRunStatus.REFUNDED,
-                }
-            ),
-            WorkRunStatus.QUEUED: frozenset(
-                {
-                    WorkRunStatus.RUNNING,
-                    WorkRunStatus.CANCELLING,
-                    WorkRunStatus.FAILED,
-                }
-            ),
-            WorkRunStatus.RUNNING: frozenset(
-                {
-                    WorkRunStatus.VALIDATING,
-                    WorkRunStatus.CANCELLING,
-                    WorkRunStatus.FAILED,
-                }
-            ),
-            WorkRunStatus.VALIDATING: frozenset(
-                {
-                    WorkRunStatus.STORING,
-                    WorkRunStatus.CANCELLING,
-                    WorkRunStatus.FAILED,
-                }
-            ),
-            WorkRunStatus.STORING: frozenset(
-                {
-                    WorkRunStatus.SUCCEEDED,
-                    WorkRunStatus.CANCELLING,
-                    WorkRunStatus.FAILED,
-                }
-            ),
-            WorkRunStatus.SUCCEEDED: frozenset(),
-            WorkRunStatus.FAILED: frozenset({WorkRunStatus.REFUNDED}),
-            WorkRunStatus.CANCELLING: frozenset(
-                {WorkRunStatus.CANCELLED, WorkRunStatus.FAILED}
-            ),
-            WorkRunStatus.CANCELLED: frozenset({WorkRunStatus.REFUNDED}),
-            WorkRunStatus.REFUNDED: frozenset(),
-        }
+_WORK_RUN_DEFINITIONS = {
+    WorkRunKind.OFFER_COMPARISON_XLSX: WorkRunDefinition(
+        kind=WorkRunKind.OFFER_COMPARISON_XLSX,
+        version=1,
+        min_documents=2,
+        max_documents=5,
+        accepted_extensions=frozenset({".csv", ".xlsx"}),
+        artifact_kind="offer_comparison_xlsx",
+        artifact_mime_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        stages=(
+            "accepted",
+            "reserving_allowance",
+            "waiting_for_worker",
+            "loading_sources",
+            "normalizing_data",
+            "rendering_artifact",
+            "validating_artifact",
+            "storing_artifact",
+            "completed",
+            "cancelling",
+            "cancelled",
+            "failed",
+        ),
     )
-)
+}
+
+
+_ALLOWED_STATUS_TRANSITIONS = {
+    WorkRunStatus.ACCEPTED: frozenset(
+        {
+            WorkRunStatus.RESERVED,
+            WorkRunStatus.FAILED,
+            WorkRunStatus.CANCELLED,
+        }
+    ),
+    WorkRunStatus.RESERVED: frozenset(
+        {
+            WorkRunStatus.QUEUED,
+            WorkRunStatus.FAILED,
+            WorkRunStatus.CANCELLED,
+            WorkRunStatus.REFUNDED,
+        }
+    ),
+    WorkRunStatus.QUEUED: frozenset(
+        {
+            WorkRunStatus.RUNNING,
+            WorkRunStatus.CANCELLING,
+            WorkRunStatus.FAILED,
+        }
+    ),
+    WorkRunStatus.RUNNING: frozenset(
+        {
+            WorkRunStatus.VALIDATING,
+            WorkRunStatus.CANCELLING,
+            WorkRunStatus.FAILED,
+        }
+    ),
+    WorkRunStatus.VALIDATING: frozenset(
+        {
+            WorkRunStatus.STORING,
+            WorkRunStatus.CANCELLING,
+            WorkRunStatus.FAILED,
+        }
+    ),
+    WorkRunStatus.STORING: frozenset(
+        {
+            WorkRunStatus.SUCCEEDED,
+            WorkRunStatus.CANCELLING,
+            WorkRunStatus.FAILED,
+        }
+    ),
+    WorkRunStatus.SUCCEEDED: frozenset(),
+    WorkRunStatus.FAILED: frozenset({WorkRunStatus.REFUNDED}),
+    WorkRunStatus.CANCELLING: frozenset(
+        {WorkRunStatus.CANCELLED, WorkRunStatus.FAILED}
+    ),
+    WorkRunStatus.CANCELLED: frozenset({WorkRunStatus.REFUNDED}),
+    WorkRunStatus.REFUNDED: frozenset(),
+}
 
 
 def get_work_run_definition(kind: WorkRunKind) -> WorkRunDefinition:
-    return WORK_RUN_DEFINITIONS[kind]
+    return _WORK_RUN_DEFINITIONS[kind]
+
+
+def list_work_run_definitions() -> tuple[WorkRunDefinition, ...]:
+    return tuple(_WORK_RUN_DEFINITIONS.values())
 
 
 def can_transition_work_run(
@@ -156,4 +152,3 @@ def can_transition_work_run(
     target: WorkRunStatus,
 ) -> bool:
     return target in _ALLOWED_STATUS_TRANSITIONS[current]
-

@@ -1,74 +1,76 @@
 import uuid
-from decimal import Decimal
+from dataclasses import FrozenInstanceError
 
 import pytest
 from pydantic import ValidationError
 
-from app.core.work_run_settings import WorkRunSettings
-from app.schemas.work_runs import CreateWorkRunRequest
+from app.core.work_run_settings import WorkRunDeploymentGate
+from app.schemas.work_runs import CreateWorkRunRequest, WorkRunAcceptedResponse
 from app.services.work_runs.contracts import (
-    WORK_RUN_DEFINITIONS,
     WorkRunKind,
     WorkRunStatus,
     can_transition_work_run,
     get_work_run_definition,
+    list_work_run_definitions,
 )
 
 
-def test_work_run_settings_are_fail_closed_by_default() -> None:
-    settings = WorkRunSettings.from_env({})
+def test_work_run_deployment_gate_is_fail_closed_by_default() -> None:
+    gate = WorkRunDeploymentGate.from_env({})
 
-    assert settings.enabled is False
-    assert settings.beta_allowed_user_ids == frozenset()
-    assert settings.max_active_per_user == 1
-    assert settings.monthly_allowance_per_user == 0
-    assert settings.per_run_budget_usd == Decimal("0")
-    assert settings.global_daily_budget_usd == Decimal("0")
-    assert settings.execution_ready is False
+    assert gate.master_enabled is False
+    assert gate.beta_allowed_user_ids == frozenset()
 
 
-def test_work_run_settings_require_every_execution_gate() -> None:
+def test_work_run_deployment_gate_requires_switch_and_allowlist() -> None:
     user_id = uuid.uuid4()
-    settings = WorkRunSettings.from_env(
+    gate = WorkRunDeploymentGate.from_env(
         {
             "WORK_RUNS_ENABLED": "true",
             "WORK_RUNS_BETA_ALLOWED_USER_IDS": str(user_id),
-            "WORK_RUNS_MAX_ACTIVE_PER_USER": "1",
-            "WORK_RUNS_MONTHLY_ALLOWANCE_PER_USER": "3",
-            "WORK_RUNS_PER_RUN_BUDGET_USD": "0.50",
-            "WORK_RUNS_GLOBAL_DAILY_BUDGET_USD": "5.00",
         }
     )
 
-    assert settings.execution_ready is True
-    assert settings.allows_user(user_id) is True
-    assert settings.allows_user(uuid.uuid4()) is False
+    assert gate.allows_beta_user(user_id) is True
+    assert gate.allows_beta_user(uuid.uuid4()) is False
+
+    disabled_gate = WorkRunDeploymentGate.from_env(
+        {"WORK_RUNS_BETA_ALLOWED_USER_IDS": str(user_id)}
+    )
+    assert disabled_gate.allows_beta_user(user_id) is False
+
+
+def test_work_run_deployment_gate_is_immutable() -> None:
+    gate = WorkRunDeploymentGate.from_env({})
+
+    with pytest.raises(FrozenInstanceError):
+        gate.master_enabled = True  # type: ignore[misc]
 
 
 @pytest.mark.parametrize(
     ("name", "value"),
     [
+        ("WORK_RUNS_ENABLED", "sometimes"),
         ("WORK_RUNS_BETA_ALLOWED_USER_IDS", "not-a-uuid"),
-        ("WORK_RUNS_MAX_ACTIVE_PER_USER", "-1"),
-        ("WORK_RUNS_MONTHLY_ALLOWANCE_PER_USER", "many"),
-        ("WORK_RUNS_PER_RUN_BUDGET_USD", "NaN"),
-        ("WORK_RUNS_GLOBAL_DAILY_BUDGET_USD", "-0.1"),
     ],
 )
 def test_work_run_settings_reject_invalid_values(name: str, value: str) -> None:
     with pytest.raises(ValueError):
-        WorkRunSettings.from_env({name: value})
+        WorkRunDeploymentGate.from_env({name: value})
 
 
 def test_registry_exposes_only_the_first_beta_workflow() -> None:
-    assert set(WORK_RUN_DEFINITIONS) == {WorkRunKind.OFFER_COMPARISON_XLSX}
+    definitions = list_work_run_definitions()
+    assert tuple(definition.kind for definition in definitions) == (
+        WorkRunKind.OFFER_COMPARISON_XLSX,
+    )
 
     definition = get_work_run_definition(WorkRunKind.OFFER_COMPARISON_XLSX)
     assert definition.version == 1
     assert definition.min_documents == 2
     assert definition.max_documents == 5
     assert definition.accepted_extensions == frozenset({".csv", ".xlsx"})
-    assert definition.reserved_units == 1
+    assert "normalizing_data" in definition.stages
 
 
 def test_create_request_normalizes_bounded_input() -> None:
@@ -81,13 +83,12 @@ def test_create_request_normalizes_bounded_input() -> None:
             "instructions": "  Compare payment terms  ",
             "options": {
                 "currency": "RUB",
-                "required_columns": [" Price ", "Payment terms"],
             },
         }
     )
 
     assert request.instructions == "Compare payment terms"
-    assert request.options.required_columns == ["Price", "Payment terms"]
+    assert request.options.currency == "RUB"
 
 
 @pytest.mark.parametrize(
@@ -97,7 +98,7 @@ def test_create_request_normalizes_bounded_input() -> None:
         {"document_ids": [uuid.uuid4()] * 2},
         {
             "document_ids": [uuid.uuid4(), uuid.uuid4()],
-            "options": {"required_columns": ["Price", "price"]},
+            "options": {"required_columns": ["Price"]},
         },
         {
             "document_ids": [uuid.uuid4(), uuid.uuid4()],
@@ -137,3 +138,18 @@ def test_work_run_state_machine_allows_only_declared_transitions() -> None:
         WorkRunStatus.SUCCEEDED,
         WorkRunStatus.RUNNING,
     )
+
+
+def test_work_run_stage_is_bounded_but_workflow_specific() -> None:
+    payload = {
+        "id": uuid.uuid4(),
+        "status": "queued",
+        "stage": "waiting_for_worker",
+        "stream_url": "/api/v1/work-runs/example/stream",
+    }
+
+    response = WorkRunAcceptedResponse.model_validate(payload)
+    assert response.stage == "waiting_for_worker"
+
+    with pytest.raises(ValidationError):
+        WorkRunAcceptedResponse.model_validate({**payload, "stage": "Not valid"})
