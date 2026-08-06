@@ -95,8 +95,14 @@ jq \
         WEB_AUTH_TRUSTED_PROXY_CIDRS: ("10.1.0.0/16,10.77.0.2/32" | @base64)
       }
     }
-    | if $source.R2_PRIVATE_DOCUMENTS_BUCKET then
+    | if (
+        $source.R2_PRIVATE_DOCUMENTS_BUCKET and
+        $source.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID and
+        $source.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
+      ) then
         .data.R2_PRIVATE_DOCUMENTS_BUCKET = $source.R2_PRIVATE_DOCUMENTS_BUCKET
+        | .data.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID = $source.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID
+        | .data.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY = $source.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
       else
         .
       end)

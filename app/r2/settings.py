@@ -11,5 +11,13 @@ class Settings:
         "R2_PRIVATE_DOCUMENTS_BUCKET",
         "",
     ).strip()
+    R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID = os.getenv(
+        "R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID",
+        "",
+    ).strip()
+    R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY = os.getenv(
+        "R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY",
+        "",
+    ).strip()
     R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL")  # optional
     R2_OPENAI_PUBLIC_BASE_URL = os.getenv("R2_OPENAI_PUBLIC_BASE_URL") or R2_PUBLIC_BASE_URL

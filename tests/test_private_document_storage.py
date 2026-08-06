@@ -36,6 +36,15 @@ def test_private_document_bucket_must_not_reuse_public_bucket(monkeypatch) -> No
         get_private_documents_bucket()
 
 
+def test_private_document_bucket_requires_separate_credentials(monkeypatch) -> None:
+    monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_BUCKET", "private-documents")
+    monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID", "")
+    monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY", "")
+
+    with pytest.raises(PrivateDocumentStorageConfigurationError):
+        get_private_documents_bucket()
+
+
 def test_document_source_key_is_deterministic_and_hides_filename() -> None:
     user_id = uuid.uuid4()
     document_id = uuid.uuid4()
@@ -83,10 +92,26 @@ async def test_private_document_source_round_trip(monkeypatch, tmp_path: Path) -
     client = _MemoryS3()
 
     @asynccontextmanager
-    async def fake_s3_client():
+    async def fake_s3_client(**kwargs):
+        assert kwargs == {
+            "endpoint_url": Settings.R2_ENDPOINT,
+            "region_name": Settings.R2_REGION,
+            "access_key_id": "private-access-key",
+            "secret_access_key": "private-secret-key",
+        }
         yield client
 
     monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_BUCKET", bucket)
+    monkeypatch.setattr(
+        Settings,
+        "R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID",
+        "private-access-key",
+    )
+    monkeypatch.setattr(
+        Settings,
+        "R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY",
+        "private-secret-key",
+    )
     monkeypatch.setattr(private_documents, "s3_client", fake_s3_client)
 
     source = tmp_path / "source.csv"
@@ -120,6 +145,16 @@ async def test_private_document_source_rejects_unconfigured_bucket(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_BUCKET", "expected")
+    monkeypatch.setattr(
+        Settings,
+        "R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID",
+        "private-access-key",
+    )
+    monkeypatch.setattr(
+        Settings,
+        "R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY",
+        "private-secret-key",
+    )
     source = tmp_path / "source.csv"
     source.write_text("name,price\n", encoding="utf-8")
 

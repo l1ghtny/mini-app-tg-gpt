@@ -19,6 +19,13 @@ def get_private_documents_bucket() -> str | None:
         raise PrivateDocumentStorageConfigurationError(
             "R2_PRIVATE_DOCUMENTS_BUCKET must be separate from R2_BUCKET"
         )
+    if not (
+        Settings.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID
+        and Settings.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
+    ):
+        raise PrivateDocumentStorageConfigurationError(
+            "private document storage credentials are not configured"
+        )
     return bucket
 
 
@@ -40,6 +47,15 @@ def _require_configured_bucket(bucket: str) -> None:
         )
 
 
+def _private_s3_client():
+    return s3_client(
+        endpoint_url=Settings.R2_ENDPOINT,
+        region_name=Settings.R2_REGION,
+        access_key_id=Settings.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID,
+        secret_access_key=Settings.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY,
+    )
+
+
 async def upload_document_source(
     *,
     bucket: str,
@@ -50,7 +66,7 @@ async def upload_document_source(
 ) -> None:
     _require_configured_bucket(bucket)
     with open(path, "rb") as source_file:
-        async with s3_client() as s3:
+        async with _private_s3_client() as s3:
             await s3.upload_fileobj(
                 Fileobj=source_file,
                 Bucket=bucket,
@@ -69,7 +85,7 @@ async def download_document_source(
     target_path: str,
 ) -> None:
     _require_configured_bucket(bucket)
-    async with s3_client() as s3:
+    async with _private_s3_client() as s3:
         response = await s3.get_object(Bucket=bucket, Key=key)
         body = response["Body"]
         with open(target_path, "wb") as target_file:
@@ -79,6 +95,5 @@ async def download_document_source(
 
 async def delete_document_source(*, bucket: str, key: str) -> None:
     _require_configured_bucket(bucket)
-    async with s3_client() as s3:
+    async with _private_s3_client() as s3:
         await s3.delete_object(Bucket=bucket, Key=key)
-
