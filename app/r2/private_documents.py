@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.r2.client import R2_BUCKET, s3_client
@@ -26,6 +27,20 @@ def get_private_documents_bucket() -> str | None:
         raise PrivateDocumentStorageConfigurationError(
             "private document storage credentials are not configured"
         )
+    expires_at = Settings.R2_PRIVATE_DOCUMENTS_CREDENTIAL_EXPIRES_AT
+    if expires_at:
+        try:
+            parsed_expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PrivateDocumentStorageConfigurationError(
+                "private document storage credential expiry is invalid"
+            ) from exc
+        if parsed_expiry.tzinfo is None:
+            parsed_expiry = parsed_expiry.replace(tzinfo=timezone.utc)
+        if parsed_expiry <= datetime.now(timezone.utc):
+            raise PrivateDocumentStorageConfigurationError(
+                "private document storage credentials have expired"
+            )
     return bucket
 
 
@@ -53,6 +68,7 @@ def _private_s3_client():
         region_name=Settings.R2_REGION,
         access_key_id=Settings.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID,
         secret_access_key=Settings.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY,
+        session_token=Settings.R2_PRIVATE_DOCUMENTS_SESSION_TOKEN or None,
     )
 
 

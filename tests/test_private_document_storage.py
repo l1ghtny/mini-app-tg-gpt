@@ -1,6 +1,7 @@
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,26 @@ def test_private_document_bucket_requires_separate_credentials(monkeypatch) -> N
     monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_BUCKET", "private-documents")
     monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID", "")
     monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY", "")
+
+    with pytest.raises(PrivateDocumentStorageConfigurationError):
+        get_private_documents_bucket()
+
+
+def test_private_document_bucket_rejects_expired_temporary_credentials(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(Settings, "R2_PRIVATE_DOCUMENTS_BUCKET", "private-documents")
+    monkeypatch.setattr(
+        Settings, "R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID", "temporary-access-key"
+    )
+    monkeypatch.setattr(
+        Settings, "R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY", "temporary-secret-key"
+    )
+    monkeypatch.setattr(
+        Settings,
+        "R2_PRIVATE_DOCUMENTS_CREDENTIAL_EXPIRES_AT",
+        (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+    )
 
     with pytest.raises(PrivateDocumentStorageConfigurationError):
         get_private_documents_bucket()
@@ -98,6 +119,7 @@ async def test_private_document_source_round_trip(monkeypatch, tmp_path: Path) -
             "region_name": Settings.R2_REGION,
             "access_key_id": "private-access-key",
             "secret_access_key": "private-secret-key",
+            "session_token": "temporary-session-token",
         }
         yield client
 
@@ -111,6 +133,16 @@ async def test_private_document_source_round_trip(monkeypatch, tmp_path: Path) -
         Settings,
         "R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY",
         "private-secret-key",
+    )
+    monkeypatch.setattr(
+        Settings,
+        "R2_PRIVATE_DOCUMENTS_SESSION_TOKEN",
+        "temporary-session-token",
+    )
+    monkeypatch.setattr(
+        Settings,
+        "R2_PRIVATE_DOCUMENTS_CREDENTIAL_EXPIRES_AT",
+        "",
     )
     monkeypatch.setattr(private_documents, "s3_client", fake_s3_client)
 
