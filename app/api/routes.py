@@ -8,6 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import chat_helpers
 from app.api import document_helpers
+from app.api.work_runs import work_runs
 from app.api.dependencies import get_bus, get_current_user, get_redis, rate_limit_check
 from app.db.models import AppUser, Conversation
 from app.db.database import get_read_session, get_session
@@ -23,11 +24,16 @@ from app.schemas.chat import (
     NewMessageRequest,
     RenameRequest,
     RequestExists,
-    UpdateConversationSettingsRequest, ConversationInfo,
+    UpdateConversationSettingsRequest,
+    ConversationInfo,
 )
-from app.schemas.documents import ConversationDocumentsUpdateRequest, ConversationDocumentsUpdateResponse
+from app.schemas.documents import (
+    ConversationDocumentsUpdateRequest,
+    ConversationDocumentsUpdateResponse,
+)
 
 router = APIRouter()
+router.include_router(work_runs)
 
 
 @router.post(
@@ -104,7 +110,9 @@ async def stream_message(
     request: Request,
     bus: RedisEventBus = Depends(get_bus),
     current_user: AppUser = Depends(get_current_user),
-    last_event_id: str | None = Header(None, convert_underscores=False, alias="Last-Event-ID"),
+    last_event_id: str | None = Header(
+        None, convert_underscores=False, alias="Last-Event-ID"
+    ),
     session: AsyncSession = Depends(get_session),
 ):
     return await chat_helpers.handle_stream_message(
@@ -142,7 +150,9 @@ async def get_conversations(
     )
 
 
-@router.get("/conversations/{conversation_id}/messages", response_model=ConversationWithMessages)
+@router.get(
+    "/conversations/{conversation_id}/messages", response_model=ConversationWithMessages
+)
 async def get_conversation_messages(
     conversation_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
@@ -205,7 +215,9 @@ async def rename_conversation(
     )
 
 
-@router.delete("/conversations/{conversation_id}", status_code=204, response_class=Response)
+@router.delete(
+    "/conversations/{conversation_id}", status_code=204, response_class=Response
+)
 async def delete_conversation(
     conversation_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
@@ -272,7 +284,11 @@ async def get_conversation_documents(
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationInfo)
-async def get_conversation(conversation_id: uuid.UUID, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+async def get_conversation(
+    conversation_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
     return await chat_helpers.handle_get_conversation(
         conversation_id=conversation_id,
         session=session,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
+from decimal import Decimal
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -82,3 +84,49 @@ class WorkRunCapabilitiesResponse(BaseModel):
 class WorkRunErrorResponse(BaseModel):
     error_code: WorkRunErrorCode
     retryable: bool = False
+
+
+class ArtifactResponse(BaseModel):
+    id: uuid.UUID
+    work_run_id: uuid.UUID
+    version: int
+    kind: str
+    status: str
+    filename: str
+    mime_type: str
+    size_bytes: int
+    sha256: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+    download_url: str | None = None
+
+
+class WorkRunResponse(BaseModel):
+    id: uuid.UUID
+    kind: WorkRunKind
+    kind_version: int
+    status: WorkRunStatus
+    stage: str
+    progress_percent: int | None
+    conversation_id: uuid.UUID | None
+    folder_id: uuid.UUID | None
+    instructions: str | None
+    options: dict
+    result_summary: str | None
+    reserved_units: Decimal
+    estimated_cost_usd: Decimal
+    actual_cost_usd: Decimal
+    error_code: WorkRunErrorCode | None
+    error_message: str | None
+    queued_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    cancelled_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    artifacts: list[ArtifactResponse] = Field(default_factory=list)
+
+
+class ArtifactDownloadResponse(BaseModel):
+    url: str
+    expires_in: int

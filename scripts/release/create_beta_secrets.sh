@@ -78,6 +78,8 @@ jq \
         TELEGRAM_OIDC_CLIENT_SECRET: $source.TELEGRAM_OIDC_CLIENT_SECRET,
         DEPLOYMENT_CHANNEL: ($deployment_channel | @base64),
         BETA_ALLOWED_USER_IDS: ($allowed_user_ids | @base64),
+        WORK_RUNS_ENABLED: ("true" | @base64),
+        WORK_RUNS_BETA_ALLOWED_USER_IDS: ($allowed_user_ids | @base64),
         REDIS_URL: ($redis_url | @base64),
         SECRET_KEY: ($secret_key | @base64),
         ENVIRONMENT: ("beta_prod_data" | @base64),

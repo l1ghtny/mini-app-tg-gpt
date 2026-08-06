@@ -15,6 +15,10 @@ class RedisEventBus:
         return f"msg:{mid}"
 
     @staticmethod
+    def key_for_work_run(work_run_id: str) -> str:
+        return f"work:{work_run_id}"
+
+    @staticmethod
     def _normalize_event_value(value: Any) -> str | int | float:
         if isinstance(value, (str, int, float, bool)):
             return value
@@ -39,7 +43,10 @@ class RedisEventBus:
         """Append an event to the stream; returns Redis stream entry ID."""
         key = self.key_for_message(mid)
         entry_id = await self.r.xadd(
-            key, self._normalize_event(event), maxlen=settings.STREAM_MAXLEN, approximate=True
+            key,
+            self._normalize_event(event),
+            maxlen=settings.STREAM_MAXLEN,
+            approximate=True,
         )
         # refresh TTL on each write so short streams don’t expire mid-generation
         await self.r.expire(key, settings.STREAM_TTL_SECONDS)
@@ -49,7 +56,9 @@ class RedisEventBus:
         evt = {"type": "done"} if ok else {"type": "error", "error": error or "unknown"}
         await self.publish(mid, evt)
 
-    async def read(self, mid: str, last_id: Optional[str] = None) -> AsyncIterator[tuple[str, dict]]:
+    async def read(
+        self, mid: str, last_id: Optional[str] = None
+    ) -> AsyncIterator[tuple[str, dict]]:
         """Yield (message_id, event_map) from last_id (or from '0-0')."""
         key = self.key_for_message(mid)
         cursor = last_id or "0-0"
@@ -64,3 +73,30 @@ class RedisEventBus:
 
     async def exists(self, mid: str) -> bool:
         return await self.r.exists(self.key_for_message(mid)) > 0
+
+    async def publish_work(self, work_run_id: str, event: dict) -> str:
+        key = self.key_for_work_run(work_run_id)
+        entry_id = await self.r.xadd(
+            key,
+            self._normalize_event(event),
+            maxlen=settings.STREAM_MAXLEN,
+            approximate=True,
+        )
+        await self.r.expire(key, settings.STREAM_TTL_SECONDS)
+        return entry_id
+
+    async def read_work(
+        self,
+        work_run_id: str,
+        last_id: Optional[str] = None,
+    ) -> AsyncIterator[tuple[str, dict]]:
+        key = self.key_for_work_run(work_run_id)
+        cursor = last_id or "0-0"
+        while True:
+            items = await self.r.xread({key: cursor}, block=15000, count=50)
+            if not items:
+                continue
+            _, messages = items[0]
+            for message_id, fields in messages:
+                cursor = message_id
+                yield message_id, fields

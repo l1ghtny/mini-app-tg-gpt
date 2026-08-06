@@ -55,9 +55,7 @@ class AppUser(SQLModel, table=True):
     default_thinking: bool = Field(default=True)
     onboarding_state: dict = Field(
         default_factory=dict,
-        sa_column=Column(
-            JSONB, nullable=False, server_default=text("'{}'::jsonb")
-        ),
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )
 
     conversations: List["Conversation"] = Relationship(back_populates="user")
@@ -760,8 +758,204 @@ class RequestLedger(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("user_id", "request_id", name="uq_user_reqid"),
         CheckConstraint(
-            "feature IN ('text','image','doc','deepsearch','web_search','transcription')",
+            "feature IN ('text','image','doc','deepsearch','web_search','transcription','work')",
             name="ck_request_feature",
+        ),
+    )
+
+
+class WorkRunPolicy(SQLModel, table=True):
+    __tablename__ = "work_run_policy"
+
+    kind: str = Field(primary_key=True, max_length=64)
+    enabled: bool = Field(default=False)
+    max_active_per_user: int = Field(default=1)
+    monthly_allowance_per_user: int = Field(default=25)
+    per_run_budget_usd: Decimal = Field(
+        default=Decimal("1"),
+        sa_column=Column(Numeric(12, 6), nullable=False),
+    )
+    global_daily_budget_usd: Decimal = Field(
+        default=Decimal("10"),
+        sa_column=Column(Numeric(12, 6), nullable=False),
+    )
+    queue_concurrency: int = Field(default=2)
+    created_at: datetime = Field(default_factory=utcnow_naive)
+    updated_at: datetime = Field(
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, onupdate=utcnow_naive),
+    )
+
+
+class WorkRun(SQLModel, table=True):
+    __tablename__ = "work_run"
+
+    id: uuid.UUID = Field(default_factory=uuid6.uuid7, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    conversation_id: Optional[uuid.UUID] = Field(default=None, index=True)
+    folder_id: Optional[uuid.UUID] = Field(default=None, index=True)
+    assistant_message_id: Optional[uuid.UUID] = Field(default=None, index=True)
+    request_ledger_id: Optional[uuid.UUID] = Field(default=None, index=True)
+    kind: str = Field(index=True, max_length=64)
+    kind_version: int = Field(default=1)
+    status: str = Field(default="accepted", index=True, max_length=32)
+    stage: str = Field(default="accepted", max_length=64)
+    progress_percent: Optional[int] = Field(default=0)
+    client_request_id: str = Field(max_length=128)
+    workflow_id: str = Field(unique=True, max_length=128)
+    input_manifest: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False),
+    )
+    options: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False),
+    )
+    instructions: Optional[str] = Field(default=None)
+    result_summary: Optional[str] = Field(default=None)
+    reserved_units: Decimal = Field(
+        default=Decimal("1"),
+        sa_column=Column(Numeric(12, 4), nullable=False),
+    )
+    estimated_cost_usd: Decimal = Field(
+        default=Decimal("0"),
+        sa_column=Column(Numeric(12, 6), nullable=False),
+    )
+    actual_cost_usd: Decimal = Field(
+        default=Decimal("0"),
+        sa_column=Column(Numeric(12, 6), nullable=False),
+    )
+    error_code: Optional[str] = Field(default=None, index=True, max_length=64)
+    error_message: Optional[str] = Field(default=None)
+    worker_id: Optional[str] = Field(default=None, max_length=128)
+    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
+    attempt_count: int = Field(default=0)
+    queued_at: Optional[datetime] = Field(default=None)
+    started_at: Optional[datetime] = Field(default=None)
+    completed_at: Optional[datetime] = Field(default=None)
+    cancelled_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow_naive, index=True)
+    updated_at: datetime = Field(
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, onupdate=utcnow_naive),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "client_request_id",
+            name="uq_work_run_user_client_request",
+        ),
+        Index(
+            "ix_work_run_queue_claim",
+            "status",
+            "lease_expires_at",
+            "queued_at",
+        ),
+        Index(
+            "ix_work_run_user_status_created",
+            "user_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+
+class ProviderOperation(SQLModel, table=True):
+    __tablename__ = "provider_operation"
+
+    id: uuid.UUID = Field(default_factory=uuid6.uuid7, primary_key=True)
+    work_run_id: uuid.UUID = Field(foreign_key="work_run.id", index=True)
+    operation_key: str = Field(max_length=128)
+    provider: str = Field(max_length=64)
+    operation_kind: str = Field(max_length=64)
+    status: str = Field(default="planned", index=True, max_length=32)
+    provider_request_id: Optional[str] = Field(default=None)
+    provider_response_id: Optional[str] = Field(default=None)
+    attempt_count: int = Field(default=0)
+    usage: dict = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    estimated_cost_usd: Decimal = Field(
+        default=Decimal("0"),
+        sa_column=Column(Numeric(12, 6), nullable=False),
+    )
+    actual_cost_usd: Decimal = Field(
+        default=Decimal("0"),
+        sa_column=Column(Numeric(12, 6), nullable=False),
+    )
+    error_code: Optional[str] = Field(default=None)
+    started_at: Optional[datetime] = Field(default=None)
+    completed_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow_naive)
+    updated_at: datetime = Field(
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, onupdate=utcnow_naive),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "work_run_id",
+            "operation_key",
+            name="uq_provider_operation_run_key",
+        ),
+    )
+
+
+class Artifact(SQLModel, table=True):
+    __tablename__ = "artifact"
+
+    id: uuid.UUID = Field(default_factory=uuid6.uuid7, primary_key=True)
+    work_run_id: uuid.UUID = Field(foreign_key="work_run.id", index=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    conversation_id: Optional[uuid.UUID] = Field(default=None)
+    assistant_message_id: Optional[uuid.UUID] = Field(default=None)
+    folder_id: Optional[uuid.UUID] = Field(default=None)
+    parent_artifact_id: Optional[uuid.UUID] = Field(default=None)
+    version: int = Field(default=1)
+    kind: str = Field(max_length=64)
+    status: str = Field(default="rendering", index=True, max_length=32)
+    filename: str = Field(max_length=255)
+    mime_type: str = Field(max_length=255)
+    bucket: Optional[str] = Field(default=None)
+    storage_key: Optional[str] = Field(default=None, unique=True)
+    size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
+    sha256: Optional[str] = Field(default=None, max_length=64)
+    artifact_metadata: dict = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSONB, nullable=False),
+    )
+    expires_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow_naive, index=True)
+    deleted_at: Optional[datetime] = Field(default=None)
+
+    __table_args__ = (
+        UniqueConstraint("work_run_id", "version", name="uq_artifact_run_version"),
+    )
+
+
+class ArtifactSource(SQLModel, table=True):
+    __tablename__ = "artifact_source"
+
+    id: uuid.UUID = Field(default_factory=uuid6.uuid7, primary_key=True)
+    artifact_id: uuid.UUID = Field(foreign_key="artifact.id", index=True)
+    source_type: str = Field(default="document", max_length=32)
+    document_id: Optional[uuid.UUID] = Field(default=None, index=True)
+    title: Optional[str] = Field(default=None)
+    sheet_name: Optional[str] = Field(default=None)
+    row_start: Optional[int] = Field(default=None)
+    row_end: Optional[int] = Field(default=None)
+    excerpt: Optional[str] = Field(default=None)
+    provider_metadata: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False),
+    )
+    ordinal: int = Field(default=0)
+    created_at: datetime = Field(default_factory=utcnow_naive)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_id",
+            "ordinal",
+            name="uq_artifact_source_ordinal",
         ),
     )
 

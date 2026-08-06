@@ -186,6 +186,77 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: tg-mini-beta-work-run-worker
+  namespace: gpt
+  labels:
+    app: tg-mini-beta-work-run-worker
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tg-mini-beta-work-run-worker
+  template:
+    metadata:
+      labels:
+        app: tg-mini-beta-work-run-worker
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          image: localhost:32000/tg-mini-app-backend:__BACKEND_TAG__
+          imagePullPolicy: Always
+          command:
+            - python
+            - -m
+            - fastapi
+            - run
+            - work_run_worker_app.py
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+          envFrom:
+            - secretRef:
+                name: backend-beta-env
+          ports:
+            - name: health
+              containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: tg-mini-beta-frontend
   namespace: gpt
   labels:
@@ -342,6 +413,9 @@ spec:
         - podSelector:
             matchLabels:
               app: tg-mini-beta-backend
+        - podSelector:
+            matchLabels:
+              app: tg-mini-beta-work-run-worker
       ports:
         - protocol: TCP
           port: 6379

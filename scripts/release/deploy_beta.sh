@@ -36,14 +36,19 @@ kubectl rollout status deployment/tg-mini-beta-redis -n "${K8S_NAMESPACE}" \
   --timeout="${DEPLOYMENT_TIMEOUT}"
 kubectl rollout status deployment/tg-mini-beta-backend -n "${K8S_NAMESPACE}" \
   --timeout="${DEPLOYMENT_TIMEOUT}"
+kubectl rollout status deployment/tg-mini-beta-work-run-worker -n "${K8S_NAMESPACE}" \
+  --timeout="${DEPLOYMENT_TIMEOUT}"
 kubectl rollout status deployment/tg-mini-beta-frontend -n "${K8S_NAMESPACE}" \
   --timeout="${DEPLOYMENT_TIMEOUT}"
 
 kubectl exec -n "${K8S_NAMESPACE}" deployment/tg-mini-beta-backend -c api -- \
   python -c 'import json, urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler({})); print(json.load(opener.open("http://127.0.0.1:8000/health/ready", timeout=5)))'
+kubectl exec -n "${K8S_NAMESPACE}" deployment/tg-mini-beta-work-run-worker -c worker -- \
+  python -c 'import json, urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler({})); print(json.load(opener.open("http://127.0.0.1:8000/health/ready", timeout=5)))'
 kubectl exec -n "${K8S_NAMESPACE}" deployment/tg-mini-beta-frontend -c web -- \
   wget -qO- http://127.0.0.1/health.json
 
 backend_image="$(kubectl get deployment tg-mini-beta-backend -n "${K8S_NAMESPACE}" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+worker_image="$(kubectl get deployment tg-mini-beta-work-run-worker -n "${K8S_NAMESPACE}" -o jsonpath='{.spec.template.spec.containers[0].image}')"
 frontend_image="$(kubectl get deployment tg-mini-beta-frontend -n "${K8S_NAMESPACE}" -o jsonpath='{.spec.template.spec.containers[0].image}')"
-echo "Beta deployment complete: backend=${backend_image} frontend=${frontend_image}"
+echo "Beta deployment complete: backend=${backend_image} worker=${worker_image} frontend=${frontend_image}"
