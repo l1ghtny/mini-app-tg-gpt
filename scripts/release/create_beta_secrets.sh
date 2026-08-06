@@ -51,7 +51,7 @@ jq \
   --arg webapp_url "https://beta.app.lightny.ru" \
   '
     .data as $source |
-    {
+    ({
       apiVersion: "v1",
       kind: "Secret",
       metadata: {name: $secret_name, namespace: $namespace},
@@ -95,6 +95,11 @@ jq \
         WEB_AUTH_TRUSTED_PROXY_CIDRS: ("10.1.0.0/16,10.77.0.2/32" | @base64)
       }
     }
+    | if $source.R2_PRIVATE_DOCUMENTS_BUCKET then
+        .data.R2_PRIVATE_DOCUMENTS_BUCKET = $source.R2_PRIVATE_DOCUMENTS_BUCKET
+      else
+        .
+      end)
   ' "${tmp_dir}/source.json" >"${tmp_dir}/beta-secret.json"
 kubectl apply -f "${tmp_dir}/beta-secret.json"
 

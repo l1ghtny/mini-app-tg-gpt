@@ -780,6 +780,13 @@ class UserDocument(SQLModel, table=True):
         default=0, sa_column=Column(BigInteger, nullable=False, default=0)
     )
     sha256: Optional[str] = Field(default=None, index=True)
+    source_bucket: Optional[str] = Field(default=None)
+    source_storage_key: Optional[str] = Field(default=None)
+    source_storage_status: Optional[str] = Field(default=None)
+    source_stored_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime),
+    )
 
     status: str = Field(default="uploading", index=True)
     is_pinned: bool = Field(default=False, index=True)

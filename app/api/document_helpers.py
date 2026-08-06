@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 import re
@@ -28,6 +29,14 @@ from app.db.models import (
     UserDocument,
 )
 from app.db.subscription_tiers import SubscriptionTier
+from app.r2.private_documents import (
+    PrivateDocumentStorageConfigurationError,
+    build_document_source_key,
+    delete_document_source,
+    download_document_source,
+    get_private_documents_bucket,
+    upload_document_source,
+)
 from app.schemas.documents import (
     ConversationDocumentsUpdateResponse,
     DocumentCapabilitiesResponse,
@@ -35,9 +44,14 @@ from app.schemas.documents import (
     DocumentsListResponse,
     UserDocumentResponse,
 )
+from app.services.document_source_validation import (
+    DocumentSourceValidationError,
+    inspect_spreadsheet_source,
+)
 from app.services.subscription_check.entitlements import get_active_tier
 
 _openai_client = AsyncOpenAI()
+_logger = settings.custom_logger
 
 DOCUMENT_STATUS_UPLOADING = "uploading"
 DOCUMENT_STATUS_PROCESSING = "processing"
@@ -68,6 +82,7 @@ _OPENAI_FILE_LIMIT_BYTES = 512 * 1024 * 1024
 _DEFAULT_EXTENSION_ALLOWLIST = {
     ".c",
     ".cpp",
+    ".csv",
     ".cs",
     ".css",
     ".doc",
@@ -87,7 +102,11 @@ _DEFAULT_EXTENSION_ALLOWLIST = {
     ".tex",
     ".ts",
     ".txt",
+    ".xlsx",
 }
+_SPREADSHEET_EXTENSIONS = frozenset({".csv", ".xlsx"})
+_SOURCE_STORAGE_STATUS_STORED = "stored"
+_SOURCE_STORAGE_STATUS_DELETED = "deleted"
 _MAX_DISPLAY_FILENAME_LENGTH = 180
 _SAFE_FILENAME_CHARS_PATTERN = re.compile(r"[^\w.\- ]+", flags=re.UNICODE)
 
@@ -454,6 +473,84 @@ def _cleanup_temp_path(tmp_path: str) -> None:
         pass
 
 
+def _private_source_bucket_for_upload(filename: str) -> str | None:
+    try:
+        bucket = get_private_documents_bucket()
+    except PrivateDocumentStorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "document_source_storage_misconfigured"},
+        ) from exc
+
+    extension = Path(filename).suffix.lower()
+    if extension in _SPREADSHEET_EXTENSIONS and not bucket:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "document_source_storage_unavailable"},
+        )
+    return bucket
+
+
+async def _inspect_uploaded_spreadsheet(tmp_path: str, filename: str) -> None:
+    try:
+        await asyncio.to_thread(inspect_spreadsheet_source, tmp_path, filename)
+    except DocumentSourceValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": exc.code},
+        ) from exc
+
+
+async def _store_document_source(
+    *,
+    document: UserDocument,
+    bucket: str,
+    tmp_path: str,
+) -> None:
+    key = build_document_source_key(
+        user_id=document.user_id,
+        document_id=document.id,
+        filename=document.filename,
+    )
+    await upload_document_source(
+        bucket=bucket,
+        key=key,
+        path=tmp_path,
+        content_type=document.mime_type,
+        metadata={
+            "document-id": str(document.id),
+            "sha256": document.sha256 or "",
+        },
+    )
+    document.source_bucket = bucket
+    document.source_storage_key = key
+    document.source_storage_status = _SOURCE_STORAGE_STATUS_STORED
+    document.source_stored_at = _utcnow_naive()
+
+
+async def _materialize_document_source(document: UserDocument) -> str:
+    if (
+        document.source_storage_status != _SOURCE_STORAGE_STATUS_STORED
+        or not document.source_bucket
+        or not document.source_storage_key
+    ):
+        raise RuntimeError("document source is not available")
+
+    safe_name = Path(document.filename or "document").name or "document"
+    tmp_dir = tempfile.mkdtemp(prefix="doc-source-")
+    tmp_path = os.path.join(tmp_dir, safe_name)
+    try:
+        await download_document_source(
+            bucket=document.source_bucket,
+            key=document.source_storage_key,
+            target_path=tmp_path,
+        )
+    except Exception:
+        _cleanup_temp_path(tmp_path)
+        raise
+    return tmp_path
+
+
 async def _persist_upload_to_temp_file(upload: UploadFile, target_filename: str) -> tuple[str, int, str]:
     safe_name = Path(target_filename or "upload").name or "upload"
     tmp_dir = tempfile.mkdtemp(prefix="doc-upload-")
@@ -624,6 +721,16 @@ async def upload_document(
             },
         )
 
+    extension = Path(filename).suffix.lower()
+    is_spreadsheet = extension in _SPREADSHEET_EXTENSIONS
+    try:
+        private_source_bucket = _private_source_bucket_for_upload(filename)
+        if is_spreadsheet:
+            await _inspect_uploaded_spreadsheet(tmp_path, filename)
+    except HTTPException:
+        _cleanup_temp_path(tmp_path)
+        raise
+
     document = UserDocument(
         user_id=user.id,
         filename=filename,
@@ -631,14 +738,27 @@ async def upload_document(
         size_bytes=size_bytes,
         usage_bytes=size_bytes,
         sha256=sha256,
-        status=DOCUMENT_STATUS_UPLOADING,
+        status=(DOCUMENT_STATUS_READY if is_spreadsheet else DOCUMENT_STATUS_UPLOADING),
         provider_artifacts=[],
     )
+    if private_source_bucket:
+        try:
+            await _store_document_source(
+                document=document,
+                bucket=private_source_bucket,
+                tmp_path=tmp_path,
+            )
+        except Exception as exc:
+            _cleanup_temp_path(tmp_path)
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "document_source_storage_failed"},
+            ) from exc
     _refresh_expiration(document, capabilities.doc_retention_hours)
     session.add(document)
     await session.flush()
 
-    artifact_plan = _build_artifact_plan(effective_provider)
+    artifact_plan = [] if is_spreadsheet else _build_artifact_plan(effective_provider)
     for provider in artifact_plan:
         artifact = _ensure_artifact(document, provider)
         artifact.status = DocumentProviderArtifactStatus.uploading.value
@@ -646,12 +766,40 @@ async def upload_document(
 
     _sync_document_from_artifacts(document)
     session.add(document)
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        if document.source_bucket and document.source_storage_key:
+            try:
+                await delete_document_source(
+                    bucket=document.source_bucket,
+                    key=document.source_storage_key,
+                )
+            except Exception:
+                _logger.exception(
+                    "Failed to compensate private document source upload",
+                    extra={"document_id": str(document.id)},
+                )
+        _cleanup_temp_path(tmp_path)
+        raise
     document = await _load_document_for_user(session, user_id=user.id, document_id=document.id)
     if not document:
+        _cleanup_temp_path(tmp_path)
         raise HTTPException(status_code=500, detail={"error": "document_upload_persist_failed"})
 
-    background_tasks.add_task(_ingest_document_background, document.id, tmp_path, artifact_plan)
+    if not artifact_plan:
+        _cleanup_temp_path(tmp_path)
+    else:
+        background_tmp_path: str | None = tmp_path
+        if document.source_storage_status == _SOURCE_STORAGE_STATUS_STORED:
+            _cleanup_temp_path(tmp_path)
+            background_tmp_path = None
+        background_tasks.add_task(
+            _ingest_document_background,
+            document.id,
+            background_tmp_path,
+            artifact_plan,
+        )
     return _document_to_response(document, preferred_provider=effective_provider)
 
 
@@ -676,7 +824,7 @@ async def _ingest_openai_artifact(
 
 async def _ingest_document_background(
     document_id: uuid.UUID,
-    tmp_path: str,
+    tmp_path: str | None,
     artifact_providers: list[str],
 ) -> None:
     try:
@@ -690,6 +838,21 @@ async def _ingest_document_background(
             ).first()
             if not document:
                 return
+
+            if tmp_path is None:
+                try:
+                    tmp_path = await _materialize_document_source(document)
+                except Exception as exc:
+                    for provider in artifact_providers:
+                        artifact = _ensure_artifact(document, provider)
+                        artifact.status = DocumentProviderArtifactStatus.failed.value
+                        artifact.error_code = "document_source_download_failed"
+                        artifact.error_message = str(exc)[:1000]
+                        session.add(artifact)
+                    _sync_document_from_artifacts(document)
+                    session.add(document)
+                    await session.commit()
+                    return
 
             for provider in artifact_providers:
                 artifact = _ensure_artifact(document, provider)
@@ -720,7 +883,8 @@ async def _ingest_document_background(
             session.add(document)
             await session.commit()
     finally:
-        _cleanup_temp_path(tmp_path)
+        if tmp_path:
+            _cleanup_temp_path(tmp_path)
 
 
 async def delete_document(
@@ -779,6 +943,16 @@ async def _delete_document_background(document_id: uuid.UUID) -> None:
                 artifact.external_file_id = None
                 artifact.external_index_id = None
                 session.add(artifact)
+            if (
+                document.source_storage_status != _SOURCE_STORAGE_STATUS_DELETED
+                and document.source_bucket
+                and document.source_storage_key
+            ):
+                await delete_document_source(
+                    bucket=document.source_bucket,
+                    key=document.source_storage_key,
+                )
+                document.source_storage_status = _SOURCE_STORAGE_STATUS_DELETED
         except Exception as exc:
             document.status = DOCUMENT_STATUS_FAILED
             document.error_code = "document_delete_failed"

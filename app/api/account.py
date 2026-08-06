@@ -90,7 +90,16 @@ async def export_account_data(
             for conversation in conversations
         ],
         "documents": [
-            _safe_row(item, exclude={"openai_file_id", "openai_vector_store_id", "sha256"})
+            _safe_row(
+                item,
+                exclude={
+                    "openai_file_id",
+                    "openai_vector_store_id",
+                    "sha256",
+                    "source_bucket",
+                    "source_storage_key",
+                },
+            )
             for item in (
                 await session.exec(select(models.UserDocument).where(models.UserDocument.user_id == current_user.id))
             ).all()
