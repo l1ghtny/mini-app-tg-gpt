@@ -1,11 +1,14 @@
-import asyncio
 import os
+import sys
 import time
 import uuid
 import logging
+from email.utils import format_datetime
+from typing import Any, AsyncIterator
 from urllib.parse import unquote, urlsplit
 
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile
 from fastapi.params import Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -15,12 +18,12 @@ from starlette.responses import StreamingResponse
 from app.api.dependencies import get_current_user
 from app.db.database import engine, get_session
 from app.db.models import AppUser, ImageAsset
+from app.r2.client import s3_client
 from app.r2.methods import upload_fileobject
 from app.r2.settings import Settings
 from app.schemas.images import ImageUploaded, ImagePrepareShareResponse, ImageAssetResponse
 from app.services.image_assets import (
     IMAGE_SOURCE_UPLOADED,
-    IMAGE_STATUS_ACTIVE,
     IMAGE_STATUS_EXPIRED,
     IMAGE_STATUS_MISSING,
     IMAGE_STATUS_PROCESSING,
@@ -133,6 +136,70 @@ async def _close_proxy_stream(client: httpx.AsyncClient, upstream_response: http
     await client.aclose()
 
 
+def _r2_response_headers(response: dict[str, Any], filename: str) -> dict[str, str]:
+    upstream_headers: dict[str, str] = {}
+    for source, target in (
+        ("CacheControl", "cache-control"),
+        ("ETag", "etag"),
+        ("ContentLength", "content-length"),
+    ):
+        value = response.get(source)
+        if value is not None:
+            upstream_headers[target] = str(value)
+
+    last_modified = response.get("LastModified")
+    if last_modified is not None:
+        upstream_headers["last-modified"] = format_datetime(last_modified, usegmt=True)
+
+    return _proxy_response_headers(upstream_headers, filename)
+
+
+async def _r2_body_chunks(body: Any, client_context: Any) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in body.iter_chunks(chunk_size=64 * 1024):
+            yield chunk
+    except BaseException as exc:
+        body.close()
+        await client_context.__aexit__(type(exc), exc, exc.__traceback__)
+        raise
+    else:
+        body.close()
+        await client_context.__aexit__(None, None, None)
+
+
+async def _stream_tracked_image(
+    asset: ImageAsset,
+) -> StreamingResponse:
+    client_context = s3_client()
+    client = await client_context.__aenter__()
+    try:
+        response = await client.get_object(Bucket=asset.bucket, Key=asset.key)
+    except BaseException:
+        await client_context.__aexit__(*sys.exc_info())
+        raise
+
+    body = response["Body"]
+    content_type = (
+        (response.get("ContentType") or "application/octet-stream")
+        .split(";", 1)[0]
+        .strip()
+        .lower()
+    )
+    if not (
+        content_type.startswith("image/") or content_type == "application/octet-stream"
+    ):
+        body.close()
+        await client_context.__aexit__(None, None, None)
+        raise HTTPException(status_code=415, detail="Stored object is not an image")
+
+    filename = _image_filename(asset.public_url, content_type)
+    return StreamingResponse(
+        _r2_body_chunks(body, client_context),
+        media_type=content_type,
+        headers=_r2_response_headers(response, filename),
+    )
+
+
 async def _refresh_uploaded_image_readiness(asset_id: uuid.UUID) -> None:
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -222,6 +289,36 @@ async def proxy_image(
             raise HTTPException(status_code=410, detail="Image expired")
         if status != "active":
             raise HTTPException(status_code=410, detail="Image unavailable")
+        if asset.bucket and asset.key:
+            try:
+                return await _stream_tracked_image(asset)
+            except ClientError as exc:
+                error_code = str(exc.response.get("Error", {}).get("Code", ""))
+                if error_code in {"404", "NoSuchKey", "NotFound"}:
+                    await mark_asset_status(session, asset, IMAGE_STATUS_MISSING)
+                    raise HTTPException(
+                        status_code=410,
+                        detail="Image unavailable",
+                    ) from exc
+                logger.warning(
+                    "Tracked image fetch failed image_id=%s code=%s",
+                    asset.id,
+                    error_code or type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="Could not fetch image",
+                ) from exc
+            except BotoCoreError as exc:
+                logger.warning(
+                    "Tracked image fetch failed image_id=%s type=%s",
+                    asset.id,
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=504,
+                    detail="Timed out while fetching image",
+                ) from exc
 
     client = httpx.AsyncClient(timeout=_PROXY_TIMEOUT, follow_redirects=True, max_redirects=_PROXY_MAX_REDIRECTS)
     try:

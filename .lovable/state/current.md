@@ -1,5 +1,27 @@
 # Current State
 
+## 2026-08-06 production image availability fallback
+
+- The authenticated image proxy now streams tracked assets directly from R2 by
+  their stored bucket and key instead of fetching their public URL through the
+  application ingress.
+- A tracked database row whose R2 object is gone is marked `missing` and returns
+  HTTP 410. Expired and otherwise unavailable rows retain their existing 410
+  behavior.
+- The frontend tries the original image URL and proxy URL once each, then shows
+  a muted localized unavailable tile. It does not expose retention details and
+  does not emit a failure toast.
+- Verification: backend proxy tests passed (5 passed, 2 unrelated tests
+  deselected); frontend component tests, TypeScript, focused ESLint, and the
+  production build passed.
+
+### Next steps
+
+1. Let the normal backend and frontend release pipelines consume the pushed
+   default-branch commits; no deployment was performed from the temp clones.
+2. Verify one retained image and one expired or missing image in production.
+3. Confirm the `/api/v1/images/proxy` timeout issue stops accumulating in Sentry.
+
 ## 2026-07-31 backend health restart loop stopped
 
 - Root cause: Argo applied the new HTTP health probes to backend image `251`,

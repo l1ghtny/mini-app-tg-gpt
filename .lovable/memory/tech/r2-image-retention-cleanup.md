@@ -30,3 +30,16 @@ batch limit and dry-run controls available through environment variables.
 
 The 2026-08-04 audit and cleanup evidence is in
 `docs/operations/r2-image-storage-audit-2026-08-04.md`.
+
+## Delivery behavior
+
+- For a tracked `ImageAsset`, the authenticated image proxy must read the R2
+  object directly by `bucket` and `key`; do not hairpin through the public image
+  hostname.
+- Treat an R2 `NoSuchKey` or equivalent 404 as a durable missing object: mark
+  the asset `missing` and return HTTP 410.
+- Client UI must collapse expired and missing objects into a quiet generic
+  unavailable state. Retention policy names and object-store details are not
+  user-facing error copy.
+- Keep the public-URL HTTP proxy only for legacy or otherwise untracked image
+  URLs.
