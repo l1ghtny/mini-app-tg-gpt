@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -79,6 +80,7 @@ _TERMINAL_STATUSES = (
 )
 _ARTIFACT_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _ARTIFACT_STORAGE_TIMEOUT_SECONDS = 90
+_ARTIFACT_STORAGE_CALL_TIMEOUT_SECONDS = 100
 _EVENT_PUBLISH_TIMEOUT_SECONDS = 5
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,29 @@ def _consume_publish_task_result(task: asyncio.Task[object]) -> None:
         logger.exception("work-run progress publication failed")
 
 
+def _consume_storage_task_result(
+    task: asyncio.Task[subprocess.CompletedProcess[bytes]],
+) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        logger.exception("detached artifact storage process failed")
+
+
+def _run_artifact_storage_process(
+    command: list[str],
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=_ARTIFACT_STORAGE_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
 async def _store_artifact_in_subprocess(
     *,
     bucket: str,
@@ -113,7 +138,7 @@ async def _store_artifact_in_subprocess(
     stored_size_bytes: int,
     stored_sha256: str,
 ) -> bool:
-    process = await asyncio.create_subprocess_exec(
+    command = [
         sys.executable,
         "-m",
         "app.services.work_runs.artifact_storage_process",
@@ -131,33 +156,40 @@ async def _store_artifact_in_subprocess(
         str(stored_size_bytes),
         "--stored-sha256",
         stored_sha256,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    ]
+    storage_task = asyncio.create_task(
+        asyncio.to_thread(_run_artifact_storage_process, command)
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=_ARTIFACT_STORAGE_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
-        process.kill()
-        await process.wait()
+    done, _ = await asyncio.wait(
+        {storage_task},
+        timeout=_ARTIFACT_STORAGE_CALL_TIMEOUT_SECONDS,
+    )
+    if storage_task not in done:
+        storage_task.cancel()
+        storage_task.add_done_callback(_consume_storage_task_result)
         raise TimeoutError("artifact storage did not complete before the deadline")
 
-    if process.returncode != 0:
-        detail = stderr.decode(errors="replace").strip()[:1000]
+    try:
+        result = await storage_task
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            "artifact storage did not complete before the deadline"
+        ) from exc
+
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip()[:1000]
         raise RuntimeError(
-            f"artifact storage subprocess failed: {detail or process.returncode}"
+            f"artifact storage subprocess failed: {detail or result.returncode}"
         )
     try:
-        result = json.loads(stdout.decode())
+        payload = json.loads(result.stdout.decode())
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(
             "artifact storage subprocess returned invalid output"
         ) from exc
-    if not isinstance(result, dict) or not isinstance(result.get("uploaded"), bool):
+    if not isinstance(payload, dict) or not isinstance(payload.get("uploaded"), bool):
         raise RuntimeError("artifact storage subprocess returned an invalid result")
-    return result["uploaded"]
+    return payload["uploaded"]
 
 
 def _month_start() -> datetime:

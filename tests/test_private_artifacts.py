@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -186,6 +187,46 @@ def test_storage_process_uploads_and_verifies_missing_artifact(
             "path": artifact_path,
             "sha256": "b" * 64,
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_storage_subprocess_result_is_parsed_without_async_child_watcher(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    commands: list[list[str]] = []
+
+    def run_process(command: list[str]) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=b'{"uploaded":false}',
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(
+        work_run_service,
+        "_run_artifact_storage_process",
+        run_process,
+    )
+
+    uploaded = await work_run_service._store_artifact_in_subprocess(
+        bucket="private-documents",
+        key="artifacts/run/comparison-v1.xlsx",
+        output_path=tmp_path / "comparison.xlsx",
+        rendered_size_bytes=9,
+        rendered_sha256="b" * 64,
+        stored_size_bytes=8,
+        stored_sha256="a" * 64,
+    )
+
+    assert uploaded is False
+    assert commands[0][0:3] == [
+        work_run_service.sys.executable,
+        "-m",
+        "app.services.work_runs.artifact_storage_process",
     ]
 
 
