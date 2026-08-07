@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import sys
 import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -31,11 +32,9 @@ from app.db.models import (
     utcnow_naive,
 )
 from app.r2.private_artifacts import (
-    artifact_object_matches,
     build_artifact_key,
     get_private_artifacts_bucket,
     presign_artifact_download,
-    upload_artifact,
 )
 from app.r2.private_documents import (
     PrivateDocumentStorageConfigurationError,
@@ -79,7 +78,7 @@ _TERMINAL_STATUSES = (
     WorkRunStatus.REFUNDED.value,
 )
 _ARTIFACT_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-_ARTIFACT_UPLOAD_TIMEOUT_SECONDS = 60
+_ARTIFACT_STORAGE_TIMEOUT_SECONDS = 90
 _EVENT_PUBLISH_TIMEOUT_SECONDS = 5
 logger = logging.getLogger(__name__)
 
@@ -95,58 +94,70 @@ def _artifact_storage_identity(
     return rendered_size_bytes, rendered_sha256
 
 
-def _consume_background_task_result(task: asyncio.Task[None]) -> None:
+def _consume_publish_task_result(task: asyncio.Task[object]) -> None:
     if task.cancelled():
         return
     try:
         task.result()
     except Exception:
-        logger.exception("background artifact upload failed after timeout")
+        logger.exception("work-run progress publication failed")
 
 
-def _consume_publish_task_result(task: asyncio.Task[str]) -> None:
-    if task.cancelled():
-        return
-    try:
-        task.result()
-    except Exception:
-        logger.exception("work-run progress publication failed after timeout")
-
-
-async def _upload_artifact_with_reconciliation(
+async def _store_artifact_in_subprocess(
     *,
     bucket: str,
     key: str,
     output_path: Path,
-    size_bytes: int,
-    sha256: str,
-) -> None:
-    upload_task = asyncio.create_task(
-        upload_artifact(
-            bucket=bucket,
-            key=key,
-            path=output_path,
-            sha256=sha256,
+    rendered_size_bytes: int,
+    rendered_sha256: str,
+    stored_size_bytes: int,
+    stored_sha256: str,
+) -> bool:
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "app.services.work_runs.artifact_storage_process",
+        "--bucket",
+        bucket,
+        "--key",
+        key,
+        "--path",
+        str(output_path),
+        "--rendered-size",
+        str(rendered_size_bytes),
+        "--rendered-sha256",
+        rendered_sha256,
+        "--stored-size",
+        str(stored_size_bytes),
+        "--stored-sha256",
+        stored_sha256,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=_ARTIFACT_STORAGE_TIMEOUT_SECONDS,
         )
-    )
-    done, _ = await asyncio.wait(
-        {upload_task},
-        timeout=_ARTIFACT_UPLOAD_TIMEOUT_SECONDS,
-    )
-    if upload_task in done:
-        await upload_task
-        return
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise TimeoutError("artifact storage did not complete before the deadline")
 
-    upload_task.cancel()
-    upload_task.add_done_callback(_consume_background_task_result)
-    if await artifact_object_matches(
-        bucket=bucket,
-        key=key,
-        size_bytes=size_bytes,
-        sha256=sha256,
-    ):
-        return
-    raise TimeoutError("artifact upload did not complete before the deadline")
+    if process.returncode != 0:
+        detail = stderr.decode(errors="replace").strip()[:1000]
+        raise RuntimeError(
+            f"artifact storage subprocess failed: {detail or process.returncode}"
+        )
+    try:
+        result = json.loads(stdout.decode())
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "artifact storage subprocess returned invalid output"
+        ) from exc
+    if not isinstance(result, dict) or not isinstance(result.get("uploaded"), bool):
+        raise RuntimeError("artifact storage subprocess returned an invalid result")
+    return result["uploaded"]
 
 
 def _month_start() -> datetime:
@@ -562,19 +573,15 @@ async def artifact_download(
     return ArtifactDownloadResponse(url=url, expires_in=expires)
 
 
-async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
+async def _publish_with_deadline(
+    redis: Redis,
+    *,
+    work_run_id: str,
+    event_type: str,
+    payload: dict[str, object],
+) -> None:
     publish_task = asyncio.create_task(
-        RedisEventBus(redis).publish_work(
-            str(run.id),
-            {
-                "type": event_type,
-                "work_run_id": str(run.id),
-                "status": run.status,
-                "stage": run.stage,
-                "progress_percent": run.progress_percent,
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+        RedisEventBus(redis).publish_work(work_run_id, payload)
     )
     done, _ = await asyncio.wait(
         {publish_task},
@@ -587,8 +594,28 @@ async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
     publish_task.add_done_callback(_consume_publish_task_result)
     logger.warning(
         "work-run progress publication timed out",
-        extra={"work_run_id": str(run.id), "event_type": event_type},
+        extra={"work_run_id": work_run_id, "event_type": event_type},
     )
+
+
+async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
+    work_run_id = str(run.id)
+    publish_task = asyncio.create_task(
+        _publish_with_deadline(
+            redis,
+            work_run_id=work_run_id,
+            event_type=event_type,
+            payload={
+                "type": event_type,
+                "work_run_id": work_run_id,
+                "status": run.status,
+                "stage": run.stage,
+                "progress_percent": run.progress_percent,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    )
+    publish_task.add_done_callback(_consume_publish_task_result)
 
 
 async def process_comparison_run(
@@ -738,20 +765,16 @@ async def process_comparison_run(
             rendered_size_bytes=rendered_size_bytes,
             rendered_sha256=sha256,
         )
-        object_matches = await artifact_object_matches(
+        artifact_uploaded = await _store_artifact_in_subprocess(
             bucket=bucket,
             key=key,
-            size_bytes=stored_size_bytes,
-            sha256=stored_sha256,
+            output_path=output_path,
+            rendered_size_bytes=rendered_size_bytes,
+            rendered_sha256=sha256,
+            stored_size_bytes=stored_size_bytes,
+            stored_sha256=stored_sha256,
         )
-        if not object_matches:
-            await _upload_artifact_with_reconciliation(
-                bucket=bucket,
-                key=key,
-                output_path=output_path,
-                size_bytes=rendered_size_bytes,
-                sha256=sha256,
-            )
+        if artifact_uploaded:
             artifact.size_bytes = rendered_size_bytes
             artifact.sha256 = sha256
         artifact.bucket = bucket

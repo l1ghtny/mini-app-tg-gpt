@@ -13,6 +13,7 @@ os.environ.setdefault("R2_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret-key")
 
 from app.r2 import private_artifacts
+from app.services.work_runs import artifact_storage_process
 from app.services.work_runs import service as work_run_service
 from app.services.work_runs.service import _artifact_storage_identity
 
@@ -109,37 +110,83 @@ def test_recovery_uses_the_persisted_artifact_identity() -> None:
     ) == (8, "a" * 64)
 
 
-@pytest.mark.asyncio
-async def test_timed_out_upload_reconciles_without_waiting_for_task_cleanup(
+def test_storage_process_reuses_matching_persisted_artifact(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    upload_started = asyncio.Event()
-
-    async def hanging_upload(**_: object) -> None:
-        upload_started.set()
-        await asyncio.Event().wait()
-
-    async def matching_object(**_: object) -> bool:
-        return True
-
-    monkeypatch.setattr(work_run_service, "upload_artifact", hanging_upload)
     monkeypatch.setattr(
-        work_run_service,
-        "artifact_object_matches",
-        matching_object,
+        artifact_storage_process,
+        "get_private_artifacts_bucket",
+        lambda: "private-documents",
     )
-    monkeypatch.setattr(work_run_service, "_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        artifact_storage_process,
+        "_artifact_object_matches",
+        lambda **_: True,
+    )
+    put_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        artifact_storage_process,
+        "_put_artifact",
+        lambda **kwargs: put_calls.append(kwargs),
+    )
 
-    await work_run_service._upload_artifact_with_reconciliation(
+    uploaded = artifact_storage_process.reconcile_artifact_storage(
         bucket="private-documents",
         key="artifacts/run/comparison-v1.xlsx",
-        output_path=tmp_path / "comparison.xlsx",
-        size_bytes=8,
-        sha256="a" * 64,
+        path=tmp_path / "comparison.xlsx",
+        rendered_size_bytes=9,
+        rendered_sha256="b" * 64,
+        stored_size_bytes=8,
+        stored_sha256="a" * 64,
     )
 
-    assert upload_started.is_set()
+    assert uploaded is False
+    assert put_calls == []
+
+
+def test_storage_process_uploads_and_verifies_missing_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        artifact_storage_process,
+        "get_private_artifacts_bucket",
+        lambda: "private-documents",
+    )
+    match_results = iter((False, True))
+    monkeypatch.setattr(
+        artifact_storage_process,
+        "_artifact_object_matches",
+        lambda **_: next(match_results),
+    )
+    put_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        artifact_storage_process,
+        "_put_artifact",
+        lambda **kwargs: put_calls.append(kwargs),
+    )
+    artifact_path = tmp_path / "comparison.xlsx"
+
+    uploaded = artifact_storage_process.reconcile_artifact_storage(
+        bucket="private-documents",
+        key="artifacts/run/comparison-v1.xlsx",
+        path=artifact_path,
+        rendered_size_bytes=9,
+        rendered_sha256="b" * 64,
+        stored_size_bytes=8,
+        stored_sha256="a" * 64,
+    )
+
+    assert uploaded is True
+    assert put_calls == [
+        {
+            "bucket": "private-documents",
+            "key": "artifacts/run/comparison-v1.xlsx",
+            "path": artifact_path,
+            "sha256": "b" * 64,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -158,7 +205,6 @@ async def test_progress_publish_timeout_does_not_block_durable_work(
             return "unused"
 
     monkeypatch.setattr(work_run_service, "RedisEventBus", HangingEventBus)
-    monkeypatch.setattr(work_run_service, "_EVENT_PUBLISH_TIMEOUT_SECONDS", 0.01)
     run = SimpleNamespace(
         id="run-id",
         status="storing",
@@ -167,5 +213,6 @@ async def test_progress_publish_timeout_does_not_block_durable_work(
     )
 
     await work_run_service._publish(object(), run, "work.stage")
+    await asyncio.wait_for(publish_started.wait(), timeout=0.1)
 
     assert publish_started.is_set()
