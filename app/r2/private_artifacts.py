@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from botocore.exceptions import ClientError
+
 from app.r2.client import s3_client
 from app.r2.private_documents import (
     PrivateDocumentStorageConfigurationError,
@@ -52,6 +54,31 @@ async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> 
                 ),
                 Metadata={"sha256": sha256},
             )
+
+
+async def artifact_object_matches(
+    *,
+    bucket: str,
+    key: str,
+    size_bytes: int,
+    sha256: str,
+) -> bool:
+    if bucket != get_private_artifacts_bucket():
+        raise PrivateDocumentStorageConfigurationError(
+            "artifact bucket is not configured"
+        )
+    try:
+        async with _private_s3_client() as s3:
+            response = await s3.head_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        error_code = str(exc.response.get("Error", {}).get("Code", ""))
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise
+    return (
+        response.get("ContentLength") == size_bytes
+        and response.get("Metadata", {}).get("sha256") == sha256
+    )
 
 
 async def delete_artifact(*, bucket: str, key: str) -> None:

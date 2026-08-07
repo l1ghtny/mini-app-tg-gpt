@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -29,6 +31,7 @@ from app.db.models import (
     utcnow_naive,
 )
 from app.r2.private_artifacts import (
+    artifact_object_matches,
     build_artifact_key,
     get_private_artifacts_bucket,
     presign_artifact_download,
@@ -76,6 +79,9 @@ _TERMINAL_STATUSES = (
     WorkRunStatus.REFUNDED.value,
 )
 _ARTIFACT_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_ARTIFACT_UPLOAD_TIMEOUT_SECONDS = 60
+_EVENT_PUBLISH_TIMEOUT_SECONDS = 5
+logger = logging.getLogger(__name__)
 
 
 def _month_start() -> datetime:
@@ -492,17 +498,26 @@ async def artifact_download(
 
 
 async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
-    await RedisEventBus(redis).publish_work(
-        str(run.id),
-        {
-            "type": event_type,
-            "work_run_id": str(run.id),
-            "status": run.status,
-            "stage": run.stage,
-            "progress_percent": run.progress_percent,
-            "occurred_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    try:
+        await asyncio.wait_for(
+            RedisEventBus(redis).publish_work(
+                str(run.id),
+                {
+                    "type": event_type,
+                    "work_run_id": str(run.id),
+                    "status": run.status,
+                    "stage": run.stage,
+                    "progress_percent": run.progress_percent,
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                },
+            ),
+            timeout=_EVENT_PUBLISH_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(
+            "work-run progress publication timed out",
+            extra={"work_run_id": str(run.id), "event_type": event_type},
+        )
 
 
 async def process_comparison_run(
@@ -648,7 +663,31 @@ async def process_comparison_run(
         key = build_artifact_key(
             user_id=run.user_id, work_run_id=run.id, artifact_id=artifact.id
         )
-        await upload_artifact(bucket=bucket, key=key, path=output_path, sha256=sha256)
+        object_matches = await artifact_object_matches(
+            bucket=bucket,
+            key=key,
+            size_bytes=artifact.size_bytes,
+            sha256=sha256,
+        )
+        if not object_matches:
+            try:
+                await asyncio.wait_for(
+                    upload_artifact(
+                        bucket=bucket,
+                        key=key,
+                        path=output_path,
+                        sha256=sha256,
+                    ),
+                    timeout=_ARTIFACT_UPLOAD_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                if not await artifact_object_matches(
+                    bucket=bucket,
+                    key=key,
+                    size_bytes=artifact.size_bytes,
+                    sha256=sha256,
+                ):
+                    raise
         artifact.bucket = bucket
         artifact.storage_key = key
         artifact.status = "ready"
