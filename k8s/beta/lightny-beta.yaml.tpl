@@ -129,6 +129,8 @@ spec:
           envFrom:
             - secretRef:
                 name: backend-beta-env
+            - secretRef:
+                name: tg-mini-beta-work-runs-r2
           ports:
             - name: http
               containerPort: 8000
@@ -222,6 +224,8 @@ spec:
           envFrom:
             - secretRef:
                 name: backend-beta-env
+            - secretRef:
+                name: tg-mini-beta-work-runs-r2
           ports:
             - name: health
               containerPort: 8000

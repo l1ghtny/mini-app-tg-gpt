@@ -97,23 +97,6 @@ jq \
         WEB_AUTH_TRUSTED_PROXY_CIDRS: ("10.1.0.0/16,10.77.0.2/32" | @base64)
       }
     }
-    | if (
-        $source.R2_PRIVATE_DOCUMENTS_BUCKET and
-        $source.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID and
-        $source.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
-      ) then
-        .data.R2_PRIVATE_DOCUMENTS_BUCKET = $source.R2_PRIVATE_DOCUMENTS_BUCKET
-        | .data.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID = $source.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID
-        | .data.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY = $source.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
-        | if $source.R2_PRIVATE_DOCUMENTS_SESSION_TOKEN then
-            .data.R2_PRIVATE_DOCUMENTS_SESSION_TOKEN = $source.R2_PRIVATE_DOCUMENTS_SESSION_TOKEN
-          else . end
-        | if $source.R2_PRIVATE_DOCUMENTS_CREDENTIAL_EXPIRES_AT then
-            .data.R2_PRIVATE_DOCUMENTS_CREDENTIAL_EXPIRES_AT = $source.R2_PRIVATE_DOCUMENTS_CREDENTIAL_EXPIRES_AT
-          else . end
-      else
-        .
-      end)
   ' "${tmp_dir}/source.json" >"${tmp_dir}/beta-secret.json"
 kubectl apply -f "${tmp_dir}/beta-secret.json"
 

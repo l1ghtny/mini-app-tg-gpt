@@ -20,7 +20,7 @@ IMAGE_NAME=tg-mini-app-backend IMAGE_TAG="${BACKEND_TAG}" \
 IMAGE_NAME=tg-mini-frontend-new IMAGE_TAG="${FRONTEND_TAG}" \
   "${script_dir}/verify_registry_image.sh"
 
-for secret in backend-beta-env tg-mini-beta-redis-auth; do
+for secret in backend-beta-env tg-mini-beta-redis-auth tg-mini-beta-work-runs-r2; do
   kubectl get secret "${secret}" -n "${K8S_NAMESPACE}" >/dev/null
 done
 
