@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.db import model_registry as _model_registry  # noqa: F401
 from app.db.database import engine
 from app.db.models import WorkRun, utcnow_naive
 from app.redis.settings import settings as redis_settings
@@ -85,14 +86,24 @@ async def run_worker(stop_event: asyncio.Event) -> None:
                         extra={"work_run_id": str(run.id), "worker_id": executor_id},
                     )
                     await session.rollback()
-                    failed_run = await session.get(WorkRun, run.id)
-                    if failed_run is not None:
-                        await fail_run(
-                            session=session,
-                            redis=redis,
-                            run=failed_run,
-                            error=exc,
+                    try:
+                        failed_run = await session.get(WorkRun, run.id)
+                        if failed_run is not None:
+                            await fail_run(
+                                session=session,
+                                redis=redis,
+                                run=failed_run,
+                                error=exc,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "work-run failure could not be persisted",
+                            extra={
+                                "work_run_id": str(run.id),
+                                "worker_id": executor_id,
+                            },
                         )
+                        await session.rollback()
     finally:
         await redis.aclose()
         logger.info("work-run worker stopped", extra={"worker_id": executor_id})

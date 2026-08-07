@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from sqlalchemy import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -12,9 +12,10 @@ from app.services.work_runs.worker import run_worker
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     stop_event = asyncio.Event()
     worker_task = asyncio.create_task(run_worker(stop_event))
+    app.state.worker_task = worker_task
     try:
         yield
     finally:
@@ -25,13 +26,24 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Lightny Work Run Worker", lifespan=lifespan)
 
 
+def _require_running_worker() -> None:
+    worker_task = getattr(app.state, "worker_task", None)
+    if worker_task is None or worker_task.done():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="work_run_worker_not_running",
+        )
+
+
 @app.get("/health/live")
 async def live() -> dict[str, str]:
+    _require_running_worker()
     return {"status": "ok"}
 
 
 @app.get("/health/ready")
 async def ready() -> dict[str, str]:
+    _require_running_worker()
     async with AsyncSession(engine) as session:
         await session.execute(text("SELECT 1"))
     return {"status": "ready"}
