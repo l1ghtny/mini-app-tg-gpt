@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
@@ -8,7 +10,20 @@ from sqlalchemy import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.database import engine
+from app.core.config import settings
+from app.core.version import APP_VERSION
+from app.core.work_run_worker_sentry import initialize_work_run_worker_sentry
 from app.services.work_runs.worker import run_worker
+
+
+logger = logging.getLogger(__name__)
+initialize_work_run_worker_sentry(
+    dsn=settings.SENTRY_DSN,
+    environment=settings.ENVIRONMENT,
+    release=os.getenv("SENTRY_RELEASE", "").strip() or APP_VERSION,
+    deployment_channel=settings.DEPLOYMENT_CHANNEL,
+    logger=logger,
+)
 
 
 @asynccontextmanager
