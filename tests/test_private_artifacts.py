@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,14 +21,18 @@ class _FakeS3Client:
     def __init__(self, head_response: dict[str, object] | None = None) -> None:
         self.put_calls: list[dict[str, object]] = []
         self.head_response = head_response
+        self.closed = False
 
-    async def put_object(self, **kwargs: object) -> None:
+    def put_object(self, **kwargs: object) -> None:
         body = kwargs["Body"]
         self.put_calls.append({**kwargs, "Body": body.read()})
 
-    async def head_object(self, **_: object) -> dict[str, object]:
+    def head_object(self, **_: object) -> dict[str, object]:
         assert self.head_response is not None
         return self.head_response
+
+    def close(self) -> None:
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -41,16 +44,12 @@ async def test_upload_artifact_uses_single_put_object(
     artifact_path.write_bytes(b"workbook")
     client = _FakeS3Client()
 
-    @asynccontextmanager
-    async def fake_client():
-        yield client
-
     monkeypatch.setattr(
         private_artifacts,
         "get_private_artifacts_bucket",
         lambda: "private-documents",
     )
-    monkeypatch.setattr(private_artifacts, "_private_s3_client", fake_client)
+    monkeypatch.setattr(private_artifacts, "_private_s3_client", lambda: client)
 
     await private_artifacts.upload_artifact(
         bucket="private-documents",
@@ -70,6 +69,7 @@ async def test_upload_artifact_uses_single_put_object(
             "Metadata": {"sha256": "a" * 64},
         }
     ]
+    assert client.closed
 
 
 @pytest.mark.asyncio
@@ -83,16 +83,12 @@ async def test_artifact_object_matches_size_and_checksum(
         }
     )
 
-    @asynccontextmanager
-    async def fake_client():
-        yield client
-
     monkeypatch.setattr(
         private_artifacts,
         "get_private_artifacts_bucket",
         lambda: "private-documents",
     )
-    monkeypatch.setattr(private_artifacts, "_private_s3_client", fake_client)
+    monkeypatch.setattr(private_artifacts, "_private_s3_client", lambda: client)
 
     assert await private_artifacts.artifact_object_matches(
         bucket="private-documents",
@@ -106,6 +102,7 @@ async def test_artifact_object_matches_size_and_checksum(
         size_bytes=9,
         sha256="a" * 64,
     )
+    assert client.closed
 
 
 def test_recovery_uses_the_persisted_artifact_identity() -> None:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 
+import boto3
 from botocore.exceptions import ClientError
 
-from app.r2.client import s3_client
+from app.r2.client import _client_kwargs
 from app.r2.private_documents import (
     PrivateDocumentStorageConfigurationError,
     get_private_documents_bucket,
@@ -29,24 +31,22 @@ def build_artifact_key(
 
 
 def _private_s3_client():
-    return s3_client(
-        endpoint_url=Settings.R2_ENDPOINT,
-        region_name=Settings.R2_REGION,
-        access_key_id=Settings.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID,
-        secret_access_key=Settings.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY,
-        session_token=Settings.R2_PRIVATE_DOCUMENTS_SESSION_TOKEN or None,
-        fresh_session=True,
+    return boto3.client(
+        **_client_kwargs(
+            endpoint_url=Settings.R2_ENDPOINT,
+            region_name=Settings.R2_REGION,
+            access_key_id=Settings.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID,
+            secret_access_key=Settings.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY,
+            session_token=Settings.R2_PRIVATE_DOCUMENTS_SESSION_TOKEN or None,
+        )
     )
 
 
-async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
-    if bucket != get_private_artifacts_bucket():
-        raise PrivateDocumentStorageConfigurationError(
-            "artifact bucket is not configured"
-        )
+def _put_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
+    client = _private_s3_client()
     with path.open("rb") as artifact_file:
-        async with _private_s3_client() as s3:
-            await s3.put_object(
+        try:
+            client.put_object(
                 Body=artifact_file,
                 Bucket=bucket,
                 Key=key,
@@ -55,6 +55,45 @@ async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> 
                 ),
                 Metadata={"sha256": sha256},
             )
+        finally:
+            client.close()
+
+
+async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
+    if bucket != get_private_artifacts_bucket():
+        raise PrivateDocumentStorageConfigurationError(
+            "artifact bucket is not configured"
+        )
+    await asyncio.to_thread(
+        _put_artifact,
+        bucket=bucket,
+        key=key,
+        path=path,
+        sha256=sha256,
+    )
+
+
+def _artifact_object_matches(
+    *,
+    bucket: str,
+    key: str,
+    size_bytes: int,
+    sha256: str,
+) -> bool:
+    client = _private_s3_client()
+    try:
+        response = client.head_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        error_code = str(exc.response.get("Error", {}).get("Code", ""))
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise
+    finally:
+        client.close()
+    return (
+        response.get("ContentLength") == size_bytes
+        and response.get("Metadata", {}).get("sha256") == sha256
+    )
 
 
 async def artifact_object_matches(
@@ -68,17 +107,12 @@ async def artifact_object_matches(
         raise PrivateDocumentStorageConfigurationError(
             "artifact bucket is not configured"
         )
-    try:
-        async with _private_s3_client() as s3:
-            response = await s3.head_object(Bucket=bucket, Key=key)
-    except ClientError as exc:
-        error_code = str(exc.response.get("Error", {}).get("Code", ""))
-        if error_code in {"404", "NoSuchKey", "NotFound"}:
-            return False
-        raise
-    return (
-        response.get("ContentLength") == size_bytes
-        and response.get("Metadata", {}).get("sha256") == sha256
+    return await asyncio.to_thread(
+        _artifact_object_matches,
+        bucket=bucket,
+        key=key,
+        size_bytes=size_bytes,
+        sha256=sha256,
     )
 
 
@@ -87,8 +121,15 @@ async def delete_artifact(*, bucket: str, key: str) -> None:
         raise PrivateDocumentStorageConfigurationError(
             "artifact bucket is not configured"
         )
-    async with _private_s3_client() as s3:
-        await s3.delete_object(Bucket=bucket, Key=key)
+
+    def delete() -> None:
+        client = _private_s3_client()
+        try:
+            client.delete_object(Bucket=bucket, Key=key)
+        finally:
+            client.close()
+
+    await asyncio.to_thread(delete)
 
 
 async def presign_artifact_download(
@@ -106,16 +147,23 @@ async def presign_artifact_download(
         )
         or "comparison.xlsx"
     )
-    async with _private_s3_client() as s3:
-        return await s3.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": bucket,
-                "Key": key,
-                "ResponseContentDisposition": f'attachment; filename="{safe_filename}"',
-                "ResponseContentType": (
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                ),
-            },
-            ExpiresIn=expires,
-        )
+
+    def presign() -> str:
+        client = _private_s3_client()
+        try:
+            return client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": bucket,
+                    "Key": key,
+                    "ResponseContentDisposition": f'attachment; filename="{safe_filename}"',
+                    "ResponseContentType": (
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    ),
+                },
+                ExpiresIn=expires,
+            )
+        finally:
+            client.close()
+
+    return await asyncio.to_thread(presign)
