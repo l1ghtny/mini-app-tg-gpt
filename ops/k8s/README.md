@@ -33,6 +33,27 @@ backend `master` in `mini-app-tg-gpt` and frontend `main` in
 `chat-bot-telegram`. Do not point them back to legacy `development` sources;
 otherwise self-healing silently removes release-safety changes.
 
+## Node disk-pressure protection
+
+Run `configure-microk8s-eviction-thresholds.sh` as root on every MicroK8s node.
+It replaces the unsafe absolute 1 GiB disk thresholds with percentage and inode
+thresholds, keeps a timestamped copy of the previous kubelet args, and restarts
+only `snap.microk8s.daemon-kubelite.service`. Verify the running values through
+the kubelet endpoint after every node restart:
+
+```sh
+kubectl get --raw /api/v1/nodes/NODE_NAME/proxy/configz \
+  | jq '.kubeletconfig.evictionHard'
+```
+
+The extra TeamCity agents are declared in `k8s/teamcity-extra-agents.yaml`.
+Their identity/configuration uses two-replica Longhorn state volumes. Build
+workspaces and Docker data use bounded 80 GiB single-replica cache volumes from
+the `longhorn-ci-cache` class. Docker BuildKit GC keeps at most 20 GB, and the
+GC sidecar removes unused images older than seven days. Do not move Docker data
+back to `microk8s-hostpath`: host-path PVC capacity is not enforced or included
+in pod ephemeral-storage accounting.
+
 The production `backend-env` Secret also needs these non-secret values:
 
 - `WEBAPP_URL=https://app.lightny.ru`

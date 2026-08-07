@@ -1,18 +1,54 @@
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: teamcity-docker-daemon-config
+  namespace: gamedev
+  labels:
+    app: teamcity-agent-extra
+data:
+  daemon.json: |
+    {
+      "builder": {
+        "gc": {
+          "enabled": true,
+          "defaultKeepStorage": "20GB"
+        }
+      }
+    }
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: teamcity-agent-k8s-node-2-pvc
+  name: teamcity-agent-k8s-node-2-state-pvc
   namespace: gamedev
   labels:
     app: teamcity-agent-extra
     teamcity-agent: gamedev-teamcity-agent-k8s-node-2
+    storage-role: durable-state
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: microk8s-hostpath
+  storageClassName: longhorn-r2-local
   resources:
     requests:
-      storage: 30Gi
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teamcity-agent-k8s-node-2-cache-pvc
+  namespace: gamedev
+  labels:
+    app: teamcity-agent-extra
+    teamcity-agent: gamedev-teamcity-agent-k8s-node-2
+    storage-role: disposable-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn-ci-cache
+  resources:
+    requests:
+      storage: 80Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -40,17 +76,20 @@ spec:
         kubernetes.io/hostname: k8s-node-2
       securityContext:
         runAsUser: 0
+      terminationGracePeriodSeconds: 60
       initContainers:
         - name: prepare-agent-data
           image: jetbrains/teamcity-agent:latest-linux-sudo
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
-            - -c
-            - mkdir -p /agent-data/conf /agent-data/work /agent-data/temp /agent-data/tools /agent-data/plugins /agent-data/system /agent-data/logs /agent-data/docker
+            - -ec
+            - mkdir -p /agent-state/conf /agent-cache/work /agent-cache/temp /agent-cache/tools /agent-cache/plugins /agent-cache/system /agent-cache/logs /agent-cache/docker
           volumeMounts:
-            - mountPath: /agent-data
-              name: agent-data
+            - mountPath: /agent-state
+              name: agent-state
+            - mountPath: /agent-cache
+              name: agent-cache
       containers:
         - name: teamcity-agent
           image: jetbrains/teamcity-agent:latest-linux-sudo
@@ -62,27 +101,34 @@ spec:
               value: gamedev-teamcity-agent-k8s-node-2
             - name: DOCKER_HOST
               value: tcp://localhost:2375
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+            limits:
+              ephemeral-storage: 2Gi
           volumeMounts:
             - mountPath: /data/teamcity_agent/conf
-              name: agent-data
+              name: agent-state
               subPath: conf
             - mountPath: /opt/buildagent/work
-              name: agent-data
+              name: agent-cache
               subPath: work
             - mountPath: /opt/buildagent/temp
-              name: agent-data
+              name: agent-cache
               subPath: temp
             - mountPath: /opt/buildagent/tools
-              name: agent-data
+              name: agent-cache
               subPath: tools
             - mountPath: /opt/buildagent/plugins
-              name: agent-data
+              name: agent-cache
               subPath: plugins
             - mountPath: /opt/buildagent/system
-              name: agent-data
+              name: agent-cache
               subPath: system
             - mountPath: /opt/buildagent/logs
-              name: agent-data
+              name: agent-cache
               subPath: logs
         - name: docker-dind
           image: docker:29-dind
@@ -98,30 +144,100 @@ spec:
               value: ""
           securityContext:
             privileged: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 512Mi
+            limits:
+              ephemeral-storage: 2Gi
+          readinessProbe:
+            exec:
+              command:
+                - docker
+                - info
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
           volumeMounts:
             - mountPath: /var/lib/docker
-              name: agent-data
+              name: agent-cache
               subPath: docker
+            - mountPath: /etc/docker/daemon.json
+              name: docker-daemon-config
+              subPath: daemon.json
+              readOnly: true
+        - name: docker-gc
+          image: docker:29-cli
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              until docker info >/dev/null 2>&1; do sleep 5; done
+              while true; do
+                docker image prune -af --filter "until=168h" || true
+                docker builder prune -af --max-used-space 20GB || true
+                sleep 21600
+              done
+          env:
+            - name: DOCKER_HOST
+              value: tcp://localhost:2375
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+              ephemeral-storage: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 128Mi
       volumes:
-        - name: agent-data
+        - name: agent-state
           persistentVolumeClaim:
-            claimName: teamcity-agent-k8s-node-2-pvc
+            claimName: teamcity-agent-k8s-node-2-state-pvc
+        - name: agent-cache
+          persistentVolumeClaim:
+            claimName: teamcity-agent-k8s-node-2-cache-pvc
+        - name: docker-daemon-config
+          configMap:
+            name: teamcity-docker-daemon-config
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: teamcity-agent-k8s-node-3-pvc
+  name: teamcity-agent-k8s-node-3-state-pvc
   namespace: gamedev
   labels:
     app: teamcity-agent-extra
     teamcity-agent: gamedev-teamcity-agent-k8s-node-3
+    storage-role: durable-state
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: microk8s-hostpath
+  storageClassName: longhorn-r2-local
   resources:
     requests:
-      storage: 30Gi
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teamcity-agent-k8s-node-3-cache-pvc
+  namespace: gamedev
+  labels:
+    app: teamcity-agent-extra
+    teamcity-agent: gamedev-teamcity-agent-k8s-node-3
+    storage-role: disposable-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn-ci-cache
+  resources:
+    requests:
+      storage: 80Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -149,17 +265,20 @@ spec:
         kubernetes.io/hostname: k8s-node-3
       securityContext:
         runAsUser: 0
+      terminationGracePeriodSeconds: 60
       initContainers:
         - name: prepare-agent-data
           image: jetbrains/teamcity-agent:latest-linux-sudo
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
-            - -c
-            - mkdir -p /agent-data/conf /agent-data/work /agent-data/temp /agent-data/tools /agent-data/plugins /agent-data/system /agent-data/logs /agent-data/docker
+            - -ec
+            - mkdir -p /agent-state/conf /agent-cache/work /agent-cache/temp /agent-cache/tools /agent-cache/plugins /agent-cache/system /agent-cache/logs /agent-cache/docker
           volumeMounts:
-            - mountPath: /agent-data
-              name: agent-data
+            - mountPath: /agent-state
+              name: agent-state
+            - mountPath: /agent-cache
+              name: agent-cache
       containers:
         - name: teamcity-agent
           image: jetbrains/teamcity-agent:latest-linux-sudo
@@ -171,27 +290,34 @@ spec:
               value: gamedev-teamcity-agent-k8s-node-3
             - name: DOCKER_HOST
               value: tcp://localhost:2375
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+            limits:
+              ephemeral-storage: 2Gi
           volumeMounts:
             - mountPath: /data/teamcity_agent/conf
-              name: agent-data
+              name: agent-state
               subPath: conf
             - mountPath: /opt/buildagent/work
-              name: agent-data
+              name: agent-cache
               subPath: work
             - mountPath: /opt/buildagent/temp
-              name: agent-data
+              name: agent-cache
               subPath: temp
             - mountPath: /opt/buildagent/tools
-              name: agent-data
+              name: agent-cache
               subPath: tools
             - mountPath: /opt/buildagent/plugins
-              name: agent-data
+              name: agent-cache
               subPath: plugins
             - mountPath: /opt/buildagent/system
-              name: agent-data
+              name: agent-cache
               subPath: system
             - mountPath: /opt/buildagent/logs
-              name: agent-data
+              name: agent-cache
               subPath: logs
         - name: docker-dind
           image: docker:29-dind
@@ -207,30 +333,100 @@ spec:
               value: ""
           securityContext:
             privileged: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 512Mi
+            limits:
+              ephemeral-storage: 2Gi
+          readinessProbe:
+            exec:
+              command:
+                - docker
+                - info
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
           volumeMounts:
             - mountPath: /var/lib/docker
-              name: agent-data
+              name: agent-cache
               subPath: docker
+            - mountPath: /etc/docker/daemon.json
+              name: docker-daemon-config
+              subPath: daemon.json
+              readOnly: true
+        - name: docker-gc
+          image: docker:29-cli
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              until docker info >/dev/null 2>&1; do sleep 5; done
+              while true; do
+                docker image prune -af --filter "until=168h" || true
+                docker builder prune -af --max-used-space 20GB || true
+                sleep 21600
+              done
+          env:
+            - name: DOCKER_HOST
+              value: tcp://localhost:2375
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+              ephemeral-storage: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 128Mi
       volumes:
-        - name: agent-data
+        - name: agent-state
           persistentVolumeClaim:
-            claimName: teamcity-agent-k8s-node-3-pvc
+            claimName: teamcity-agent-k8s-node-3-state-pvc
+        - name: agent-cache
+          persistentVolumeClaim:
+            claimName: teamcity-agent-k8s-node-3-cache-pvc
+        - name: docker-daemon-config
+          configMap:
+            name: teamcity-docker-daemon-config
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: teamcity-agent-new-node-pvc
+  name: teamcity-agent-new-node-state-pvc
   namespace: gamedev
   labels:
     app: teamcity-agent-extra
     teamcity-agent: gamedev-teamcity-agent-new-node
+    storage-role: durable-state
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: microk8s-hostpath
+  storageClassName: longhorn-r2-local
   resources:
     requests:
-      storage: 30Gi
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teamcity-agent-new-node-cache-pvc
+  namespace: gamedev
+  labels:
+    app: teamcity-agent-extra
+    teamcity-agent: gamedev-teamcity-agent-new-node
+    storage-role: disposable-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn-ci-cache
+  resources:
+    requests:
+      storage: 80Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -258,17 +454,20 @@ spec:
         kubernetes.io/hostname: new-node
       securityContext:
         runAsUser: 0
+      terminationGracePeriodSeconds: 60
       initContainers:
         - name: prepare-agent-data
           image: jetbrains/teamcity-agent:latest-linux-sudo
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
-            - -c
-            - mkdir -p /agent-data/conf /agent-data/work /agent-data/temp /agent-data/tools /agent-data/plugins /agent-data/system /agent-data/logs /agent-data/docker
+            - -ec
+            - mkdir -p /agent-state/conf /agent-cache/work /agent-cache/temp /agent-cache/tools /agent-cache/plugins /agent-cache/system /agent-cache/logs /agent-cache/docker
           volumeMounts:
-            - mountPath: /agent-data
-              name: agent-data
+            - mountPath: /agent-state
+              name: agent-state
+            - mountPath: /agent-cache
+              name: agent-cache
       containers:
         - name: teamcity-agent
           image: jetbrains/teamcity-agent:latest-linux-sudo
@@ -280,27 +479,34 @@ spec:
               value: gamedev-teamcity-agent-new-node
             - name: DOCKER_HOST
               value: tcp://localhost:2375
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+            limits:
+              ephemeral-storage: 2Gi
           volumeMounts:
             - mountPath: /data/teamcity_agent/conf
-              name: agent-data
+              name: agent-state
               subPath: conf
             - mountPath: /opt/buildagent/work
-              name: agent-data
+              name: agent-cache
               subPath: work
             - mountPath: /opt/buildagent/temp
-              name: agent-data
+              name: agent-cache
               subPath: temp
             - mountPath: /opt/buildagent/tools
-              name: agent-data
+              name: agent-cache
               subPath: tools
             - mountPath: /opt/buildagent/plugins
-              name: agent-data
+              name: agent-cache
               subPath: plugins
             - mountPath: /opt/buildagent/system
-              name: agent-data
+              name: agent-cache
               subPath: system
             - mountPath: /opt/buildagent/logs
-              name: agent-data
+              name: agent-cache
               subPath: logs
         - name: docker-dind
           image: docker:29-dind
@@ -316,11 +522,63 @@ spec:
               value: ""
           securityContext:
             privileged: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 512Mi
+            limits:
+              ephemeral-storage: 2Gi
+          readinessProbe:
+            exec:
+              command:
+                - docker
+                - info
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
           volumeMounts:
             - mountPath: /var/lib/docker
-              name: agent-data
+              name: agent-cache
               subPath: docker
+            - mountPath: /etc/docker/daemon.json
+              name: docker-daemon-config
+              subPath: daemon.json
+              readOnly: true
+        - name: docker-gc
+          image: docker:29-cli
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              until docker info >/dev/null 2>&1; do sleep 5; done
+              while true; do
+                docker image prune -af --filter "until=168h" || true
+                docker builder prune -af --max-used-space 20GB || true
+                sleep 21600
+              done
+          env:
+            - name: DOCKER_HOST
+              value: tcp://localhost:2375
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+              ephemeral-storage: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 128Mi
       volumes:
-        - name: agent-data
+        - name: agent-state
           persistentVolumeClaim:
-            claimName: teamcity-agent-new-node-pvc
+            claimName: teamcity-agent-new-node-state-pvc
+        - name: agent-cache
+          persistentVolumeClaim:
+            claimName: teamcity-agent-new-node-cache-pvc
+        - name: docker-daemon-config
+          configMap:
+            name: teamcity-docker-daemon-config
