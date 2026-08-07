@@ -140,3 +140,32 @@ async def test_timed_out_upload_reconciles_without_waiting_for_task_cleanup(
     )
 
     assert upload_started.is_set()
+
+
+@pytest.mark.asyncio
+async def test_progress_publish_timeout_does_not_block_durable_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publish_started = asyncio.Event()
+
+    class HangingEventBus:
+        def __init__(self, _: object) -> None:
+            pass
+
+        async def publish_work(self, *_: object) -> str:
+            publish_started.set()
+            await asyncio.Event().wait()
+            return "unused"
+
+    monkeypatch.setattr(work_run_service, "RedisEventBus", HangingEventBus)
+    monkeypatch.setattr(work_run_service, "_EVENT_PUBLISH_TIMEOUT_SECONDS", 0.01)
+    run = SimpleNamespace(
+        id="run-id",
+        status="storing",
+        stage="storing_artifact",
+        progress_percent=90,
+    )
+
+    await work_run_service._publish(object(), run, "work.stage")
+
+    assert publish_started.is_set()

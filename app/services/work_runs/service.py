@@ -104,6 +104,15 @@ def _consume_background_task_result(task: asyncio.Task[None]) -> None:
         logger.exception("background artifact upload failed after timeout")
 
 
+def _consume_publish_task_result(task: asyncio.Task[str]) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        logger.exception("work-run progress publication failed after timeout")
+
+
 async def _upload_artifact_with_reconciliation(
     *,
     bucket: str,
@@ -554,26 +563,32 @@ async def artifact_download(
 
 
 async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
-    try:
-        await asyncio.wait_for(
-            RedisEventBus(redis).publish_work(
-                str(run.id),
-                {
-                    "type": event_type,
-                    "work_run_id": str(run.id),
-                    "status": run.status,
-                    "stage": run.stage,
-                    "progress_percent": run.progress_percent,
-                    "occurred_at": datetime.now(timezone.utc).isoformat(),
-                },
-            ),
-            timeout=_EVENT_PUBLISH_TIMEOUT_SECONDS,
+    publish_task = asyncio.create_task(
+        RedisEventBus(redis).publish_work(
+            str(run.id),
+            {
+                "type": event_type,
+                "work_run_id": str(run.id),
+                "status": run.status,
+                "stage": run.stage,
+                "progress_percent": run.progress_percent,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
-    except TimeoutError:
-        logger.warning(
-            "work-run progress publication timed out",
-            extra={"work_run_id": str(run.id), "event_type": event_type},
-        )
+    )
+    done, _ = await asyncio.wait(
+        {publish_task},
+        timeout=_EVENT_PUBLISH_TIMEOUT_SECONDS,
+    )
+    if publish_task in done:
+        await publish_task
+        return
+    publish_task.cancel()
+    publish_task.add_done_callback(_consume_publish_task_result)
+    logger.warning(
+        "work-run progress publication timed out",
+        extra={"work_run_id": str(run.id), "event_type": event_type},
+    )
 
 
 async def process_comparison_run(
