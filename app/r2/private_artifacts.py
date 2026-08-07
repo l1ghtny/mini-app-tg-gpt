@@ -26,9 +26,13 @@ def get_private_artifacts_bucket() -> str:
 
 
 def build_artifact_key(
-    *, user_id: uuid.UUID, work_run_id: uuid.UUID, artifact_id: uuid.UUID
+    *,
+    user_id: uuid.UUID,
+    work_run_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    version: int = 1,
 ) -> str:
-    return f"artifacts/{user_id}/{work_run_id}/{artifact_id}/comparison-v1.xlsx"
+    return f"artifacts/{user_id}/{work_run_id}/{artifact_id}/comparison-v{version}.xlsx"
 
 
 @lru_cache(maxsize=1)

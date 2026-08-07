@@ -46,7 +46,9 @@ from app.redis.event_bus import RedisEventBus
 from app.schemas.work_runs import (
     ArtifactDownloadResponse,
     ArtifactResponse,
+    ArtifactSourceResponse,
     CreateWorkRunRequest,
+    ReviseArtifactRequest,
     WorkRunCapabilitiesResponse,
     WorkRunListResponse,
     WorkRunResponse,
@@ -313,6 +315,8 @@ async def create_run(
     request: CreateWorkRunRequest,
     client_request_id: str,
     retry_of_work_run_id: uuid.UUID | None = None,
+    revision_of_artifact_id: uuid.UUID | None = None,
+    artifact_version: int = 1,
 ) -> WorkRun:
     existing = (
         await session.exec(
@@ -447,6 +451,9 @@ async def create_run(
     }
     if retry_of_work_run_id is not None:
         input_manifest["retry_of_work_run_id"] = str(retry_of_work_run_id)
+    if revision_of_artifact_id is not None:
+        input_manifest["revision_of_artifact_id"] = str(revision_of_artifact_id)
+        input_manifest["artifact_version"] = artifact_version
     run = WorkRun(
         id=run_id,
         user_id=user.id,
@@ -546,6 +553,73 @@ async def retry_run(
     return retried
 
 
+async def create_artifact_revision(
+    *,
+    session: AsyncSession,
+    user: AppUser,
+    artifact: Artifact,
+    revision: ReviseArtifactRequest,
+    client_request_id: str,
+) -> WorkRun:
+    source = await owned_run(session, user.id, artifact.work_run_id)
+    if (
+        source.status != WorkRunStatus.SUCCEEDED.value
+        or artifact.status != "ready"
+        or artifact.deleted_at is not None
+    ):
+        raise _work_error(
+            WorkRunErrorCode.REVISION_NOT_ALLOWED,
+            status.HTTP_409_CONFLICT,
+        )
+
+    existing = (
+        await session.exec(
+            select(WorkRun).where(
+                WorkRun.user_id == user.id,
+                WorkRun.client_request_id == client_request_id,
+            )
+        )
+    ).first()
+    if existing:
+        if existing.input_manifest.get("revision_of_artifact_id") != str(artifact.id):
+            raise _work_error(
+                WorkRunErrorCode.INVALID_INPUT,
+                status.HTTP_409_CONFLICT,
+            )
+        return existing
+
+    combined_instructions = revision.instructions
+    if source.instructions:
+        combined_instructions = (
+            f"{source.instructions}\n\nRevision request:\n{revision.instructions}"
+        )
+    try:
+        request = CreateWorkRunRequest.model_validate(
+            {
+                "kind": source.kind,
+                "conversation_id": source.conversation_id,
+                "folder_id": source.folder_id,
+                "document_ids": source.input_manifest["document_ids"],
+                "instructions": combined_instructions,
+                "options": source.options,
+            }
+        )
+    except (KeyError, ValueError) as exc:
+        raise _work_error(
+            WorkRunErrorCode.REVISION_NOT_ALLOWED,
+            status.HTTP_409_CONFLICT,
+        ) from exc
+
+    return await create_run(
+        session=session,
+        user=user,
+        request=request,
+        client_request_id=client_request_id,
+        revision_of_artifact_id=artifact.id,
+        artifact_version=artifact.version + 1,
+    )
+
+
 async def owned_run(
     session: AsyncSession, user_id: uuid.UUID, run_id: uuid.UUID
 ) -> WorkRun:
@@ -561,6 +635,27 @@ async def owned_run(
     return run
 
 
+async def owned_artifact(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+) -> Artifact:
+    artifact = (
+        await session.exec(
+            select(Artifact).where(
+                Artifact.id == artifact_id,
+                Artifact.user_id == user_id,
+            )
+        )
+    ).first()
+    if artifact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="artifact_not_found",
+        )
+    return artifact
+
+
 async def _artifacts(session: AsyncSession, run: WorkRun) -> list[Artifact]:
     return list(
         (
@@ -573,10 +668,39 @@ async def _artifacts(session: AsyncSession, run: WorkRun) -> list[Artifact]:
     )
 
 
-def artifact_response(artifact: Artifact) -> ArtifactResponse:
+async def _artifact_sources(
+    session: AsyncSession,
+    artifacts: list[Artifact],
+) -> dict[uuid.UUID, list[ArtifactSource]]:
+    sources_by_artifact: dict[uuid.UUID, list[ArtifactSource]] = {
+        artifact.id: [] for artifact in artifacts
+    }
+    if not artifacts:
+        return sources_by_artifact
+    sources = (
+        await session.exec(
+            select(ArtifactSource)
+            .where(
+                col(ArtifactSource.artifact_id).in_(
+                    [artifact.id for artifact in artifacts]
+                )
+            )
+            .order_by(ArtifactSource.artifact_id, ArtifactSource.ordinal)
+        )
+    ).all()
+    for source in sources:
+        sources_by_artifact[source.artifact_id].append(source)
+    return sources_by_artifact
+
+
+def artifact_response(
+    artifact: Artifact,
+    sources: list[ArtifactSource] | None = None,
+) -> ArtifactResponse:
     return ArtifactResponse(
         id=artifact.id,
         work_run_id=artifact.work_run_id,
+        parent_artifact_id=artifact.parent_artifact_id,
         version=artifact.version,
         kind=artifact.kind,
         status=artifact.status,
@@ -585,16 +709,32 @@ def artifact_response(artifact: Artifact) -> ArtifactResponse:
         size_bytes=artifact.size_bytes,
         sha256=artifact.sha256,
         metadata=artifact.artifact_metadata,
+        sources=[
+            ArtifactSourceResponse(
+                document_id=source.document_id,
+                title=source.title,
+                sheet_name=source.sheet_name,
+                row_start=source.row_start,
+                row_end=source.row_end,
+                ordinal=source.ordinal,
+            )
+            for source in (sources or [])
+        ],
         created_at=artifact.created_at,
     )
 
 
 async def run_response(session: AsyncSession, run: WorkRun) -> WorkRunResponse:
     artifacts = await _artifacts(session, run)
-    return _run_response(run, artifacts)
+    sources_by_artifact = await _artifact_sources(session, artifacts)
+    return _run_response(run, artifacts, sources_by_artifact)
 
 
-def _run_response(run: WorkRun, artifacts: list[Artifact]) -> WorkRunResponse:
+def _run_response(
+    run: WorkRun,
+    artifacts: list[Artifact],
+    sources_by_artifact: dict[uuid.UUID, list[ArtifactSource]] | None = None,
+) -> WorkRunResponse:
     retry_of_work_run_id = run.input_manifest.get("retry_of_work_run_id")
     return WorkRunResponse(
         id=run.id,
@@ -622,7 +762,13 @@ def _run_response(run: WorkRun, artifacts: list[Artifact]) -> WorkRunResponse:
         cancelled_at=run.cancelled_at,
         created_at=run.created_at,
         updated_at=run.updated_at,
-        artifacts=[artifact_response(artifact) for artifact in artifacts],
+        artifacts=[
+            artifact_response(
+                artifact,
+                (sources_by_artifact or {}).get(artifact.id, []),
+            )
+            for artifact in artifacts
+        ],
     )
 
 
@@ -664,9 +810,17 @@ async def list_run_responses(
     artifacts_by_run: dict[uuid.UUID, list[Artifact]] = {run.id: [] for run in runs}
     for artifact in artifacts:
         artifacts_by_run[artifact.work_run_id].append(artifact)
+    sources_by_artifact = await _artifact_sources(session, artifacts)
 
     return WorkRunListResponse(
-        items=[_run_response(run, artifacts_by_run[run.id]) for run in runs],
+        items=[
+            _run_response(
+                run,
+                artifacts_by_run[run.id],
+                sources_by_artifact,
+            )
+            for run in runs
+        ],
         offset=offset,
         limit=limit,
         has_more=has_more,
@@ -1236,7 +1390,23 @@ async def process_comparison_run(
             return
         rendered_size_bytes = output_path.stat().st_size
         sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
-        artifact_id = uuid.uuid5(run.id, "artifact-v1")
+        try:
+            artifact_version = int(run.input_manifest.get("artifact_version", 1))
+            revision_of_artifact_id = run.input_manifest.get("revision_of_artifact_id")
+            parent_artifact_id = (
+                uuid.UUID(revision_of_artifact_id) if revision_of_artifact_id else None
+            )
+        except (TypeError, ValueError) as exc:
+            raise WorkRunExecutionError(
+                WorkRunErrorCode.INVALID_INPUT,
+                "invalid artifact revision lineage",
+            ) from exc
+        if artifact_version < 1:
+            raise WorkRunExecutionError(
+                WorkRunErrorCode.INVALID_INPUT,
+                "invalid artifact version",
+            )
+        artifact_id = uuid.uuid5(run.id, f"artifact-v{artifact_version}")
         artifact = await session.get(Artifact, artifact_id)
         if artifact is None:
             artifact = Artifact(
@@ -1245,10 +1415,15 @@ async def process_comparison_run(
                 user_id=run.user_id,
                 conversation_id=run.conversation_id,
                 folder_id=run.folder_id,
-                version=1,
+                parent_artifact_id=parent_artifact_id,
+                version=artifact_version,
                 kind="offer_comparison_xlsx",
                 status="rendering",
-                filename="offer-comparison.xlsx",
+                filename=(
+                    "offer-comparison.xlsx"
+                    if artifact_version == 1
+                    else f"offer-comparison-v{artifact_version}.xlsx"
+                ),
                 mime_type=_ARTIFACT_MIME,
                 size_bytes=rendered_size_bytes,
                 sha256=sha256,
@@ -1260,6 +1435,9 @@ async def process_comparison_run(
                     "normalization_version": 1 if run.kind_version >= 2 else 0,
                     "normalization_mode": (
                         "model" if "normalization_v1" in run.input_manifest else "exact"
+                    ),
+                    "revision_of_artifact_id": (
+                        str(parent_artifact_id) if parent_artifact_id else None
                     ),
                 },
             )
@@ -1291,7 +1469,10 @@ async def process_comparison_run(
         await _publish(redis, run, "work.stage")
         bucket = get_private_artifacts_bucket()
         key = build_artifact_key(
-            user_id=run.user_id, work_run_id=run.id, artifact_id=artifact.id
+            user_id=run.user_id,
+            work_run_id=run.id,
+            artifact_id=artifact.id,
+            version=artifact.version,
         )
         stored_size_bytes, stored_sha256 = _artifact_storage_identity(
             artifact,

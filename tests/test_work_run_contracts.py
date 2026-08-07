@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from app.core.work_run_settings import WorkRunDeploymentGate
 from app.schemas.work_runs import (
     CreateWorkRunRequest,
+    ReviseArtifactRequest,
     WorkRunAcceptedResponse,
     WorkRunListResponse,
 )
@@ -175,3 +176,11 @@ def test_work_run_list_response_exposes_stable_pagination_metadata() -> None:
     assert response.offset == 20
     assert response.limit == 20
     assert response.has_more is True
+
+
+def test_revision_instructions_are_trimmed_and_cannot_be_blank() -> None:
+    request = ReviseArtifactRequest(instructions="  Use shorter headers  ")
+    assert request.instructions == "Use shorter headers"
+
+    with pytest.raises(ValidationError):
+        ReviseArtifactRequest(instructions="   ")

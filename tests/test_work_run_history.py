@@ -10,7 +10,7 @@ os.environ.setdefault("R2_ENDPOINT", "https://example.r2.cloudflarestorage.com")
 os.environ.setdefault("R2_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret-key")
 
-from app.db.models import Artifact, WorkRun
+from app.db.models import Artifact, ArtifactSource, WorkRun
 from app.services.work_runs import service
 
 
@@ -58,7 +58,16 @@ async def test_work_run_history_is_paginated_and_includes_owned_artifacts() -> N
         mime_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         size_bytes=7125,
     )
-    session = _Session([[first, second, lookahead], [artifact]])
+    source = ArtifactSource(
+        artifact_id=artifact.id,
+        document_id=uuid.uuid4(),
+        title="offer-a.csv",
+        sheet_name="CSV",
+        row_start=2,
+        row_end=3,
+        ordinal=0,
+    )
+    session = _Session([[first, second, lookahead], [artifact], [source]])
 
     response = await service.list_run_responses(
         session,  # type: ignore[arg-type]
@@ -69,6 +78,8 @@ async def test_work_run_history_is_paginated_and_includes_owned_artifacts() -> N
 
     assert [item.id for item in response.items] == [first.id, second.id]
     assert response.items[0].artifacts[0].id == artifact.id
+    assert response.items[0].artifacts[0].sources[0].title == "offer-a.csv"
+    assert response.items[0].artifacts[0].sources[0].row_start == 2
     assert response.items[1].artifacts == []
     assert response.has_more is True
     assert response.offset == 0

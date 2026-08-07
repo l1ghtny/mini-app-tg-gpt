@@ -86,9 +86,33 @@ class WorkRunErrorResponse(BaseModel):
     retryable: bool = False
 
 
+class ReviseArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instructions: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("instructions")
+    @classmethod
+    def normalize_instructions(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("revision instructions cannot be blank")
+        return value
+
+
+class ArtifactSourceResponse(BaseModel):
+    document_id: uuid.UUID | None
+    title: str | None
+    sheet_name: str | None
+    row_start: int | None
+    row_end: int | None
+    ordinal: int
+
+
 class ArtifactResponse(BaseModel):
     id: uuid.UUID
     work_run_id: uuid.UUID
+    parent_artifact_id: uuid.UUID | None
     version: int
     kind: str
     status: str
@@ -97,6 +121,7 @@ class ArtifactResponse(BaseModel):
     size_bytes: int
     sha256: str | None = None
     metadata: dict = Field(default_factory=dict)
+    sources: list[ArtifactSourceResponse] = Field(default_factory=list)
     created_at: datetime
     download_url: str | None = None
 

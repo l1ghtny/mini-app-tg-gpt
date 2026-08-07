@@ -40,6 +40,7 @@ class WorkRunErrorCode(StrEnum):
     STORAGE_FAILED = "work_run_storage_failed"
     CANCEL_TOO_LATE = "work_run_cancel_too_late"
     RETRY_NOT_ALLOWED = "work_run_retry_not_allowed"
+    REVISION_NOT_ALLOWED = "work_run_revision_not_allowed"
     CANCELLED = "work_run_cancelled"
     INTERNAL_ERROR = "work_run_internal_error"
 

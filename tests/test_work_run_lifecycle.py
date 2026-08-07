@@ -15,6 +15,7 @@ os.environ.setdefault("R2_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret-key")
 
 from app.db.models import State
+from app.schemas.work_runs import ReviseArtifactRequest
 from app.services.work_runs import service
 from app.services.work_runs.contracts import WorkRunErrorCode, WorkRunStatus
 
@@ -234,3 +235,67 @@ async def test_failure_preserves_specific_execution_error_code(
     assert run.error_code == WorkRunErrorCode.PROVIDER_AMBIGUOUS.value
     assert ledger.state == State.refunded
     publish.assert_awaited_once_with(redis, run, "work.error")
+
+
+@pytest.mark.asyncio
+async def test_artifact_revision_reuses_sources_and_records_immutable_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source_run(WorkRunStatus.SUCCEEDED)
+    artifact = SimpleNamespace(
+        id=uuid.uuid4(),
+        work_run_id=source.id,
+        version=1,
+        status="ready",
+        deleted_at=None,
+    )
+    revised = SimpleNamespace(id=uuid.uuid4())
+    create_run = AsyncMock(return_value=revised)
+    monkeypatch.setattr(service, "owned_run", AsyncMock(return_value=source))
+    monkeypatch.setattr(service, "create_run", create_run)
+
+    result = await service.create_artifact_revision(
+        session=_Session(),  # type: ignore[arg-type]
+        user=SimpleNamespace(id=uuid.uuid4()),
+        artifact=artifact,
+        revision=ReviseArtifactRequest(instructions="Use shorter headers"),
+        client_request_id="revision-request-1",
+    )
+
+    assert result is revised
+    request = create_run.await_args.kwargs["request"]
+    assert request.document_ids == [
+        uuid.UUID(value) for value in source.input_manifest["document_ids"]
+    ]
+    assert "Keep delivery terms visible" in request.instructions
+    assert "Use shorter headers" in request.instructions
+    assert create_run.await_args.kwargs["revision_of_artifact_id"] == artifact.id
+    assert create_run.await_args.kwargs["artifact_version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_artifact_revision_rejects_non_successful_source_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source_run(WorkRunStatus.FAILED)
+    monkeypatch.setattr(service, "owned_run", AsyncMock(return_value=source))
+
+    with pytest.raises(HTTPException) as error:
+        await service.create_artifact_revision(
+            session=_Session(),  # type: ignore[arg-type]
+            user=SimpleNamespace(id=uuid.uuid4()),
+            artifact=SimpleNamespace(
+                id=uuid.uuid4(),
+                work_run_id=source.id,
+                version=1,
+                status="ready",
+                deleted_at=None,
+            ),
+            revision=ReviseArtifactRequest(instructions="Use shorter headers"),
+            client_request_id="revision-request-2",
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail == {
+        "error_code": WorkRunErrorCode.REVISION_NOT_ALLOWED.value
+    }

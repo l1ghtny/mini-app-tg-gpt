@@ -15,6 +15,7 @@ from app.redis.event_bus import RedisEventBus
 from app.schemas.work_runs import (
     ArtifactDownloadResponse,
     CreateWorkRunRequest,
+    ReviseArtifactRequest,
     WorkRunAcceptedResponse,
     WorkRunCapabilitiesResponse,
     WorkRunListResponse,
@@ -218,3 +219,44 @@ async def download_artifact(
     current_user: AppUser = Depends(get_current_user),
 ):
     return await service.artifact_download(session, current_user.id, artifact_id)
+
+
+@work_runs.post(
+    "/artifacts/{artifact_id}/revisions",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=WorkRunAcceptedResponse,
+)
+async def revise_artifact(
+    artifact_id: uuid.UUID,
+    payload: ReviseArtifactRequest,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=128
+    ),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+):
+    artifact = await service.owned_artifact(session, current_user.id, artifact_id)
+    run = await service.create_artifact_revision(
+        session=session,
+        user=current_user,
+        artifact=artifact,
+        revision=payload,
+        client_request_id=idempotency_key,
+    )
+    await RedisEventBus(redis).publish_work(
+        str(run.id),
+        {
+            "type": "work.queued",
+            "work_run_id": str(run.id),
+            "status": run.status,
+            "stage": run.stage,
+            "progress_percent": run.progress_percent,
+        },
+    )
+    return WorkRunAcceptedResponse(
+        id=run.id,
+        status=WorkRunStatus(run.status),
+        stage=run.stage,
+        stream_url=f"/api/v1/work-runs/{run.id}/stream",
+    )

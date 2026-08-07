@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +32,21 @@ class _FakeS3Client:
     def head_object(self, **_: object) -> dict[str, object]:
         assert self.head_response is not None
         return self.head_response
+
+
+def test_artifact_key_keeps_revision_versions_distinct() -> None:
+    user_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    artifact_id = uuid.uuid4()
+
+    key = private_artifacts.build_artifact_key(
+        user_id=user_id,
+        work_run_id=run_id,
+        artifact_id=artifact_id,
+        version=3,
+    )
+
+    assert key.endswith("/comparison-v3.xlsx")
 
 
 @pytest.mark.asyncio
