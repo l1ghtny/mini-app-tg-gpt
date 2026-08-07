@@ -66,7 +66,7 @@ def test_registry_exposes_only_the_first_beta_workflow() -> None:
     )
 
     definition = get_work_run_definition(WorkRunKind.OFFER_COMPARISON_XLSX)
-    assert definition.version == 1
+    assert definition.version == 2
     assert definition.min_documents == 2
     assert definition.max_documents == 5
     assert definition.accepted_extensions == frozenset({".csv", ".xlsx"})

@@ -25,6 +25,7 @@ from app.db.models import (
     ArtifactSource,
     ChatFolder,
     Conversation,
+    ProviderOperation,
     RequestLedger,
     State,
     UserDocument,
@@ -50,9 +51,22 @@ from app.schemas.work_runs import (
     WorkRunResponse,
 )
 from app.services.work_runs.comparison import (
+    ComparisonColumnSchema,
+    SourceTable,
     load_source_tables,
     render_comparison_workbook,
     validate_rendered_workbook,
+)
+from app.services.work_runs.normalization import (
+    ComparisonNormalizationResponseError,
+    NORMALIZATION_MODEL,
+    NormalizationUsage,
+    estimate_comparison_normalization_usage,
+    normalize_comparison_columns,
+    normalization_usage,
+    requires_model_normalization,
+    restore_comparison_column_schema,
+    serialize_comparison_column_schema,
 )
 from app.services.work_runs.contracts import (
     WorkRunErrorCode,
@@ -66,6 +80,7 @@ from app.services.work_runs.telemetry import (
     record_work_run_event,
     record_work_run_retry,
 )
+from app.services.pricing_service import PricingService
 
 
 _ACTIVE_STATUSES = (
@@ -88,6 +103,12 @@ _ARTIFACT_STORAGE_TIMEOUT_SECONDS = 90
 _ARTIFACT_STORAGE_CALL_TIMEOUT_SECONDS = 100
 _EVENT_PUBLISH_TIMEOUT_SECONDS = 5
 logger = logging.getLogger(__name__)
+
+
+class WorkRunExecutionError(RuntimeError):
+    def __init__(self, code: WorkRunErrorCode, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _artifact_storage_identity(
@@ -200,6 +221,13 @@ async def _store_artifact_in_subprocess(
 def _month_start() -> datetime:
     now = datetime.now(timezone.utc)
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc).replace(tzinfo=None)
+
+
+def _day_start() -> datetime:
+    now = datetime.now(timezone.utc)
+    return datetime(now.year, now.month, now.day, tzinfo=timezone.utc).replace(
+        tzinfo=None
+    )
 
 
 def _gate() -> WorkRunDeploymentGate:
@@ -760,6 +788,299 @@ async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
     publish_task.add_done_callback(_consume_publish_task_result)
 
 
+def _provider_failure_is_ambiguous(error: Exception) -> bool:
+    if isinstance(error, ComparisonNormalizationResponseError):
+        return False
+    if type(error).__name__ in {"APIConnectionError", "APITimeoutError"}:
+        return True
+    status_code = getattr(error, "status_code", None)
+    return isinstance(status_code, int) and status_code >= 500
+
+
+def _provider_request_id(value: object) -> str | None:
+    for attribute in ("_request_id", "request_id"):
+        request_id = getattr(value, attribute, None)
+        if isinstance(request_id, str) and request_id:
+            return request_id
+    response = getattr(value, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers:
+        request_id = headers.get("x-request-id") or headers.get("x-request_id")
+        if isinstance(request_id, str) and request_id:
+            return request_id
+    return None
+
+
+async def _normalization_cost(
+    session: AsyncSession,
+    *,
+    model: str,
+    usage: NormalizationUsage,
+) -> tuple[Decimal, dict[str, object]]:
+    pricing_service = PricingService(session)
+    pricing = await pricing_service.get_pricing("openai", model)
+    if pricing is None or pricing.currency.upper() != "USD":
+        raise WorkRunExecutionError(
+            WorkRunErrorCode.INTERNAL_ERROR,
+            "normalization model USD pricing is unavailable",
+        )
+    cached_input_tokens = max(
+        0,
+        min(usage.cached_input_tokens, usage.input_tokens),
+    )
+    uncached_input_tokens = max(0, usage.input_tokens - cached_input_tokens)
+    cached_input_rate = (
+        pricing.unit_price_cached_input_per_1m
+        if pricing.unit_price_cached_input_per_1m is not None
+        else pricing.unit_price_input_per_1m
+    )
+    cost_input = pricing_service.cost_per_1m(
+        pricing.unit_price_input_per_1m,
+        uncached_input_tokens,
+    )
+    cost_cached_input = pricing_service.cost_per_1m(
+        cached_input_rate,
+        cached_input_tokens,
+    )
+    cost_output = pricing_service.cost_per_1m(
+        pricing.unit_price_output_per_1m,
+        usage.output_tokens,
+    )
+    cost_reasoning = pricing_service.cost_per_1m(
+        pricing.unit_price_reasoning_per_1m,
+        usage.reasoning_tokens,
+    )
+    total_cost = (
+        cost_input + cost_cached_input + cost_output + cost_reasoning
+    ).quantize(Decimal("0.000001"))
+    return total_cost, {
+        "model": model,
+        "currency": pricing.currency,
+        "pricing_id": str(pricing.id),
+        "unit_price_input_per_1m": str(pricing.unit_price_input_per_1m),
+        "unit_price_cached_input_per_1m": str(cached_input_rate),
+        "unit_price_output_per_1m": str(pricing.unit_price_output_per_1m),
+        "unit_price_reasoning_per_1m": str(pricing.unit_price_reasoning_per_1m),
+        "input_tokens": usage.input_tokens,
+        "cached_input_tokens": usage.cached_input_tokens,
+        "output_tokens": usage.output_tokens,
+        "reasoning_tokens": usage.reasoning_tokens,
+        "cost_input_usd": str(cost_input),
+        "cost_cached_input_usd": str(cost_cached_input),
+        "cost_output_usd": str(cost_output),
+        "cost_reasoning_usd": str(cost_reasoning),
+        "total_cost_usd": str(total_cost),
+    }
+
+
+async def _reserve_normalization_budget(
+    session: AsyncSession,
+    *,
+    run: WorkRun,
+    tables: tuple[SourceTable, ...],
+) -> tuple[Decimal, dict[str, object]]:
+    policy = (
+        await session.exec(
+            select(WorkRunPolicy)
+            .where(WorkRunPolicy.kind == run.kind)
+            .with_for_update()
+        )
+    ).first()
+    if policy is None or not policy.enabled:
+        raise WorkRunExecutionError(
+            WorkRunErrorCode.DISABLED,
+            "work-run policy is disabled",
+        )
+    estimated_usage = estimate_comparison_normalization_usage(
+        tables=tables,
+        instructions=run.instructions,
+        currency=run.options.get("currency"),
+        language=run.options.get("output_language", "ru"),
+    )
+    estimated_cost, usage_payload = await _normalization_cost(
+        session,
+        model=NORMALIZATION_MODEL,
+        usage=estimated_usage,
+    )
+    if estimated_cost <= 0:
+        raise WorkRunExecutionError(
+            WorkRunErrorCode.INTERNAL_ERROR,
+            "normalization model pricing is unavailable",
+        )
+    if estimated_cost > policy.per_run_budget_usd:
+        raise WorkRunExecutionError(
+            WorkRunErrorCode.PER_RUN_BUDGET_EXCEEDED,
+            "normalization estimate exceeds the per-run budget",
+        )
+
+    actual_today = (
+        await session.exec(
+            select(func.coalesce(func.sum(WorkRun.actual_cost_usd), 0)).where(
+                WorkRun.created_at >= _day_start()
+            )
+        )
+    ).one()
+    active_estimates = (
+        await session.exec(
+            select(func.coalesce(func.sum(WorkRun.estimated_cost_usd), 0)).where(
+                WorkRun.created_at >= _day_start(),
+                col(WorkRun.status).in_(_ACTIVE_STATUSES),
+                WorkRun.id != run.id,
+            )
+        )
+    ).one()
+    ambiguous_estimates = (
+        await session.exec(
+            select(
+                func.coalesce(func.sum(ProviderOperation.estimated_cost_usd), 0)
+            ).where(
+                ProviderOperation.created_at >= _day_start(),
+                ProviderOperation.status == "ambiguous",
+            )
+        )
+    ).one()
+    projected_daily_cost = (
+        Decimal(actual_today)
+        + Decimal(active_estimates)
+        + Decimal(ambiguous_estimates)
+        + estimated_cost
+    )
+    if projected_daily_cost > policy.global_daily_budget_usd:
+        raise WorkRunExecutionError(
+            WorkRunErrorCode.DAILY_BUDGET_EXCEEDED,
+            "normalization estimate exceeds the daily work-run budget",
+        )
+    return estimated_cost, usage_payload
+
+
+async def _normalize_columns_for_run(
+    *,
+    session: AsyncSession,
+    run: WorkRun,
+    tables: tuple[SourceTable, ...],
+) -> ComparisonColumnSchema:
+    if not requires_model_normalization(tables):
+        result = await normalize_comparison_columns(
+            tables=tables,
+            instructions=run.instructions,
+            currency=run.options.get("currency"),
+            language=run.options.get("output_language", "ru"),
+        )
+        return result.schema
+
+    operation_key = "normalize-columns-v1"
+    operation = (
+        await session.exec(
+            select(ProviderOperation).where(
+                ProviderOperation.work_run_id == run.id,
+                ProviderOperation.operation_key == operation_key,
+            )
+        )
+    ).first()
+    if operation is not None:
+        stored = run.input_manifest.get("normalization_v1")
+        if operation.status == "succeeded" and isinstance(stored, dict):
+            return restore_comparison_column_schema(
+                tables=tables,
+                payload=stored.get("schema"),
+            )
+        raise WorkRunExecutionError(
+            WorkRunErrorCode.PROVIDER_AMBIGUOUS,
+            "normalization operation already exists without a reusable result",
+        )
+
+    estimated_cost, estimated_usage = await _reserve_normalization_budget(
+        session,
+        run=run,
+        tables=tables,
+    )
+
+    operation = ProviderOperation(
+        work_run_id=run.id,
+        operation_key=operation_key,
+        provider="openai",
+        operation_kind="comparison_column_normalization",
+        status="running",
+        attempt_count=1,
+        usage={**estimated_usage, "estimate": True},
+        estimated_cost_usd=estimated_cost,
+        started_at=utcnow_naive(),
+    )
+    run.estimated_cost_usd = estimated_cost
+    session.add(run)
+    session.add(operation)
+    await session.commit()
+
+    try:
+        result = await normalize_comparison_columns(
+            tables=tables,
+            instructions=run.instructions,
+            currency=run.options.get("currency"),
+            language=run.options.get("output_language", "ru"),
+        )
+    except Exception as error:
+        operation.provider_request_id = _provider_request_id(error)
+        operation.completed_at = utcnow_naive()
+        if isinstance(error, ComparisonNormalizationResponseError):
+            response = error.response
+            usage = normalization_usage(response)
+            cost, usage_payload = await _normalization_cost(
+                session,
+                model=NORMALIZATION_MODEL,
+                usage=usage,
+            )
+            operation.provider_response_id = getattr(response, "id", None)
+            operation.provider_request_id = _provider_request_id(response)
+            operation.usage = usage_payload
+            operation.actual_cost_usd = cost
+            run.actual_cost_usd += cost
+            operation.status = "failed"
+            operation.error_code = WorkRunErrorCode.VALIDATION_FAILED.value
+            code = WorkRunErrorCode.VALIDATION_FAILED
+        else:
+            ambiguous = _provider_failure_is_ambiguous(error)
+            operation.status = "ambiguous" if ambiguous else "failed"
+            operation.error_code = (
+                WorkRunErrorCode.PROVIDER_AMBIGUOUS.value
+                if ambiguous
+                else WorkRunErrorCode.PROVIDER_FAILED.value
+            )
+            code = (
+                WorkRunErrorCode.PROVIDER_AMBIGUOUS
+                if ambiguous
+                else WorkRunErrorCode.PROVIDER_FAILED
+            )
+        session.add(operation)
+        session.add(run)
+        await session.commit()
+        raise WorkRunExecutionError(code, str(error)) from error
+
+    cost, usage_payload = await _normalization_cost(
+        session,
+        model=result.model,
+        usage=result.usage,
+    )
+    operation.status = "succeeded"
+    operation.provider_response_id = result.provider_response_id
+    operation.provider_request_id = result.provider_request_id
+    operation.usage = usage_payload
+    operation.actual_cost_usd = cost
+    operation.completed_at = utcnow_naive()
+    run.actual_cost_usd += cost
+    manifest = dict(run.input_manifest)
+    manifest["normalization_v1"] = {
+        "schema": serialize_comparison_column_schema(tables, result.schema),
+        "provider": "openai",
+        "model": result.model,
+        "response_id": result.provider_response_id,
+    }
+    run.input_manifest = manifest
+    session.add(operation)
+    session.add(run)
+    await session.commit()
+    return result.schema
+
+
 async def process_comparison_run(
     *, session: AsyncSession, redis: Redis, run: WorkRun, worker_id: str
 ) -> None:
@@ -823,6 +1144,17 @@ async def process_comparison_run(
         await session.commit()
         await _publish(redis, run, "work.stage")
 
+        column_schema = None
+        if run.kind_version >= 2:
+            column_schema = await _normalize_columns_for_run(
+                session=session,
+                run=run,
+                tables=tuple(tables),
+            )
+
+        if await _cancel_if_requested(session=session, redis=redis, run=run):
+            return
+
         run.stage = "rendering_artifact"
         run.progress_percent = 60
         session.add(run)
@@ -835,6 +1167,7 @@ async def process_comparison_run(
             language=run.options.get("output_language", "ru"),
             currency=run.options.get("currency"),
             instructions=run.instructions,
+            column_schema=column_schema,
         )
 
         if await _cancel_if_requested(session=session, redis=redis, run=run):
@@ -872,6 +1205,10 @@ async def process_comparison_run(
                     "columns": rendered.column_count,
                     "source_count": len(rendered.sources),
                     "renderer_version": 1,
+                    "normalization_version": 1 if run.kind_version >= 2 else 0,
+                    "normalization_mode": (
+                        "model" if "normalization_v1" in run.input_manifest else "exact"
+                    ),
                 },
             )
             session.add(artifact)
@@ -932,6 +1269,9 @@ async def process_comparison_run(
                 "rows": rendered.row_count,
                 "columns": rendered.column_count,
                 "sources": len(rendered.sources),
+                "normalization_mode": (
+                    "model" if "normalization_v1" in run.input_manifest else "exact"
+                ),
             },
             separators=(",", ":"),
         )
@@ -957,7 +1297,11 @@ async def fail_run(
         return
     run.status = WorkRunStatus.FAILED.value
     run.stage = "failed"
-    run.error_code = WorkRunErrorCode.INTERNAL_ERROR.value
+    run.error_code = (
+        error.code.value
+        if isinstance(error, WorkRunExecutionError)
+        else WorkRunErrorCode.INTERNAL_ERROR.value
+    )
     run.error_message = str(error)[:1000]
     run.completed_at = utcnow_naive()
     run.lease_expires_at = None

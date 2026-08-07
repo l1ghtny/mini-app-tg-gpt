@@ -5,6 +5,7 @@ import uuid
 from openpyxl import load_workbook
 
 from app.services.work_runs.comparison import (
+    ComparisonColumnSchema,
     load_source_tables,
     render_comparison_workbook,
     validate_rendered_workbook,
@@ -80,3 +81,52 @@ def test_comparison_reader_accepts_windows_1251_csv(tmp_path) -> None:
 
     assert tables[0].headers == ("Товар", "Цена")
     assert tables[0].rows == (("Чай", "100"),)
+
+
+def test_comparison_renderer_applies_validated_column_schema(tmp_path) -> None:
+    first_path = tmp_path / "offer-a.csv"
+    second_path = tmp_path / "offer-b.csv"
+    first_path.write_text("Наименование;Цена\nЧай;120\n", encoding="utf-8")
+    second_path.write_text("Товар;Стоимость\nЧай;110\n", encoding="utf-8")
+    first = load_source_tables(
+        document_id=uuid.uuid4(), filename="offer-a.csv", path=first_path
+    )[0]
+    second = load_source_tables(
+        document_id=uuid.uuid4(), filename="offer-b.csv", path=second_path
+    )[0]
+    schema = ComparisonColumnSchema(
+        canonical_headers=("Товар", "Цена"),
+        source_headers={
+            (first.document_id, first.sheet_name, "Наименование"): "Товар",
+            (first.document_id, first.sheet_name, "Цена"): "Цена",
+            (second.document_id, second.sheet_name, "Товар"): "Товар",
+            (second.document_id, second.sheet_name, "Стоимость"): "Цена",
+        },
+    )
+    target_path = tmp_path / "normalized.xlsx"
+
+    render_comparison_workbook(
+        tables=(first, second),
+        target_path=target_path,
+        language="ru",
+        currency="RUB",
+        instructions=None,
+        column_schema=schema,
+    )
+
+    workbook = load_workbook(target_path, data_only=False)
+    try:
+        comparison = workbook["Сравнение"]
+        assert [cell.value for cell in comparison[1]] == [
+            "Файл",
+            "Лист",
+            "Строка в источнике",
+            "Товар",
+            "Цена",
+        ]
+        assert comparison[2][3].value == "Чай"
+        assert comparison[2][4].value == "120"
+        assert comparison[3][3].value == "Чай"
+        assert comparison[3][4].value == "110"
+    finally:
+        workbook.close()

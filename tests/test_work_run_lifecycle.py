@@ -199,3 +199,38 @@ async def test_worker_honors_cancellation_marker_across_status_race(
 
     assert cancelled is True
     complete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failure_preserves_specific_execution_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = SimpleNamespace(state=State.reserved)
+    run = SimpleNamespace(
+        status=WorkRunStatus.RUNNING.value,
+        cancelled_at=None,
+        stage="normalizing_data",
+        error_code=None,
+        error_message=None,
+        completed_at=None,
+        lease_expires_at=datetime.now(),
+        request_ledger_id=uuid.uuid4(),
+    )
+    publish = AsyncMock()
+    redis = SimpleNamespace()
+    monkeypatch.setattr(service, "_publish", publish)
+
+    await service.fail_run(
+        session=_Session(ledger=ledger),  # type: ignore[arg-type]
+        redis=redis,
+        run=run,
+        error=service.WorkRunExecutionError(
+            WorkRunErrorCode.PROVIDER_AMBIGUOUS,
+            "provider result needs reconciliation",
+        ),
+    )
+
+    assert run.status == WorkRunStatus.FAILED.value
+    assert run.error_code == WorkRunErrorCode.PROVIDER_AMBIGUOUS.value
+    assert ledger.state == State.refunded
+    publish.assert_awaited_once_with(redis, run, "work.error")

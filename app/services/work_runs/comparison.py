@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -52,6 +52,21 @@ class RenderedComparison:
     row_count: int
     column_count: int
     sources: tuple[ComparisonSource, ...]
+
+
+@dataclass(frozen=True)
+class ComparisonColumnSchema:
+    canonical_headers: tuple[str, ...]
+    source_headers: Mapping[tuple[uuid.UUID, str, str], str]
+
+    def canonical_header(self, table: SourceTable, source_header: str) -> str:
+        key = (table.document_id, table.sheet_name, source_header)
+        try:
+            return self.source_headers[key]
+        except KeyError as exc:
+            raise ComparisonInputError(
+                "comparison schema does not map every source column"
+            ) from exc
 
 
 def _decode_csv(data: bytes) -> str:
@@ -208,6 +223,7 @@ def render_comparison_workbook(
     language: str,
     currency: str | None,
     instructions: str | None,
+    column_schema: ComparisonColumnSchema | None = None,
 ) -> RenderedComparison:
     if not tables:
         raise ComparisonInputError("at least one source table is required")
@@ -217,13 +233,31 @@ def render_comparison_workbook(
 
     labels = _localized_labels(language)
     ordered_headers: list[str] = []
-    canonical_headers: dict[str, str] = {}
-    for table in tables:
-        for header in table.headers:
-            key = header.casefold()
-            if key not in canonical_headers:
-                canonical_headers[key] = header
-                ordered_headers.append(header)
+    if column_schema is None:
+        canonical_headers: dict[str, str] = {}
+        for table in tables:
+            for header in table.headers:
+                key = header.casefold()
+                if key not in canonical_headers:
+                    canonical_headers[key] = header
+                    ordered_headers.append(header)
+    else:
+        ordered_headers.extend(column_schema.canonical_headers)
+        seen_headers: set[str] = set()
+        for header in ordered_headers:
+            normalized = header.casefold()
+            if not header.strip() or normalized in seen_headers:
+                raise ComparisonInputError(
+                    "comparison schema contains invalid canonical columns"
+                )
+            seen_headers.add(normalized)
+        for table in tables:
+            for source_header in table.headers:
+                canonical_header = column_schema.canonical_header(table, source_header)
+                if canonical_header.casefold() not in seen_headers:
+                    raise ComparisonInputError(
+                        "comparison schema references an unknown canonical column"
+                    )
 
     workbook = Workbook()
     summary = workbook.active
@@ -255,7 +289,9 @@ def render_comparison_workbook(
     summary.freeze_panes = "A2"
 
     fixed_headers = [labels["document"], labels["sheet"], labels["source_row"]]
-    comparison.append([*fixed_headers, *ordered_headers])
+    comparison.append(
+        [*fixed_headers, *(_safe_cell(value) for value in ordered_headers)]
+    )
     for cell in comparison[1]:
         cell.fill = header_fill
         cell.font = header_font
@@ -264,9 +300,19 @@ def render_comparison_workbook(
     source_records: list[ComparisonSource] = []
     output_row = 2
     for table in tables:
-        header_positions = {
-            header.casefold(): index for index, header in enumerate(table.headers)
-        }
+        if column_schema is None:
+            header_positions = {
+                header.casefold(): index for index, header in enumerate(table.headers)
+            }
+        else:
+            header_positions: dict[str, int] = {}
+            for index, header in enumerate(table.headers):
+                canonical_key = column_schema.canonical_header(table, header).casefold()
+                if canonical_key in header_positions:
+                    raise ComparisonInputError(
+                        "comparison schema merges columns within one source table"
+                    )
+                header_positions[canonical_key] = index
         first_output_row = output_row
         for source_offset, row in enumerate(table.rows):
             normalized_values = []

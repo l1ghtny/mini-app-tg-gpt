@@ -61,7 +61,7 @@ class WorkRunDefinition:
 _WORK_RUN_DEFINITIONS = {
     WorkRunKind.OFFER_COMPARISON_XLSX: WorkRunDefinition(
         kind=WorkRunKind.OFFER_COMPARISON_XLSX,
-        version=1,
+        version=2,
         min_documents=2,
         max_documents=5,
         accepted_extensions=frozenset({".csv", ".xlsx"}),
