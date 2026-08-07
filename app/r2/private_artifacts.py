@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from functools import lru_cache
 from pathlib import Path
 
 import boto3
@@ -30,6 +31,7 @@ def build_artifact_key(
     return f"artifacts/{user_id}/{work_run_id}/{artifact_id}/comparison-v1.xlsx"
 
 
+@lru_cache(maxsize=1)
 def _private_s3_client():
     return boto3.client(
         **_client_kwargs(
@@ -45,18 +47,15 @@ def _private_s3_client():
 def _put_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
     client = _private_s3_client()
     with path.open("rb") as artifact_file:
-        try:
-            client.put_object(
-                Body=artifact_file,
-                Bucket=bucket,
-                Key=key,
-                ContentType=(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                ),
-                Metadata={"sha256": sha256},
-            )
-        finally:
-            client.close()
+        client.put_object(
+            Body=artifact_file,
+            Bucket=bucket,
+            Key=key,
+            ContentType=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            Metadata={"sha256": sha256},
+        )
 
 
 async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
@@ -88,8 +87,6 @@ def _artifact_object_matches(
         if error_code in {"404", "NoSuchKey", "NotFound"}:
             return False
         raise
-    finally:
-        client.close()
     return (
         response.get("ContentLength") == size_bytes
         and response.get("Metadata", {}).get("sha256") == sha256
@@ -123,11 +120,7 @@ async def delete_artifact(*, bucket: str, key: str) -> None:
         )
 
     def delete() -> None:
-        client = _private_s3_client()
-        try:
-            client.delete_object(Bucket=bucket, Key=key)
-        finally:
-            client.close()
+        _private_s3_client().delete_object(Bucket=bucket, Key=key)
 
     await asyncio.to_thread(delete)
 
@@ -149,21 +142,17 @@ async def presign_artifact_download(
     )
 
     def presign() -> str:
-        client = _private_s3_client()
-        try:
-            return client.generate_presigned_url(
-                "get_object",
-                Params={
-                    "Bucket": bucket,
-                    "Key": key,
-                    "ResponseContentDisposition": f'attachment; filename="{safe_filename}"',
-                    "ResponseContentType": (
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    ),
-                },
-                ExpiresIn=expires,
-            )
-        finally:
-            client.close()
+        return _private_s3_client().generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": bucket,
+                "Key": key,
+                "ResponseContentDisposition": f'attachment; filename="{safe_filename}"',
+                "ResponseContentType": (
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                ),
+            },
+            ExpiresIn=expires,
+        )
 
     return await asyncio.to_thread(presign)

@@ -714,8 +714,6 @@ async def process_comparison_run(
         session.add(run)
         await session.commit()
         await _publish(redis, run, "work.stage")
-        if await _cancel_if_requested(session=session, redis=redis, run=run):
-            return
         bucket = get_private_artifacts_bucket()
         key = build_artifact_key(
             user_id=run.user_id, work_run_id=run.id, artifact_id=artifact.id

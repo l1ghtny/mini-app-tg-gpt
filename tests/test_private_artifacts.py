@@ -21,7 +21,6 @@ class _FakeS3Client:
     def __init__(self, head_response: dict[str, object] | None = None) -> None:
         self.put_calls: list[dict[str, object]] = []
         self.head_response = head_response
-        self.closed = False
 
     def put_object(self, **kwargs: object) -> None:
         body = kwargs["Body"]
@@ -30,9 +29,6 @@ class _FakeS3Client:
     def head_object(self, **_: object) -> dict[str, object]:
         assert self.head_response is not None
         return self.head_response
-
-    def close(self) -> None:
-        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -69,7 +65,6 @@ async def test_upload_artifact_uses_single_put_object(
             "Metadata": {"sha256": "a" * 64},
         }
     ]
-    assert client.closed
 
 
 @pytest.mark.asyncio
@@ -102,7 +97,6 @@ async def test_artifact_object_matches_size_and_checksum(
         size_bytes=9,
         sha256="a" * 64,
     )
-    assert client.closed
 
 
 def test_recovery_uses_the_persisted_artifact_identity() -> None:
