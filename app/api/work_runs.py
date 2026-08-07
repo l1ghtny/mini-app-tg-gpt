@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from redis.asyncio import Redis
 from sse_starlette.sse import EventSourceResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -17,6 +17,7 @@ from app.schemas.work_runs import (
     CreateWorkRunRequest,
     WorkRunAcceptedResponse,
     WorkRunCapabilitiesResponse,
+    WorkRunListResponse,
     WorkRunResponse,
 )
 from app.services.work_runs import service
@@ -38,6 +39,21 @@ async def get_capabilities(
     current_user: AppUser = Depends(get_current_user),
 ):
     return await service.capabilities(session, current_user)
+
+
+@work_runs.get("/work-runs", response_model=WorkRunListResponse)
+async def list_work_runs(
+    offset: int = Query(default=0, ge=0, le=5000),
+    limit: int = Query(default=20, ge=1, le=50),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await service.list_run_responses(
+        session,
+        current_user.id,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @work_runs.post(

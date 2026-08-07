@@ -128,6 +128,13 @@ class WorkRunResponse(BaseModel):
     artifacts: list[ArtifactResponse] = Field(default_factory=list)
 
 
+class WorkRunListResponse(BaseModel):
+    items: list[WorkRunResponse]
+    offset: int
+    limit: int
+    has_more: bool
+
+
 class ArtifactDownloadResponse(BaseModel):
     url: str
     expires_in: int

@@ -5,7 +5,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.work_run_settings import WorkRunDeploymentGate
-from app.schemas.work_runs import CreateWorkRunRequest, WorkRunAcceptedResponse
+from app.schemas.work_runs import (
+    CreateWorkRunRequest,
+    WorkRunAcceptedResponse,
+    WorkRunListResponse,
+)
 from app.services.work_runs.contracts import (
     WorkRunKind,
     WorkRunStatus,
@@ -161,3 +165,13 @@ def test_work_run_stage_is_bounded_but_workflow_specific() -> None:
 
     with pytest.raises(ValidationError):
         WorkRunAcceptedResponse.model_validate({**payload, "stage": "Not valid"})
+
+
+def test_work_run_list_response_exposes_stable_pagination_metadata() -> None:
+    response = WorkRunListResponse.model_validate(
+        {"items": [], "offset": 20, "limit": 20, "has_more": True}
+    )
+
+    assert response.offset == 20
+    assert response.limit == 20
+    assert response.has_more is True

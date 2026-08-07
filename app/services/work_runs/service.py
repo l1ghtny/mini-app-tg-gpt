@@ -48,6 +48,7 @@ from app.schemas.work_runs import (
     ArtifactResponse,
     CreateWorkRunRequest,
     WorkRunCapabilitiesResponse,
+    WorkRunListResponse,
     WorkRunResponse,
 )
 from app.services.work_runs.comparison import (
@@ -590,6 +591,10 @@ def artifact_response(artifact: Artifact) -> ArtifactResponse:
 
 async def run_response(session: AsyncSession, run: WorkRun) -> WorkRunResponse:
     artifacts = await _artifacts(session, run)
+    return _run_response(run, artifacts)
+
+
+def _run_response(run: WorkRun, artifacts: list[Artifact]) -> WorkRunResponse:
     retry_of_work_run_id = run.input_manifest.get("retry_of_work_run_id")
     return WorkRunResponse(
         id=run.id,
@@ -618,6 +623,53 @@ async def run_response(session: AsyncSession, run: WorkRun) -> WorkRunResponse:
         created_at=run.created_at,
         updated_at=run.updated_at,
         artifacts=[artifact_response(artifact) for artifact in artifacts],
+    )
+
+
+async def list_run_responses(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    offset: int,
+    limit: int,
+) -> WorkRunListResponse:
+    runs = list(
+        (
+            await session.exec(
+                select(WorkRun)
+                .where(WorkRun.user_id == user_id)
+                .order_by(col(WorkRun.created_at).desc(), col(WorkRun.id).desc())
+                .offset(offset)
+                .limit(limit + 1)
+            )
+        ).all()
+    )
+    has_more = len(runs) > limit
+    runs = runs[:limit]
+    if not runs:
+        return WorkRunListResponse(items=[], offset=offset, limit=limit, has_more=False)
+
+    artifacts = list(
+        (
+            await session.exec(
+                select(Artifact)
+                .where(
+                    col(Artifact.work_run_id).in_([run.id for run in runs]),
+                    Artifact.deleted_at.is_(None),
+                )
+                .order_by(Artifact.work_run_id, Artifact.version)
+            )
+        ).all()
+    )
+    artifacts_by_run: dict[uuid.UUID, list[Artifact]] = {run.id: [] for run in runs}
+    for artifact in artifacts:
+        artifacts_by_run[artifact.work_run_id].append(artifact)
+
+    return WorkRunListResponse(
+        items=[_run_response(run, artifacts_by_run[run.id]) for run in runs],
+        offset=offset,
+        limit=limit,
+        has_more=has_more,
     )
 
 
