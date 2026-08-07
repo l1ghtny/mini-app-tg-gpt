@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ os.environ.setdefault("R2_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret-key")
 
 from app.r2 import private_artifacts
+from app.services.work_runs import service as work_run_service
 from app.services.work_runs.service import _artifact_storage_identity
 
 
@@ -114,3 +116,36 @@ def test_recovery_uses_the_persisted_artifact_identity() -> None:
         rendered_size_bytes=9,
         rendered_sha256="b" * 64,
     ) == (8, "a" * 64)
+
+
+@pytest.mark.asyncio
+async def test_timed_out_upload_reconciles_without_waiting_for_task_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    upload_started = asyncio.Event()
+
+    async def hanging_upload(**_: object) -> None:
+        upload_started.set()
+        await asyncio.Event().wait()
+
+    async def matching_object(**_: object) -> bool:
+        return True
+
+    monkeypatch.setattr(work_run_service, "upload_artifact", hanging_upload)
+    monkeypatch.setattr(
+        work_run_service,
+        "artifact_object_matches",
+        matching_object,
+    )
+    monkeypatch.setattr(work_run_service, "_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", 0.01)
+
+    await work_run_service._upload_artifact_with_reconciliation(
+        bucket="private-documents",
+        key="artifacts/run/comparison-v1.xlsx",
+        output_path=tmp_path / "comparison.xlsx",
+        size_bytes=8,
+        sha256="a" * 64,
+    )
+
+    assert upload_started.is_set()

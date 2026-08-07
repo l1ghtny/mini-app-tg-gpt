@@ -95,6 +95,51 @@ def _artifact_storage_identity(
     return rendered_size_bytes, rendered_sha256
 
 
+def _consume_background_task_result(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        logger.exception("background artifact upload failed after timeout")
+
+
+async def _upload_artifact_with_reconciliation(
+    *,
+    bucket: str,
+    key: str,
+    output_path: Path,
+    size_bytes: int,
+    sha256: str,
+) -> None:
+    upload_task = asyncio.create_task(
+        upload_artifact(
+            bucket=bucket,
+            key=key,
+            path=output_path,
+            sha256=sha256,
+        )
+    )
+    done, _ = await asyncio.wait(
+        {upload_task},
+        timeout=_ARTIFACT_UPLOAD_TIMEOUT_SECONDS,
+    )
+    if upload_task in done:
+        await upload_task
+        return
+
+    upload_task.cancel()
+    upload_task.add_done_callback(_consume_background_task_result)
+    if await artifact_object_matches(
+        bucket=bucket,
+        key=key,
+        size_bytes=size_bytes,
+        sha256=sha256,
+    ):
+        return
+    raise TimeoutError("artifact upload did not complete before the deadline")
+
+
 def _month_start() -> datetime:
     now = datetime.now(timezone.utc)
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc).replace(tzinfo=None)
@@ -687,24 +732,13 @@ async def process_comparison_run(
             sha256=stored_sha256,
         )
         if not object_matches:
-            try:
-                await asyncio.wait_for(
-                    upload_artifact(
-                        bucket=bucket,
-                        key=key,
-                        path=output_path,
-                        sha256=sha256,
-                    ),
-                    timeout=_ARTIFACT_UPLOAD_TIMEOUT_SECONDS,
-                )
-            except TimeoutError:
-                if not await artifact_object_matches(
-                    bucket=bucket,
-                    key=key,
-                    size_bytes=rendered_size_bytes,
-                    sha256=sha256,
-                ):
-                    raise
+            await _upload_artifact_with_reconciliation(
+                bucket=bucket,
+                key=key,
+                output_path=output_path,
+                size_bytes=rendered_size_bytes,
+                sha256=sha256,
+            )
             artifact.size_bytes = rendered_size_bytes
             artifact.sha256 = sha256
         artifact.bucket = bucket
