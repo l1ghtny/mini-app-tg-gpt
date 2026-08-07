@@ -43,14 +43,14 @@ async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> 
         )
     with path.open("rb") as artifact_file:
         async with _private_s3_client() as s3:
-            await s3.upload_fileobj(
-                Fileobj=artifact_file,
+            await s3.put_object(
+                Body=artifact_file,
                 Bucket=bucket,
                 Key=key,
-                ExtraArgs={
-                    "ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    "Metadata": {"sha256": sha256},
-                },
+                ContentType=(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                ),
+                Metadata={"sha256": sha256},
             )
 
 
