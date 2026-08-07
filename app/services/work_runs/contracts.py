@@ -38,6 +38,8 @@ class WorkRunErrorCode(StrEnum):
     PROVIDER_AMBIGUOUS = "work_run_provider_ambiguous"
     VALIDATION_FAILED = "work_run_validation_failed"
     STORAGE_FAILED = "work_run_storage_failed"
+    CANCEL_TOO_LATE = "work_run_cancel_too_late"
+    RETRY_NOT_ALLOWED = "work_run_retry_not_allowed"
     CANCELLED = "work_run_cancelled"
     INTERNAL_ERROR = "work_run_internal_error"
 
@@ -118,14 +120,12 @@ _ALLOWED_STATUS_TRANSITIONS = {
     WorkRunStatus.VALIDATING: frozenset(
         {
             WorkRunStatus.STORING,
-            WorkRunStatus.CANCELLING,
             WorkRunStatus.FAILED,
         }
     ),
     WorkRunStatus.STORING: frozenset(
         {
             WorkRunStatus.SUCCEEDED,
-            WorkRunStatus.CANCELLING,
             WorkRunStatus.FAILED,
         }
     ),

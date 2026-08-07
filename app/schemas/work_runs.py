@@ -113,6 +113,7 @@ class WorkRunResponse(BaseModel):
     instructions: str | None
     options: dict
     result_summary: str | None
+    retry_of_work_run_id: uuid.UUID | None = None
     reserved_units: Decimal
     estimated_cost_usd: Decimal
     actual_cost_usd: Decimal

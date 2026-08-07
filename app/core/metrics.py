@@ -1,7 +1,6 @@
-﻿import logging
+import logging
 import sys
 
-import sentry_sdk
 from sentry_sdk import metrics  # Import the metrics module directly
 
 from app.core.config import settings
@@ -9,16 +8,24 @@ from app.core.config import settings
 
 def get_logger():
     if len(sys.argv) > 0 and "bot_main.py" in sys.argv[0]:
-        logger = logging.getLogger('aiogram')
+        logger = logging.getLogger("aiogram")
     else:
         logger = settings.custom_logger
 
     return logger
 
-logger = get_logger()
-logger.info(f'logger in use: {logger.name}')
 
-def _send_metric(key: str, value: float, tags: dict, metric_type: str = "increment", unit: str = "none"):
+logger = get_logger()
+logger.info(f"logger in use: {logger.name}")
+
+
+def _send_metric(
+    key: str,
+    value: float,
+    tags: dict,
+    metric_type: str = "increment",
+    unit: str = "none",
+):
     """
     Internal wrapper for Sentry Metrics.
     Safe to call; catches errors so metrics don't crash the app.
@@ -37,7 +44,7 @@ def _send_metric(key: str, value: float, tags: dict, metric_type: str = "increme
         elif metric_type == "gauge":
             metrics.gauge(key, value=value, attributes=clean_tags, unit=unit)
 
-        logger.info(f'Sent metric: {key}: {value}')
+        logger.info(f"Sent metric: {key}: {value}")
 
     except Exception as e:
         logger.warning(f"Failed to send metric {key}: {e}")
@@ -48,7 +55,7 @@ def track_event(key: str, user_id: str, tags: dict = None):
     Standard Counter wrapper.
     Usage: track_event("user_login", user.id, {"campaign": "ads_1"})
     """
-    final_tags = tags or {}
+    final_tags = dict(tags or {})
     final_tags["user_id"] = str(user_id)
     # We default to 'increment' for simple event tracking
     _send_metric(key, 1.0, final_tags, metric_type="count")
@@ -59,16 +66,30 @@ def track_internal_event(key: str, tags: dict = None):
     Counter wrapper for non-user-scoped/internal events.
     Usage: track_internal_event("openai.structured.title.success", {"model": "gpt-5.4-nano"})
     """
-    final_tags = tags or {}
+    final_tags = dict(tags or {})
     final_tags["scope"] = "internal"
     _send_metric(key, 1.0, final_tags, metric_type="count")
 
 
-def track_value(key: str, value: float, user_id: str, tags: dict = None, unit: str = "none"):
+def track_value(
+    key: str, value: float, user_id: str, tags: dict = None, unit: str = "none"
+):
     """
     Distribution wrapper (e.g. for payments amounts or latency).
     Usage: track_value("payment_amount", 490.0, user.id, unit="rub")
     """
-    final_tags = tags or {}
+    final_tags = dict(tags or {})
     final_tags["user_id"] = str(user_id)
+    _send_metric(key, value, final_tags, metric_type="distribution", unit=unit)
+
+
+def track_internal_value(
+    key: str,
+    value: float,
+    tags: dict | None = None,
+    unit: str = "none",
+) -> None:
+    """Distribution wrapper for non-user-scoped operational measurements."""
+    final_tags = dict(tags or {})
+    final_tags["scope"] = "internal"
     _send_metric(key, value, final_tags, metric_type="distribution", unit=unit)

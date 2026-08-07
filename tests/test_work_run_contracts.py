@@ -126,6 +126,14 @@ def test_work_run_state_machine_allows_only_declared_transitions() -> None:
         WorkRunStatus.RUNNING,
         WorkRunStatus.CANCELLING,
     )
+    assert not can_transition_work_run(
+        WorkRunStatus.VALIDATING,
+        WorkRunStatus.CANCELLING,
+    )
+    assert not can_transition_work_run(
+        WorkRunStatus.STORING,
+        WorkRunStatus.CANCELLING,
+    )
     assert can_transition_work_run(
         WorkRunStatus.FAILED,
         WorkRunStatus.REFUNDED,

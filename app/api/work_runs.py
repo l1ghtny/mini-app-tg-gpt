@@ -78,6 +78,45 @@ async def create_work_run(
     )
 
 
+@work_runs.post(
+    "/work-runs/{run_id}/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=WorkRunAcceptedResponse,
+)
+async def retry_work_run(
+    run_id: uuid.UUID,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=128
+    ),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+):
+    source = await service.owned_run(session, current_user.id, run_id)
+    run = await service.retry_run(
+        session=session,
+        user=current_user,
+        source=source,
+        client_request_id=idempotency_key,
+    )
+    await RedisEventBus(redis).publish_work(
+        str(run.id),
+        {
+            "type": "work.queued",
+            "work_run_id": str(run.id),
+            "status": run.status,
+            "stage": run.stage,
+            "progress_percent": run.progress_percent,
+        },
+    )
+    return WorkRunAcceptedResponse(
+        id=run.id,
+        status=WorkRunStatus(run.status),
+        stage=run.stage,
+        stream_url=f"/api/v1/work-runs/{run.id}/stream",
+    )
+
+
 @work_runs.get("/work-runs/{run_id}", response_model=WorkRunResponse)
 async def get_work_run(
     run_id: uuid.UUID,
@@ -93,9 +132,24 @@ async def cancel_work_run(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
 ):
     run = await service.owned_run(session, current_user.id, run_id)
     run = await service.cancel_run(session, run)
+    await RedisEventBus(redis).publish_work(
+        str(run.id),
+        {
+            "type": (
+                "work.cancelled"
+                if run.status == WorkRunStatus.CANCELLED.value
+                else "work.cancelling"
+            ),
+            "work_run_id": str(run.id),
+            "status": run.status,
+            "stage": run.stage,
+            "progress_percent": run.progress_percent,
+        },
+    )
     return await service.run_response(session, run)
 
 

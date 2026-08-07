@@ -61,6 +61,11 @@ from app.services.work_runs.contracts import (
     get_work_run_definition,
     list_work_run_definitions,
 )
+from app.services.work_runs.telemetry import (
+    record_artifact_download,
+    record_work_run_event,
+    record_work_run_retry,
+)
 
 
 _ACTIVE_STATUSES = (
@@ -278,6 +283,7 @@ async def create_run(
     user: AppUser,
     request: CreateWorkRunRequest,
     client_request_id: str,
+    retry_of_work_run_id: uuid.UUID | None = None,
 ) -> WorkRun:
     existing = (
         await session.exec(
@@ -407,6 +413,11 @@ async def create_run(
         workflow_kind=request.kind.value,
         state=State.reserved,
     )
+    input_manifest = {
+        "document_ids": [str(document_id) for document_id in request.document_ids]
+    }
+    if retry_of_work_run_id is not None:
+        input_manifest["retry_of_work_run_id"] = str(retry_of_work_run_id)
     run = WorkRun(
         id=run_id,
         user_id=user.id,
@@ -420,9 +431,7 @@ async def create_run(
         progress_percent=5,
         client_request_id=client_request_id,
         workflow_id=f"work:{run_id}",
-        input_manifest={
-            "document_ids": [str(document_id) for document_id in request.document_ids]
-        },
+        input_manifest=input_manifest,
         options=request.options.model_dump(mode="json"),
         instructions=request.instructions,
         reserved_units=Decimal("1"),
@@ -446,7 +455,66 @@ async def create_run(
             return existing
         raise
     await session.refresh(run)
+    record_work_run_event(run, "work.queued")
     return run
+
+
+async def retry_run(
+    *,
+    session: AsyncSession,
+    user: AppUser,
+    source: WorkRun,
+    client_request_id: str,
+) -> WorkRun:
+    if source.status not in (
+        WorkRunStatus.FAILED.value,
+        WorkRunStatus.CANCELLED.value,
+        WorkRunStatus.REFUNDED.value,
+    ):
+        raise _work_error(
+            WorkRunErrorCode.RETRY_NOT_ALLOWED,
+            status.HTTP_409_CONFLICT,
+        )
+    existing = (
+        await session.exec(
+            select(WorkRun).where(
+                WorkRun.user_id == user.id,
+                WorkRun.client_request_id == client_request_id,
+            )
+        )
+    ).first()
+    if existing:
+        if existing.input_manifest.get("retry_of_work_run_id") != str(source.id):
+            raise _work_error(
+                WorkRunErrorCode.INVALID_INPUT,
+                status.HTTP_409_CONFLICT,
+            )
+        return existing
+    try:
+        request = CreateWorkRunRequest.model_validate(
+            {
+                "kind": source.kind,
+                "conversation_id": source.conversation_id,
+                "folder_id": source.folder_id,
+                "document_ids": source.input_manifest["document_ids"],
+                "instructions": source.instructions,
+                "options": source.options,
+            }
+        )
+    except (KeyError, ValueError) as exc:
+        raise _work_error(
+            WorkRunErrorCode.INVALID_INPUT,
+            status.HTTP_409_CONFLICT,
+        ) from exc
+    retried = await create_run(
+        session=session,
+        user=user,
+        request=request,
+        client_request_id=client_request_id,
+        retry_of_work_run_id=source.id,
+    )
+    record_work_run_retry(source)
+    return retried
 
 
 async def owned_run(
@@ -494,6 +562,7 @@ def artifact_response(artifact: Artifact) -> ArtifactResponse:
 
 async def run_response(session: AsyncSession, run: WorkRun) -> WorkRunResponse:
     artifacts = await _artifacts(session, run)
+    retry_of_work_run_id = run.input_manifest.get("retry_of_work_run_id")
     return WorkRunResponse(
         id=run.id,
         kind=WorkRunKind(run.kind),
@@ -506,6 +575,9 @@ async def run_response(session: AsyncSession, run: WorkRun) -> WorkRunResponse:
         instructions=run.instructions,
         options=run.options,
         result_summary=run.result_summary,
+        retry_of_work_run_id=(
+            uuid.UUID(retry_of_work_run_id) if retry_of_work_run_id else None
+        ),
         reserved_units=run.reserved_units,
         estimated_cost_usd=run.estimated_cost_usd,
         actual_cost_usd=run.actual_cost_usd,
@@ -522,13 +594,36 @@ async def run_response(session: AsyncSession, run: WorkRun) -> WorkRunResponse:
 
 
 async def cancel_run(session: AsyncSession, run: WorkRun) -> WorkRun:
+    await session.refresh(
+        run,
+        attribute_names=[
+            "status",
+            "stage",
+            "cancelled_at",
+            "completed_at",
+            "lease_expires_at",
+        ],
+        with_for_update=True,
+    )
     if run.status in _TERMINAL_STATUSES:
         return run
     if run.status == WorkRunStatus.CANCELLING.value:
         return run
+    if run.status in (
+        WorkRunStatus.VALIDATING.value,
+        WorkRunStatus.STORING.value,
+    ):
+        raise _work_error(
+            WorkRunErrorCode.CANCEL_TOO_LATE,
+            status.HTTP_409_CONFLICT,
+        )
     now = utcnow_naive()
     ledger = await session.get(RequestLedger, run.request_ledger_id)
-    if run.status in (WorkRunStatus.QUEUED.value, WorkRunStatus.ACCEPTED.value):
+    if run.status in (
+        WorkRunStatus.ACCEPTED.value,
+        WorkRunStatus.RESERVED.value,
+        WorkRunStatus.QUEUED.value,
+    ):
         run.status = WorkRunStatus.CANCELLED.value
         run.stage = "cancelled"
         run.cancelled_at = now
@@ -536,15 +631,26 @@ async def cancel_run(session: AsyncSession, run: WorkRun) -> WorkRun:
         run.lease_expires_at = None
         if ledger and ledger.state == State.reserved:
             ledger.state = State.refunded
-    else:
+    elif run.status == WorkRunStatus.RUNNING.value:
         run.status = WorkRunStatus.CANCELLING.value
         run.stage = "cancelling"
         run.cancelled_at = now
+    else:
+        raise _work_error(
+            WorkRunErrorCode.CANCEL_TOO_LATE,
+            status.HTTP_409_CONFLICT,
+        )
     session.add(run)
     if ledger:
         session.add(ledger)
     await session.commit()
     await session.refresh(run)
+    record_work_run_event(
+        run,
+        "work.cancelled"
+        if run.status == WorkRunStatus.CANCELLED.value
+        else "work.cancelling",
+    )
     return run
 
 
@@ -569,8 +675,10 @@ async def complete_cancellation(
 async def _cancel_if_requested(
     *, session: AsyncSession, redis: Redis, run: WorkRun
 ) -> bool:
-    await session.refresh(run, attribute_names=["status"])
-    if run.status != WorkRunStatus.CANCELLING.value:
+    await session.refresh(run, attribute_names=["status", "cancelled_at"])
+    if run.status in _TERMINAL_STATUSES:
+        return run.status == WorkRunStatus.CANCELLED.value
+    if run.status != WorkRunStatus.CANCELLING.value and run.cancelled_at is None:
         return False
     await complete_cancellation(session=session, redis=redis, run=run)
     return True
@@ -602,6 +710,7 @@ async def artifact_download(
         filename=artifact.filename,
         expires=expires,
     )
+    record_artifact_download(artifact)
     return ArtifactDownloadResponse(url=url, expires_in=expires)
 
 
@@ -631,6 +740,7 @@ async def _publish_with_deadline(
 
 
 async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
+    record_work_run_event(run, event_type)
     work_run_id = str(run.id)
     publish_task = asyncio.create_task(
         _publish_with_deadline(
@@ -737,6 +847,8 @@ async def process_comparison_run(
         await session.commit()
         await _publish(redis, run, "work.stage")
         validate_rendered_workbook(output_path)
+        if await _cancel_if_requested(session=session, redis=redis, run=run):
+            return
         rendered_size_bytes = output_path.stat().st_size
         sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
         artifact_id = uuid.uuid5(run.id, "artifact-v1")
@@ -839,8 +951,8 @@ async def process_comparison_run(
 async def fail_run(
     *, session: AsyncSession, redis: Redis, run: WorkRun, error: Exception
 ) -> None:
-    await session.refresh(run, attribute_names=["status"])
-    if run.status == WorkRunStatus.CANCELLING.value:
+    await session.refresh(run, attribute_names=["status", "cancelled_at"])
+    if run.status == WorkRunStatus.CANCELLING.value or run.cancelled_at is not None:
         await complete_cancellation(session=session, redis=redis, run=run)
         return
     run.status = WorkRunStatus.FAILED.value
