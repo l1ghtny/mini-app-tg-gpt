@@ -84,6 +84,17 @@ _EVENT_PUBLISH_TIMEOUT_SECONDS = 5
 logger = logging.getLogger(__name__)
 
 
+def _artifact_storage_identity(
+    artifact: Artifact,
+    *,
+    rendered_size_bytes: int,
+    rendered_sha256: str,
+) -> tuple[int, str]:
+    if artifact.sha256:
+        return artifact.size_bytes, artifact.sha256
+    return rendered_size_bytes, rendered_sha256
+
+
 def _month_start() -> datetime:
     now = datetime.now(timezone.utc)
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc).replace(tzinfo=None)
@@ -607,6 +618,7 @@ async def process_comparison_run(
         await session.commit()
         await _publish(redis, run, "work.stage")
         validate_rendered_workbook(output_path)
+        rendered_size_bytes = output_path.stat().st_size
         sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
         artifact_id = uuid.uuid5(run.id, "artifact-v1")
         artifact = await session.get(Artifact, artifact_id)
@@ -622,7 +634,7 @@ async def process_comparison_run(
                 status="rendering",
                 filename="offer-comparison.xlsx",
                 mime_type=_ARTIFACT_MIME,
-                size_bytes=output_path.stat().st_size,
+                size_bytes=rendered_size_bytes,
                 sha256=sha256,
                 artifact_metadata={
                     "rows": rendered.row_count,
@@ -663,11 +675,16 @@ async def process_comparison_run(
         key = build_artifact_key(
             user_id=run.user_id, work_run_id=run.id, artifact_id=artifact.id
         )
+        stored_size_bytes, stored_sha256 = _artifact_storage_identity(
+            artifact,
+            rendered_size_bytes=rendered_size_bytes,
+            rendered_sha256=sha256,
+        )
         object_matches = await artifact_object_matches(
             bucket=bucket,
             key=key,
-            size_bytes=artifact.size_bytes,
-            sha256=sha256,
+            size_bytes=stored_size_bytes,
+            sha256=stored_sha256,
         )
         if not object_matches:
             try:
@@ -684,10 +701,12 @@ async def process_comparison_run(
                 if not await artifact_object_matches(
                     bucket=bucket,
                     key=key,
-                    size_bytes=artifact.size_bytes,
+                    size_bytes=rendered_size_bytes,
                     sha256=sha256,
                 ):
                     raise
+            artifact.size_bytes = rendered_size_bytes
+            artifact.sha256 = sha256
         artifact.bucket = bucket
         artifact.storage_key = key
         artifact.status = "ready"

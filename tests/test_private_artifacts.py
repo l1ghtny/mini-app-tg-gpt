@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ os.environ.setdefault("R2_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret-key")
 
 from app.r2 import private_artifacts
+from app.services.work_runs.service import _artifact_storage_identity
 
 
 class _FakeS3Client:
@@ -102,3 +104,13 @@ async def test_artifact_object_matches_size_and_checksum(
         size_bytes=9,
         sha256="a" * 64,
     )
+
+
+def test_recovery_uses_the_persisted_artifact_identity() -> None:
+    artifact = SimpleNamespace(size_bytes=8, sha256="a" * 64)
+
+    assert _artifact_storage_identity(
+        artifact,
+        rendered_size_bytes=9,
+        rendered_sha256="b" * 64,
+    ) == (8, "a" * 64)
