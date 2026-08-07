@@ -338,8 +338,11 @@ def render_comparison_workbook(
         )
     sources_sheet.freeze_panes = "A2"
     sources_sheet.auto_filter.ref = sources_sheet.dimensions
-    for index, width in enumerate((28, 22, 16, 14, 22, 24), start=1):
+    for index, width in enumerate((36, 22, 16, 14, 22, 24), start=1):
         sources_sheet.column_dimensions[get_column_letter(index)].width = width
+    for row in sources_sheet.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
 
     workbook.save(target_path)
     workbook.close()

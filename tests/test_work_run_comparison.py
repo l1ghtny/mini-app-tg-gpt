@@ -62,7 +62,10 @@ def test_comparison_renderer_merges_columns_and_preserves_sources(tmp_path) -> N
         ]
         assert comparison[2][5].value == '\'=HYPERLINK("https://bad")'
         assert comparison[4][2].value == 2
-        assert workbook["Источники"].max_row == 3
+        sources = workbook["Источники"]
+        assert sources.max_row == 3
+        assert sources.column_dimensions["A"].width == 36
+        assert sources["A2"].alignment.wrap_text is True
     finally:
         workbook.close()
 
