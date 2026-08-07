@@ -84,24 +84,30 @@ class _MemoryBody:
     def __init__(self, data: bytes) -> None:
         self._data = data
         self._offset = 0
+        self.closed = False
 
     async def read(self, size: int) -> bytes:
         chunk = self._data[self._offset : self._offset + size]
         self._offset += len(chunk)
         return chunk
 
+    def close(self) -> None:
+        self.closed = True
+
 
 class _MemoryS3:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
         self.extra_args: dict[str, object] | None = None
+        self.last_body: _MemoryBody | None = None
 
     async def upload_fileobj(self, *, Fileobj, Bucket, Key, ExtraArgs) -> None:
         self.objects[(Bucket, Key)] = Fileobj.read()
         self.extra_args = ExtraArgs
 
     async def get_object(self, *, Bucket, Key):
-        return {"Body": _MemoryBody(self.objects[(Bucket, Key)])}
+        self.last_body = _MemoryBody(self.objects[(Bucket, Key)])
+        return {"Body": self.last_body}
 
     async def delete_object(self, *, Bucket, Key) -> None:
         self.objects.pop((Bucket, Key), None)
@@ -120,6 +126,7 @@ async def test_private_document_source_round_trip(monkeypatch, tmp_path: Path) -
             "access_key_id": "private-access-key",
             "secret_access_key": "private-secret-key",
             "session_token": "temporary-session-token",
+            "fresh_session": True,
         }
         yield client
 
@@ -161,6 +168,7 @@ async def test_private_document_source_round_trip(monkeypatch, tmp_path: Path) -
     await download_document_source(bucket=bucket, key=key, target_path=str(target))
 
     assert target.read_bytes() == source.read_bytes()
+    assert client.last_body is not None and client.last_body.closed
     assert client.extra_args == {
         "ContentType": "text/csv",
         "Metadata": {"document-id": "document"},

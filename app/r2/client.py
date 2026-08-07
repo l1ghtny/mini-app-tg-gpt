@@ -46,8 +46,10 @@ def s3_client(
     access_key_id: str = R2_ACCESS_KEY_ID,
     secret_access_key: str = R2_SECRET_ACCESS_KEY,
     session_token: str | None = None,
+    fresh_session: bool = False,
 ):
-    return _session.client(
+    session = aioboto3.Session() if fresh_session else _session
+    return session.client(
         **_client_kwargs(
             endpoint_url=endpoint_url,
             region_name=region_name,

@@ -69,6 +69,7 @@ def _private_s3_client():
         access_key_id=Settings.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID,
         secret_access_key=Settings.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY,
         session_token=Settings.R2_PRIVATE_DOCUMENTS_SESSION_TOKEN or None,
+        fresh_session=True,
     )
 
 
@@ -104,9 +105,12 @@ async def download_document_source(
     async with _private_s3_client() as s3:
         response = await s3.get_object(Bucket=bucket, Key=key)
         body = response["Body"]
-        with open(target_path, "wb") as target_file:
-            while chunk := await body.read(1024 * 1024):
-                target_file.write(chunk)
+        try:
+            with open(target_path, "wb") as target_file:
+                while chunk := await body.read(1024 * 1024):
+                    target_file.write(chunk)
+        finally:
+            body.close()
 
 
 async def delete_document_source(*, bucket: str, key: str) -> None:

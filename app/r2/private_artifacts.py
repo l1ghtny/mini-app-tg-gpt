@@ -35,6 +35,7 @@ def _private_s3_client():
         access_key_id=Settings.R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID,
         secret_access_key=Settings.R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY,
         session_token=Settings.R2_PRIVATE_DOCUMENTS_SESSION_TOKEN or None,
+        fresh_session=True,
     )
 
 
