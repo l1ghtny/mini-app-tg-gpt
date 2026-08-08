@@ -48,11 +48,17 @@ spec:
           value: socks5://warp-proxy:1080
         - name: HTTP_PROXY
           value: socks5://warp-proxy:1080
+        - name: PROMETHEUS_METRICS_PORT
+          value: "9100"
         envFrom:
         - secretRef:
             name: backend-env
         ports:
-        - containerPort: 8000
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 9100
           protocol: TCP
         readinessProbe:
           httpGet:

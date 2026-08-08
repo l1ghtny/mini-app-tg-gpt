@@ -32,6 +32,8 @@ sed \
   "${repo_root}/k8s/beta/lightny-beta.yaml.tpl" >"${rendered_manifest}"
 
 kubectl apply -f "${rendered_manifest}"
+kubectl apply -f \
+  "${repo_root}/k8s/argo-rollouts/lightny-work-runs-observability.yaml"
 kubectl rollout status deployment/tg-mini-beta-redis -n "${K8S_NAMESPACE}" \
   --timeout="${DEPLOYMENT_TIMEOUT}"
 kubectl rollout status deployment/tg-mini-beta-backend -n "${K8S_NAMESPACE}" \

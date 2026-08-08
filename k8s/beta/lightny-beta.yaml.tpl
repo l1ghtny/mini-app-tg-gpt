@@ -126,6 +126,8 @@ spec:
               value: "true"
             - name: VOICE_TRANSCRIPTION_MODEL
               value: gpt-transcribe
+            - name: PROMETHEUS_METRICS_PORT
+              value: "9100"
           envFrom:
             - secretRef:
                 name: backend-beta-env
@@ -134,6 +136,8 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+            - name: metrics
+              containerPort: 9100
           startupProbe:
             httpGet:
               path: /health/live
@@ -221,6 +225,9 @@ spec:
             - 0.0.0.0
             - --port
             - "8000"
+          env:
+            - name: PROMETHEUS_METRICS_PORT
+              value: "9100"
           envFrom:
             - secretRef:
                 name: backend-beta-env
@@ -229,6 +236,8 @@ spec:
           ports:
             - name: health
               containerPort: 8000
+            - name: metrics
+              containerPort: 9100
           startupProbe:
             httpGet:
               path: /health/live

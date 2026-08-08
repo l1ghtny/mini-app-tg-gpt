@@ -4,6 +4,12 @@ import sys
 from sentry_sdk import metrics  # Import the metrics module directly
 
 from app.core.config import settings
+from app.core.prometheus import (
+    record_internal_event as record_prometheus_internal_event,
+)
+from app.core.prometheus import (
+    record_internal_value as record_prometheus_internal_value,
+)
 
 
 def get_logger():
@@ -69,6 +75,10 @@ def track_internal_event(key: str, tags: dict = None):
     final_tags = dict(tags or {})
     final_tags["scope"] = "internal"
     _send_metric(key, 1.0, final_tags, metric_type="count")
+    try:
+        record_prometheus_internal_event(key, final_tags)
+    except Exception as exc:
+        logger.warning(f"Failed to record Prometheus metric {key}: {exc}")
 
 
 def track_value(
@@ -93,3 +103,7 @@ def track_internal_value(
     final_tags = dict(tags or {})
     final_tags["scope"] = "internal"
     _send_metric(key, value, final_tags, metric_type="distribution", unit=unit)
+    try:
+        record_prometheus_internal_value(key, value, final_tags)
+    except Exception as exc:
+        logger.warning(f"Failed to record Prometheus metric {key}: {exc}")

@@ -11,6 +11,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.database import engine
 from app.core.config import settings
+from app.core.prometheus import start_metrics_server_from_env
 from app.core.version import APP_VERSION
 from app.core.work_run_worker_sentry import initialize_work_run_worker_sentry
 from app.services.work_runs.worker import run_worker
@@ -24,6 +25,7 @@ initialize_work_run_worker_sentry(
     deployment_channel=settings.DEPLOYMENT_CHANNEL,
     logger=logger,
 )
+start_metrics_server_from_env("work-run-worker")
 
 
 @asynccontextmanager

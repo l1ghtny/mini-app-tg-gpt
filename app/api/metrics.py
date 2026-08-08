@@ -3,7 +3,10 @@ from pydantic import BaseModel
 from typing import Literal
 from app.api.dependencies import get_current_user
 from app.core.metrics import track_event, track_value
+from app.core.prometheus import start_metrics_server_from_env
 from app.db.models import AppUser
+
+start_metrics_server_from_env("api")
 
 metrics = APIRouter(prefix="/metrics", tags=["metrics"])
 
