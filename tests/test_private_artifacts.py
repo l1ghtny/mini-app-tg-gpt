@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import subprocess
 import uuid
@@ -21,9 +22,14 @@ from app.services.work_runs.service import _artifact_storage_identity
 
 
 class _FakeS3Client:
-    def __init__(self, head_response: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        head_response: dict[str, object] | None = None,
+        get_payload: bytes | None = None,
+    ) -> None:
         self.put_calls: list[dict[str, object]] = []
         self.head_response = head_response
+        self.get_payload = get_payload
 
     def put_object(self, **kwargs: object) -> None:
         body = kwargs["Body"]
@@ -32,6 +38,13 @@ class _FakeS3Client:
     def head_object(self, **_: object) -> dict[str, object]:
         assert self.head_response is not None
         return self.head_response
+
+    def get_object(self, **_: object) -> dict[str, object]:
+        assert self.get_payload is not None
+        return {
+            "Body": io.BytesIO(self.get_payload),
+            "ContentLength": len(self.get_payload),
+        }
 
 
 def test_artifact_key_keeps_revision_versions_distinct() -> None:
@@ -47,6 +60,9 @@ def test_artifact_key_keeps_revision_versions_distinct() -> None:
     )
 
     assert key.endswith("/comparison-v3.xlsx")
+    assert private_artifacts.build_artifact_preview_key(key).endswith(
+        "/comparison-v3.preview.json"
+    )
 
 
 @pytest.mark.asyncio
@@ -83,6 +99,48 @@ async def test_upload_artifact_uses_single_put_object(
             "Metadata": {"sha256": "a" * 64},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_preview_is_private_json_and_can_be_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload = b'{"version":1}'
+    preview_path = tmp_path / "comparison-v1.preview.json"
+    preview_path.write_bytes(payload)
+    client = _FakeS3Client(get_payload=payload)
+
+    monkeypatch.setattr(
+        private_artifacts,
+        "get_private_artifacts_bucket",
+        lambda: "private-documents",
+    )
+    monkeypatch.setattr(private_artifacts, "_private_s3_client", lambda: client)
+
+    await private_artifacts.upload_artifact_preview(
+        bucket="private-documents",
+        key="artifacts/run/comparison-v1.preview.json",
+        path=preview_path,
+        sha256="c" * 64,
+    )
+
+    assert client.put_calls == [
+        {
+            "Body": payload,
+            "Bucket": "private-documents",
+            "Key": "artifacts/run/comparison-v1.preview.json",
+            "ContentType": "application/json",
+            "Metadata": {"sha256": "c" * 64},
+        }
+    ]
+    assert (
+        await private_artifacts.download_artifact_preview(
+            bucket="private-documents",
+            key="artifacts/run/comparison-v1.preview.json",
+        )
+        == payload
+    )
 
 
 @pytest.mark.asyncio
@@ -218,7 +276,7 @@ async def test_storage_subprocess_result_is_parsed_without_async_child_watcher(
         return subprocess.CompletedProcess(
             args=command,
             returncode=0,
-            stdout=b'{"uploaded":false}',
+            stdout=b'{"uploaded":false,"preview_uploaded":true}',
             stderr=b"",
         )
 
@@ -228,7 +286,7 @@ async def test_storage_subprocess_result_is_parsed_without_async_child_watcher(
         run_process,
     )
 
-    uploaded = await work_run_service._store_artifact_in_subprocess(
+    uploaded, preview_uploaded = await work_run_service._store_artifact_in_subprocess(
         bucket="private-documents",
         key="artifacts/run/comparison-v1.xlsx",
         output_path=tmp_path / "comparison.xlsx",
@@ -236,9 +294,16 @@ async def test_storage_subprocess_result_is_parsed_without_async_child_watcher(
         rendered_sha256="b" * 64,
         stored_size_bytes=8,
         stored_sha256="a" * 64,
+        preview_key="artifacts/run/comparison-v1.preview.json",
+        preview_path=tmp_path / "comparison.preview.json",
+        preview_rendered_size_bytes=7,
+        preview_rendered_sha256="d" * 64,
+        preview_stored_size_bytes=6,
+        preview_stored_sha256="c" * 64,
     )
 
     assert uploaded is False
+    assert preview_uploaded is True
     assert commands[0][0:3] == [
         work_run_service.sys.executable,
         "-m",

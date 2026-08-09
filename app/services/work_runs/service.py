@@ -12,7 +12,9 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, func, select
@@ -35,6 +37,8 @@ from app.db.models import (
 )
 from app.r2.private_artifacts import (
     build_artifact_key,
+    build_artifact_preview_key,
+    download_artifact_preview,
     get_private_artifacts_bucket,
     presign_artifact_download,
 )
@@ -45,6 +49,7 @@ from app.r2.private_documents import (
 from app.redis.event_bus import RedisEventBus
 from app.schemas.work_runs import (
     ArtifactDownloadResponse,
+    ArtifactPreviewResponse,
     ArtifactResponse,
     ArtifactSourceResponse,
     CreateWorkRunRequest,
@@ -125,6 +130,20 @@ def _artifact_storage_identity(
     return rendered_size_bytes, rendered_sha256
 
 
+def _preview_storage_identity(
+    artifact: Artifact,
+    *,
+    rendered_size_bytes: int,
+    rendered_sha256: str,
+) -> tuple[int, str]:
+    metadata = artifact.artifact_metadata or {}
+    stored_size = metadata.get("_preview_size_bytes")
+    stored_sha256 = metadata.get("_preview_sha256")
+    if isinstance(stored_size, int) and isinstance(stored_sha256, str):
+        return stored_size, stored_sha256
+    return rendered_size_bytes, rendered_sha256
+
+
 def _consume_publish_task_result(task: asyncio.Task[object]) -> None:
     if task.cancelled():
         return
@@ -166,7 +185,13 @@ async def _store_artifact_in_subprocess(
     rendered_sha256: str,
     stored_size_bytes: int,
     stored_sha256: str,
-) -> bool:
+    preview_key: str,
+    preview_path: Path,
+    preview_rendered_size_bytes: int,
+    preview_rendered_sha256: str,
+    preview_stored_size_bytes: int,
+    preview_stored_sha256: str,
+) -> tuple[bool, bool]:
     command = [
         sys.executable,
         "-m",
@@ -185,6 +210,18 @@ async def _store_artifact_in_subprocess(
         str(stored_size_bytes),
         "--stored-sha256",
         stored_sha256,
+        "--preview-key",
+        preview_key,
+        "--preview-path",
+        str(preview_path),
+        "--preview-rendered-size",
+        str(preview_rendered_size_bytes),
+        "--preview-rendered-sha256",
+        preview_rendered_sha256,
+        "--preview-stored-size",
+        str(preview_stored_size_bytes),
+        "--preview-stored-sha256",
+        preview_stored_sha256,
     ]
     storage_task = asyncio.create_task(
         asyncio.to_thread(_run_artifact_storage_process, command)
@@ -216,9 +253,13 @@ async def _store_artifact_in_subprocess(
         raise RuntimeError(
             "artifact storage subprocess returned invalid output"
         ) from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("uploaded"), bool):
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("uploaded"), bool)
+        or not isinstance(payload.get("preview_uploaded"), bool)
+    ):
         raise RuntimeError("artifact storage subprocess returned an invalid result")
-    return payload["uploaded"]
+    return payload["uploaded"], payload["preview_uploaded"]
 
 
 def _month_start() -> datetime:
@@ -697,6 +738,11 @@ def artifact_response(
     artifact: Artifact,
     sources: list[ArtifactSource] | None = None,
 ) -> ArtifactResponse:
+    public_metadata = {
+        key: value
+        for key, value in (artifact.artifact_metadata or {}).items()
+        if not key.startswith("_")
+    }
     return ArtifactResponse(
         id=artifact.id,
         work_run_id=artifact.work_run_id,
@@ -708,7 +754,7 @@ def artifact_response(
         mime_type=artifact.mime_type,
         size_bytes=artifact.size_bytes,
         sha256=artifact.sha256,
-        metadata=artifact.artifact_metadata,
+        metadata=public_metadata,
         sources=[
             ArtifactSourceResponse(
                 document_id=source.document_id,
@@ -946,6 +992,58 @@ async def artifact_download(
     )
     record_artifact_download(artifact)
     return ArtifactDownloadResponse(url=url, expires_in=expires)
+
+
+async def artifact_preview(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+) -> ArtifactPreviewResponse:
+    artifact = (
+        await session.exec(
+            select(Artifact).where(
+                Artifact.id == artifact_id,
+                Artifact.user_id == user_id,
+                Artifact.status == "ready",
+                Artifact.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    metadata = artifact.artifact_metadata if artifact is not None else {}
+    if (
+        artifact is None
+        or not artifact.bucket
+        or not artifact.storage_key
+        or not metadata.get("preview_available")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="artifact_preview_not_found",
+        )
+
+    try:
+        payload = await download_artifact_preview(
+            bucket=artifact.bucket,
+            key=build_artifact_preview_key(artifact.storage_key),
+        )
+        decoded = json.loads(payload.decode("utf-8"))
+        return ArtifactPreviewResponse.model_validate(decoded)
+    except HTTPException:
+        raise
+    except (
+        ClientError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValidationError,
+        ValueError,
+    ) as exc:
+        logger.exception(
+            "artifact preview is invalid", extra={"artifact_id": artifact.id}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="artifact_preview_invalid",
+        ) from exc
 
 
 async def _publish_with_deadline(
@@ -1424,6 +1522,14 @@ async def process_spreadsheet_run(
             return
         rendered_size_bytes = output_path.stat().st_size
         sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
+        preview = ArtifactPreviewResponse.model_validate(rendered.preview)
+        preview_path = temp_path / f"{artifact_stem}.preview.json"
+        preview_path.write_text(
+            preview.model_dump_json(),
+            encoding="utf-8",
+        )
+        preview_size_bytes = preview_path.stat().st_size
+        preview_sha256 = hashlib.sha256(preview_path.read_bytes()).hexdigest()
         try:
             artifact_version = int(run.input_manifest.get("artifact_version", 1))
             revision_of_artifact_id = run.input_manifest.get("revision_of_artifact_id")
@@ -1442,6 +1548,32 @@ async def process_spreadsheet_run(
             )
         artifact_id = uuid.uuid5(run.id, f"artifact-v{artifact_version}")
         artifact = await session.get(Artifact, artifact_id)
+        artifact_was_preview_capable = bool(
+            artifact and (artifact.artifact_metadata or {}).get("preview_available")
+        )
+        artifact_metadata = {
+            "rows": rendered.row_count,
+            "columns": rendered.column_count,
+            "source_count": len(rendered.sources),
+            "renderer_version": 2,
+            "preview_available": True,
+            "preview_version": preview.version,
+            "preview_rows": len(preview.rows),
+            "preview_columns": len(preview.columns),
+            "_preview_size_bytes": preview_size_bytes,
+            "_preview_sha256": preview_sha256,
+            "normalization_version": (
+                1
+                if (comparison_mode and run.kind_version >= 2) or not comparison_mode
+                else 0
+            ),
+            "normalization_mode": (
+                "model" if "normalization_v1" in run.input_manifest else "exact"
+            ),
+            "revision_of_artifact_id": (
+                str(parent_artifact_id) if parent_artifact_id else None
+            ),
+        }
         if artifact is None:
             artifact = Artifact(
                 id=artifact_id,
@@ -1461,24 +1593,7 @@ async def process_spreadsheet_run(
                 mime_type=_ARTIFACT_MIME,
                 size_bytes=rendered_size_bytes,
                 sha256=sha256,
-                artifact_metadata={
-                    "rows": rendered.row_count,
-                    "columns": rendered.column_count,
-                    "source_count": len(rendered.sources),
-                    "renderer_version": 1,
-                    "normalization_version": (
-                        1
-                        if (comparison_mode and run.kind_version >= 2)
-                        or not comparison_mode
-                        else 0
-                    ),
-                    "normalization_mode": (
-                        "model" if "normalization_v1" in run.input_manifest else "exact"
-                    ),
-                    "revision_of_artifact_id": (
-                        str(parent_artifact_id) if parent_artifact_id else None
-                    ),
-                },
+                artifact_metadata=artifact_metadata,
             )
             session.add(artifact)
             await session.flush()
@@ -1499,6 +1614,10 @@ async def process_spreadsheet_run(
                     )
                 )
             await session.commit()
+        else:
+            artifact.artifact_metadata = artifact_metadata
+            session.add(artifact)
+            await session.commit()
 
         run.status = WorkRunStatus.STORING.value
         run.stage = "storing_artifact"
@@ -1513,12 +1632,25 @@ async def process_spreadsheet_run(
             artifact_id=artifact.id,
             version=artifact.version,
         )
-        stored_size_bytes, stored_sha256 = _artifact_storage_identity(
-            artifact,
-            rendered_size_bytes=rendered_size_bytes,
-            rendered_sha256=sha256,
-        )
-        artifact_uploaded = await _store_artifact_in_subprocess(
+        preview_key = build_artifact_preview_key(key)
+        if artifact_was_preview_capable:
+            stored_size_bytes, stored_sha256 = _artifact_storage_identity(
+                artifact,
+                rendered_size_bytes=rendered_size_bytes,
+                rendered_sha256=sha256,
+            )
+            preview_stored_size, preview_stored_sha256 = _preview_storage_identity(
+                artifact,
+                rendered_size_bytes=preview_size_bytes,
+                rendered_sha256=preview_sha256,
+            )
+        else:
+            stored_size_bytes, stored_sha256 = rendered_size_bytes, sha256
+            preview_stored_size, preview_stored_sha256 = (
+                preview_size_bytes,
+                preview_sha256,
+            )
+        artifact_uploaded, preview_uploaded = await _store_artifact_in_subprocess(
             bucket=bucket,
             key=key,
             output_path=output_path,
@@ -1526,10 +1658,22 @@ async def process_spreadsheet_run(
             rendered_sha256=sha256,
             stored_size_bytes=stored_size_bytes,
             stored_sha256=stored_sha256,
+            preview_key=preview_key,
+            preview_path=preview_path,
+            preview_rendered_size_bytes=preview_size_bytes,
+            preview_rendered_sha256=preview_sha256,
+            preview_stored_size_bytes=preview_stored_size,
+            preview_stored_sha256=preview_stored_sha256,
         )
         if artifact_uploaded:
             artifact.size_bytes = rendered_size_bytes
             artifact.sha256 = sha256
+        if preview_uploaded:
+            artifact.artifact_metadata = {
+                **artifact.artifact_metadata,
+                "_preview_size_bytes": preview_size_bytes,
+                "_preview_sha256": preview_sha256,
+            }
         artifact.bucket = bucket
         artifact.storage_key = key
         artifact.status = "ready"

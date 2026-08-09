@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.core.work_run_settings import WorkRunDeploymentGate
 from app.schemas.work_runs import (
+    ArtifactPreviewResponse,
     CreateWorkRunRequest,
     ReviseArtifactRequest,
     WorkRunAcceptedResponse,
@@ -245,3 +246,38 @@ def test_revision_instructions_are_trimmed_and_cannot_be_blank() -> None:
 
     with pytest.raises(ValidationError):
         ReviseArtifactRequest(instructions="   ")
+
+
+def test_artifact_preview_requires_a_bounded_rectangular_matrix() -> None:
+    preview = ArtifactPreviewResponse.model_validate(
+        {
+            "version": 1,
+            "goal": "Build an inventory table",
+            "row_count": 2,
+            "column_count": 2,
+            "source_count": 1,
+            "columns": [
+                {"label": "Item", "data_type": "text"},
+                {
+                    "label": "Stock",
+                    "data_type": "number",
+                    "number_format": "#,##0",
+                },
+            ],
+            "rows": [["Tea", 12], ["Coffee", 7]],
+            "rows_truncated": False,
+            "columns_truncated": False,
+            "warning_codes": [],
+        }
+    )
+
+    assert preview.rows[0] == ["Tea", 12]
+
+    with pytest.raises(ValidationError):
+        ArtifactPreviewResponse.model_validate(
+            {
+                **preview.model_dump(),
+                "rows": [["Tea"]],
+                "row_count": 1,
+            }
+        )

@@ -16,6 +16,9 @@ from app.r2.private_documents import (
 from app.r2.settings import Settings
 
 
+_MAX_PREVIEW_BYTES = 2_000_000
+
+
 def get_private_artifacts_bucket() -> str:
     bucket = get_private_documents_bucket()
     if not bucket:
@@ -33,6 +36,12 @@ def build_artifact_key(
     version: int = 1,
 ) -> str:
     return f"artifacts/{user_id}/{work_run_id}/{artifact_id}/comparison-v{version}.xlsx"
+
+
+def build_artifact_preview_key(artifact_key: str) -> str:
+    if not artifact_key.endswith(".xlsx"):
+        raise ValueError("artifact storage key must end with .xlsx")
+    return f"{artifact_key[:-5]}.preview.json"
 
 
 @lru_cache(maxsize=1)
@@ -62,6 +71,18 @@ def _put_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
         )
 
 
+def _put_artifact_preview(*, bucket: str, key: str, path: Path, sha256: str) -> None:
+    client = _private_s3_client()
+    with path.open("rb") as preview_file:
+        client.put_object(
+            Body=preview_file,
+            Bucket=bucket,
+            Key=key,
+            ContentType="application/json",
+            Metadata={"sha256": sha256},
+        )
+
+
 async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
     if bucket != get_private_artifacts_bucket():
         raise PrivateDocumentStorageConfigurationError(
@@ -69,6 +90,22 @@ async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> 
         )
     await asyncio.to_thread(
         _put_artifact,
+        bucket=bucket,
+        key=key,
+        path=path,
+        sha256=sha256,
+    )
+
+
+async def upload_artifact_preview(
+    *, bucket: str, key: str, path: Path, sha256: str
+) -> None:
+    if bucket != get_private_artifacts_bucket():
+        raise PrivateDocumentStorageConfigurationError(
+            "artifact bucket is not configured"
+        )
+    await asyncio.to_thread(
+        _put_artifact_preview,
         bucket=bucket,
         key=key,
         path=path,
@@ -114,6 +151,33 @@ async def artifact_object_matches(
         key=key,
         size_bytes=size_bytes,
         sha256=sha256,
+    )
+
+
+def _download_artifact_preview(*, bucket: str, key: str) -> bytes:
+    response = _private_s3_client().get_object(Bucket=bucket, Key=key)
+    body = response["Body"]
+    try:
+        declared_size = int(response.get("ContentLength") or 0)
+        if declared_size > _MAX_PREVIEW_BYTES:
+            raise ValueError("artifact preview is too large")
+        payload = body.read(_MAX_PREVIEW_BYTES + 1)
+    finally:
+        body.close()
+    if len(payload) > _MAX_PREVIEW_BYTES:
+        raise ValueError("artifact preview is too large")
+    return payload
+
+
+async def download_artifact_preview(*, bucket: str, key: str) -> bytes:
+    if bucket != get_private_artifacts_bucket():
+        raise PrivateDocumentStorageConfigurationError(
+            "artifact bucket is not configured"
+        )
+    return await asyncio.to_thread(
+        _download_artifact_preview,
+        bucket=bucket,
+        key=key,
     )
 
 

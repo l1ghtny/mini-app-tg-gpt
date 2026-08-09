@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 from openpyxl import load_workbook
 
 from app.services.work_runs.comparison import (
     ComparisonColumnSchema,
+    SourceTable,
     load_source_tables,
     render_comparison_workbook,
     validate_rendered_workbook,
@@ -47,24 +49,39 @@ def test_comparison_renderer_merges_columns_and_preserves_sources(tmp_path) -> N
     assert rendered.row_count == 3
     assert rendered.column_count == 4
     assert len(rendered.sources) == 2
+    assert rendered.preview["columns"] == [
+        {"label": "Товар", "data_type": "text", "number_format": None},
+        {
+            "label": "Цена",
+            "data_type": "number",
+            "number_format": '#,##0.00 "RUB"',
+        },
+        {"label": "Комментарий", "data_type": "text", "number_format": None},
+        {
+            "label": "Срок поставки",
+            "data_type": "text",
+            "number_format": None,
+        },
+    ]
+    assert rendered.preview["rows"][0] == [
+        "Чай",
+        120,
+        '=HYPERLINK("https://bad")',
+        None,
+    ]
     workbook = load_workbook(target_path, data_only=False)
     try:
         assert workbook.sheetnames == ["Сводка", "Сравнение", "Источники"]
         comparison = workbook["Сравнение"]
         headers = [cell.value for cell in comparison[1]]
-        assert headers == [
-            "Файл",
-            "Лист",
-            "Строка в источнике",
-            "Товар",
-            "Цена",
-            "Комментарий",
-            "Срок поставки",
-        ]
-        assert comparison[2][5].value == '\'=HYPERLINK("https://bad")'
-        assert comparison[4][2].value == 2
+        assert headers == ["Товар", "Цена", "Комментарий", "Срок поставки"]
+        assert comparison[2][2].value == '\'=HYPERLINK("https://bad")'
+        assert comparison[2][1].value == 120
+        assert comparison[2][1].number_format == '#,##0.00 "RUB"'
+        assert "LightnyData" in comparison.tables
         sources = workbook["Источники"]
         assert sources.max_row == 3
+        assert "LightnySources" in sources.tables
         assert sources.column_dimensions["A"].width == 36
         assert sources["A2"].alignment.wrap_text is True
     finally:
@@ -117,17 +134,11 @@ def test_comparison_renderer_applies_validated_column_schema(tmp_path) -> None:
     workbook = load_workbook(target_path, data_only=False)
     try:
         comparison = workbook["Сравнение"]
-        assert [cell.value for cell in comparison[1]] == [
-            "Файл",
-            "Лист",
-            "Строка в источнике",
-            "Товар",
-            "Цена",
-        ]
-        assert comparison[2][3].value == "Чай"
-        assert comparison[2][4].value == "120"
-        assert comparison[3][3].value == "Чай"
-        assert comparison[3][4].value == "110"
+        assert [cell.value for cell in comparison[1]] == ["Товар", "Цена"]
+        assert comparison[2][0].value == "Чай"
+        assert comparison[2][1].value == 120
+        assert comparison[3][0].value == "Чай"
+        assert comparison[3][1].value == 110
     finally:
         workbook.close()
 
@@ -152,8 +163,38 @@ def test_generalized_renderer_uses_data_and_goal_labels(tmp_path) -> None:
     workbook = load_workbook(target_path, data_only=False)
     try:
         assert workbook.sheetnames == ["Summary", "Data", "Sources"]
-        assert workbook["Summary"]["A2"].value == "Goal"
-        assert workbook["Summary"]["B2"].value == "Build a clean inventory table"
+        assert workbook["Summary"]["A5"].value == "Goal"
+        assert workbook["Summary"]["B5"].value == "Build a clean inventory table"
         assert workbook["Sources"]["F1"].value == "Output row"
+        assert "LightnyData" in workbook["Data"].tables
     finally:
         workbook.close()
+
+
+def test_preview_stays_within_private_transport_limit(tmp_path) -> None:
+    table = SourceTable(
+        document_id=uuid.uuid4(),
+        filename="wide.xlsx",
+        sheet_name="Data",
+        headers=tuple(f"Column {index}" for index in range(30)),
+        rows=tuple(tuple("🙂" * 500 for _ in range(30)) for _ in range(40)),
+        first_data_row=2,
+    )
+
+    rendered = render_comparison_workbook(
+        tables=(table,),
+        target_path=tmp_path / "wide.xlsx",
+        language="en",
+        currency=None,
+        instructions="Keep this readable",
+        comparison_mode=False,
+    )
+
+    encoded = json.dumps(
+        rendered.preview,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert len(encoded) <= 1_800_000
+    assert rendered.preview["rows_truncated"] is True
+    assert "preview_rows_truncated" in rendered.preview["warning_codes"]

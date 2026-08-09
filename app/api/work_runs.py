@@ -14,6 +14,7 @@ from app.db.models import AppUser
 from app.redis.event_bus import RedisEventBus
 from app.schemas.work_runs import (
     ArtifactDownloadResponse,
+    ArtifactPreviewResponse,
     CreateWorkRunRequest,
     ReviseArtifactRequest,
     WorkRunAcceptedResponse,
@@ -219,6 +220,18 @@ async def download_artifact(
     current_user: AppUser = Depends(get_current_user),
 ):
     return await service.artifact_download(session, current_user.id, artifact_id)
+
+
+@work_runs.get(
+    "/artifacts/{artifact_id}/preview",
+    response_model=ArtifactPreviewResponse,
+)
+async def preview_artifact(
+    artifact_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await service.artifact_preview(session, current_user.id, artifact_id)
 
 
 @work_runs.post(

@@ -196,3 +196,54 @@ class WorkRunListResponse(BaseModel):
 class ArtifactDownloadResponse(BaseModel):
     url: str
     expires_in: int
+
+
+ArtifactPreviewCell = str | int | float | bool | None
+
+
+class ArtifactPreviewColumn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=120)
+    data_type: Literal["text", "number", "date", "datetime", "boolean"]
+    number_format: str | None = Field(default=None, max_length=64)
+
+
+class ArtifactPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1]
+    goal: str | None = Field(default=None, max_length=4000)
+    row_count: int = Field(ge=0, le=250_000)
+    column_count: int = Field(ge=0)
+    source_count: int = Field(ge=0)
+    columns: list[ArtifactPreviewColumn] = Field(max_length=30)
+    rows: list[list[ArtifactPreviewCell]] = Field(max_length=100)
+    rows_truncated: bool
+    columns_truncated: bool
+    warning_codes: list[
+        Literal[
+            "preview_rows_truncated",
+            "preview_columns_truncated",
+            "preview_cells_truncated",
+        ]
+    ] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def validate_preview_matrix(self) -> Self:
+        width = len(self.columns)
+        if self.column_count < width:
+            raise ValueError("preview cannot contain more columns than the artifact")
+        if self.row_count < len(self.rows):
+            raise ValueError("preview cannot contain more rows than the artifact")
+        for row in self.rows:
+            if len(row) != width:
+                raise ValueError("preview rows must match the preview columns")
+            for value in row:
+                if isinstance(value, str) and len(value) > 500:
+                    raise ValueError("preview cell text cannot exceed 500 characters")
+        if self.rows_truncated != (self.row_count > len(self.rows)):
+            raise ValueError("rows_truncated does not match the preview size")
+        if self.columns_truncated != (self.column_count > width):
+            raise ValueError("columns_truncated does not match the preview size")
+        return self
