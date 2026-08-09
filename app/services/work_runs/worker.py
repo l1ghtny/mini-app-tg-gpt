@@ -15,7 +15,7 @@ from app.db.database import engine
 from app.db.models import WorkRun, utcnow_naive
 from app.redis.settings import settings as redis_settings
 from app.services.work_runs.contracts import WorkRunStatus
-from app.services.work_runs.service import fail_run, process_comparison_run
+from app.services.work_runs.service import fail_run, process_spreadsheet_run
 
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ async def run_worker(stop_event: asyncio.Event) -> None:
                         pass
                     continue
                 try:
-                    await process_comparison_run(
+                    await process_spreadsheet_run(
                         session=session,
                         redis=redis,
                         run=run,

@@ -130,3 +130,30 @@ def test_comparison_renderer_applies_validated_column_schema(tmp_path) -> None:
         assert comparison[3][4].value == "110"
     finally:
         workbook.close()
+
+
+def test_generalized_renderer_uses_data_and_goal_labels(tmp_path) -> None:
+    source_path = tmp_path / "inventory.csv"
+    source_path.write_text("Item;Stock\nTea;12\n", encoding="utf-8")
+    table = load_source_tables(
+        document_id=uuid.uuid4(), filename="inventory.csv", path=source_path
+    )[0]
+    target_path = tmp_path / "spreadsheet.xlsx"
+
+    render_comparison_workbook(
+        tables=(table,),
+        target_path=target_path,
+        language="en",
+        currency=None,
+        instructions="Build a clean inventory table",
+        comparison_mode=False,
+    )
+
+    workbook = load_workbook(target_path, data_only=False)
+    try:
+        assert workbook.sheetnames == ["Summary", "Data", "Sources"]
+        assert workbook["Summary"]["A2"].value == "Goal"
+        assert workbook["Summary"]["B2"].value == "Build a clean inventory table"
+        assert workbook["Sources"]["F1"].value == "Output row"
+    finally:
+        workbook.close()

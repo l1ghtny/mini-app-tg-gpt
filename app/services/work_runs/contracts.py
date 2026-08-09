@@ -6,6 +6,7 @@ from enum import StrEnum
 
 class WorkRunKind(StrEnum):
     OFFER_COMPARISON_XLSX = "offer_comparison_xlsx"
+    SPREADSHEET_BUILDER_XLSX = "spreadsheet_builder_xlsx"
 
 
 class WorkRunStatus(StrEnum):
@@ -84,7 +85,32 @@ _WORK_RUN_DEFINITIONS = {
             "cancelled",
             "failed",
         ),
-    )
+    ),
+    WorkRunKind.SPREADSHEET_BUILDER_XLSX: WorkRunDefinition(
+        kind=WorkRunKind.SPREADSHEET_BUILDER_XLSX,
+        version=1,
+        min_documents=1,
+        max_documents=5,
+        accepted_extensions=frozenset({".csv", ".xlsx"}),
+        artifact_kind="spreadsheet_builder_xlsx",
+        artifact_mime_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        stages=(
+            "accepted",
+            "reserving_allowance",
+            "waiting_for_worker",
+            "loading_sources",
+            "normalizing_data",
+            "rendering_artifact",
+            "validating_artifact",
+            "storing_artifact",
+            "completed",
+            "cancelling",
+            "cancelled",
+            "failed",
+        ),
+    ),
 }
 
 

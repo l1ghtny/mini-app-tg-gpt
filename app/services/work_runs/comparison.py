@@ -180,37 +180,39 @@ def _safe_cell(value: Any) -> Any:
     return value
 
 
-def _localized_labels(language: str) -> dict[str, str]:
+def _localized_labels(language: str, *, comparison_mode: bool) -> dict[str, str]:
     if language == "ru":
         return {
             "summary": "Сводка",
-            "comparison": "Сравнение",
+            "comparison": "Сравнение" if comparison_mode else "Данные",
             "sources": "Источники",
             "generated": "Создано",
-            "instructions": "Что сравнить",
+            "instructions": "Что сравнить" if comparison_mode else "Цель",
             "currency": "Валюта",
             "documents": "Файлов",
             "rows": "Строк данных",
             "document": "Файл",
             "sheet": "Лист",
             "source_row": "Строка в источнике",
-            "output_row": "Строка в сравнении",
+            "output_row": (
+                "Строка в сравнении" if comparison_mode else "Строка в результате"
+            ),
             "data_rows": "Строк данных",
             "columns": "Столбцов",
         }
     return {
         "summary": "Summary",
-        "comparison": "Comparison",
+        "comparison": "Comparison" if comparison_mode else "Data",
         "sources": "Sources",
         "generated": "Generated",
-        "instructions": "Comparison instructions",
+        "instructions": "Comparison instructions" if comparison_mode else "Goal",
         "currency": "Currency",
         "documents": "Documents",
         "rows": "Data rows",
         "document": "Document",
         "sheet": "Sheet",
         "source_row": "Source row",
-        "output_row": "Comparison row",
+        "output_row": "Comparison row" if comparison_mode else "Output row",
         "data_rows": "Data rows",
         "columns": "Columns",
     }
@@ -224,6 +226,7 @@ def render_comparison_workbook(
     currency: str | None,
     instructions: str | None,
     column_schema: ComparisonColumnSchema | None = None,
+    comparison_mode: bool = True,
 ) -> RenderedComparison:
     if not tables:
         raise ComparisonInputError("at least one source table is required")
@@ -231,7 +234,7 @@ def render_comparison_workbook(
     if total_rows > _MAX_OUTPUT_ROWS:
         raise ComparisonInputError("combined workbook contains too many data rows")
 
-    labels = _localized_labels(language)
+    labels = _localized_labels(language, comparison_mode=comparison_mode)
     ordered_headers: list[str] = []
     if column_schema is None:
         canonical_headers: dict[str, str] = {}
@@ -405,8 +408,8 @@ def validate_rendered_workbook(path: Path) -> None:
     workbook = load_workbook(path, read_only=True, data_only=False)
     try:
         if len(workbook.sheetnames) != 3:
-            raise ComparisonInputError("comparison workbook must contain three sheets")
+            raise ComparisonInputError("rendered workbook must contain three sheets")
         if workbook[workbook.sheetnames[1]].max_row < 1:
-            raise ComparisonInputError("comparison workbook has no header row")
+            raise ComparisonInputError("rendered workbook has no header row")
     finally:
         workbook.close()

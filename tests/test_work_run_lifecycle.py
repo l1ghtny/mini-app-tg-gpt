@@ -95,7 +95,7 @@ async def test_retry_clones_validated_manifest_and_records_lineage(
     assert request.document_ids == [
         uuid.UUID(value) for value in source.input_manifest["document_ids"]
     ]
-    assert request.options.model_dump() == source.options
+    assert request.options.model_dump() == {**source.options, "desired_columns": []}
     assert captured["retry_of_work_run_id"] == source.id
     assert captured["client_request_id"] == "retry-request-1"
     retry_metric.assert_called_once_with(source)

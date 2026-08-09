@@ -66,6 +66,51 @@ async def test_normalization_skips_provider_for_matching_columns() -> None:
 
 
 @pytest.mark.asyncio
+async def test_spreadsheet_builder_goal_forces_schema_normalization() -> None:
+    table = _table(
+        filename="inventory.csv",
+        headers=("Item", "Qty"),
+        rows=(("Tea", 12),),
+    )
+    client, create = _client(
+        {
+            "schema_version": 1,
+            "canonical_headers": ["Product", "Stock"],
+            "assignments": [
+                {
+                    "table_id": "table_1",
+                    "source_header": "Item",
+                    "canonical_header": "Product",
+                },
+                {
+                    "table_id": "table_1",
+                    "source_header": "Qty",
+                    "canonical_header": "Stock",
+                },
+            ],
+        }
+    )
+
+    result = await normalize_comparison_columns(
+        tables=(table,),
+        instructions="Build a clean inventory table",
+        currency=None,
+        language="en",
+        desired_columns=("Product", "Stock"),
+        force=True,
+        client=client,
+    )
+
+    assert result.used_model is True
+    assert result.schema.canonical_headers == ("Product", "Stock")
+    user_payload = json.loads(
+        create.await_args.kwargs["input"][1]["content"][0]["text"]
+    )
+    assert user_payload["instructions"] == "Build a clean inventory table"
+    assert user_payload["desired_columns"] == ["Product", "Stock"]
+
+
+@pytest.mark.asyncio
 async def test_normalization_aligns_semantically_equivalent_columns() -> None:
     first = _table(
         filename="a.csv",

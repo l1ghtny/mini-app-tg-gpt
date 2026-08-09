@@ -1102,6 +1102,7 @@ async def _reserve_normalization_budget(
         instructions=run.instructions,
         currency=run.options.get("currency"),
         language=run.options.get("output_language", "ru"),
+        desired_columns=tuple(run.options.get("desired_columns", ())),
     )
     estimated_cost, usage_payload = await _normalization_cost(
         session,
@@ -1165,12 +1166,20 @@ async def _normalize_columns_for_run(
     run: WorkRun,
     tables: tuple[SourceTable, ...],
 ) -> ComparisonColumnSchema:
-    if not requires_model_normalization(tables):
+    desired_columns = tuple(run.options.get("desired_columns", ()))
+    force_model = run.kind == WorkRunKind.SPREADSHEET_BUILDER_XLSX.value
+    if not requires_model_normalization(
+        tables,
+        desired_columns=desired_columns,
+        force=force_model,
+    ):
         result = await normalize_comparison_columns(
             tables=tables,
             instructions=run.instructions,
             currency=run.options.get("currency"),
             language=run.options.get("output_language", "ru"),
+            desired_columns=desired_columns,
+            force=force_model,
         )
         return result.schema
 
@@ -1205,7 +1214,11 @@ async def _normalize_columns_for_run(
         work_run_id=run.id,
         operation_key=operation_key,
         provider="openai",
-        operation_kind="comparison_column_normalization",
+        operation_kind=(
+            "spreadsheet_column_normalization"
+            if run.kind == WorkRunKind.SPREADSHEET_BUILDER_XLSX.value
+            else "comparison_column_normalization"
+        ),
         status="running",
         attempt_count=1,
         usage={**estimated_usage, "estimate": True},
@@ -1223,6 +1236,8 @@ async def _normalize_columns_for_run(
             instructions=run.instructions,
             currency=run.options.get("currency"),
             language=run.options.get("output_language", "ru"),
+            desired_columns=desired_columns,
+            force=force_model,
         )
     except Exception as error:
         operation.provider_request_id = _provider_request_id(error)
@@ -1287,9 +1302,27 @@ async def _normalize_columns_for_run(
     return result.schema
 
 
-async def process_comparison_run(
+async def process_spreadsheet_run(
     *, session: AsyncSession, redis: Redis, run: WorkRun, worker_id: str
 ) -> None:
+    try:
+        run_kind = WorkRunKind(run.kind)
+    except ValueError as exc:
+        raise WorkRunExecutionError(
+            WorkRunErrorCode.KIND_NOT_SUPPORTED,
+            f"unsupported spreadsheet workflow kind: {run.kind}",
+        ) from exc
+    if run_kind not in {
+        WorkRunKind.OFFER_COMPARISON_XLSX,
+        WorkRunKind.SPREADSHEET_BUILDER_XLSX,
+    }:
+        raise WorkRunExecutionError(
+            WorkRunErrorCode.KIND_NOT_SUPPORTED,
+            f"unsupported spreadsheet workflow kind: {run.kind}",
+        )
+    definition = get_work_run_definition(run_kind)
+    comparison_mode = run_kind == WorkRunKind.OFFER_COMPARISON_XLSX
+    artifact_stem = "offer-comparison" if comparison_mode else "spreadsheet"
     if run.status == WorkRunStatus.CANCELLING.value:
         await complete_cancellation(session=session, redis=redis, run=run)
         return
@@ -1351,7 +1384,7 @@ async def process_comparison_run(
         await _publish(redis, run, "work.stage")
 
         column_schema = None
-        if run.kind_version >= 2:
+        if (comparison_mode and run.kind_version >= 2) or not comparison_mode:
             column_schema = await _normalize_columns_for_run(
                 session=session,
                 run=run,
@@ -1366,7 +1399,7 @@ async def process_comparison_run(
         session.add(run)
         await session.commit()
         await _publish(redis, run, "work.stage")
-        output_path = temp_path / "offer-comparison.xlsx"
+        output_path = temp_path / f"{artifact_stem}.xlsx"
         rendered = render_comparison_workbook(
             tables=tuple(tables),
             target_path=output_path,
@@ -1374,6 +1407,7 @@ async def process_comparison_run(
             currency=run.options.get("currency"),
             instructions=run.instructions,
             column_schema=column_schema,
+            comparison_mode=comparison_mode,
         )
 
         if await _cancel_if_requested(session=session, redis=redis, run=run):
@@ -1417,12 +1451,12 @@ async def process_comparison_run(
                 folder_id=run.folder_id,
                 parent_artifact_id=parent_artifact_id,
                 version=artifact_version,
-                kind="offer_comparison_xlsx",
+                kind=definition.artifact_kind,
                 status="rendering",
                 filename=(
-                    "offer-comparison.xlsx"
+                    f"{artifact_stem}.xlsx"
                     if artifact_version == 1
-                    else f"offer-comparison-v{artifact_version}.xlsx"
+                    else f"{artifact_stem}-v{artifact_version}.xlsx"
                 ),
                 mime_type=_ARTIFACT_MIME,
                 size_bytes=rendered_size_bytes,
@@ -1432,7 +1466,12 @@ async def process_comparison_run(
                     "columns": rendered.column_count,
                     "source_count": len(rendered.sources),
                     "renderer_version": 1,
-                    "normalization_version": 1 if run.kind_version >= 2 else 0,
+                    "normalization_version": (
+                        1
+                        if (comparison_mode and run.kind_version >= 2)
+                        or not comparison_mode
+                        else 0
+                    ),
                     "normalization_mode": (
                         "model" if "normalization_v1" in run.input_manifest else "exact"
                     ),
@@ -1519,6 +1558,19 @@ async def process_comparison_run(
         await session.commit()
         await _publish(redis, run, "artifact.ready")
         await _publish(redis, run, "work.done")
+
+
+async def process_comparison_run(
+    *, session: AsyncSession, redis: Redis, run: WorkRun, worker_id: str
+) -> None:
+    """Compatibility entrypoint for older worker imports and focused tests."""
+
+    await process_spreadsheet_run(
+        session=session,
+        redis=redis,
+        run=run,
+        worker_id=worker_id,
+    )
 
 
 async def fail_run(

@@ -20,6 +20,27 @@ class OfferComparisonOptions(BaseModel):
 
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     output_language: Literal["ru", "en"] = "ru"
+    desired_columns: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("desired_columns")
+    @classmethod
+    def normalize_desired_columns(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_value in values:
+            value = " ".join(raw_value.split())
+            key = value.casefold()
+            if not value:
+                raise ValueError("desired columns cannot be blank")
+            if len(value) > 120:
+                raise ValueError("desired columns cannot exceed 120 characters")
+            if value.startswith(("=", "+", "-", "@")):
+                raise ValueError("desired columns cannot begin with a formula prefix")
+            if key in seen:
+                raise ValueError("desired columns must be unique")
+            seen.add(key)
+            normalized.append(value)
+        return normalized
 
 
 class CreateWorkRunRequest(BaseModel):
@@ -58,6 +79,18 @@ class CreateWorkRunRequest(BaseModel):
             raise ValueError(
                 f"{self.kind} requires between {definition.min_documents} "
                 f"and {definition.max_documents} documents"
+            )
+        if (
+            self.kind == WorkRunKind.SPREADSHEET_BUILDER_XLSX
+            and self.instructions is None
+        ):
+            raise ValueError("spreadsheet_builder_xlsx requires a goal")
+        if (
+            self.kind == WorkRunKind.OFFER_COMPARISON_XLSX
+            and self.options.desired_columns
+        ):
+            raise ValueError(
+                "desired_columns are only supported by spreadsheet_builder_xlsx"
             )
         return self
 

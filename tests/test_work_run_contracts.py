@@ -64,10 +64,11 @@ def test_work_run_settings_reject_invalid_values(name: str, value: str) -> None:
         WorkRunDeploymentGate.from_env({name: value})
 
 
-def test_registry_exposes_only_the_first_beta_workflow() -> None:
+def test_registry_exposes_legacy_comparison_and_spreadsheet_builder() -> None:
     definitions = list_work_run_definitions()
     assert tuple(definition.kind for definition in definitions) == (
         WorkRunKind.OFFER_COMPARISON_XLSX,
+        WorkRunKind.SPREADSHEET_BUILDER_XLSX,
     )
 
     definition = get_work_run_definition(WorkRunKind.OFFER_COMPARISON_XLSX)
@@ -76,6 +77,12 @@ def test_registry_exposes_only_the_first_beta_workflow() -> None:
     assert definition.max_documents == 5
     assert definition.accepted_extensions == frozenset({".csv", ".xlsx"})
     assert "normalizing_data" in definition.stages
+
+    builder = get_work_run_definition(WorkRunKind.SPREADSHEET_BUILDER_XLSX)
+    assert builder.version == 1
+    assert builder.min_documents == 1
+    assert builder.max_documents == 5
+    assert builder.artifact_kind == "spreadsheet_builder_xlsx"
 
 
 def test_create_request_normalizes_bounded_input() -> None:
@@ -94,6 +101,60 @@ def test_create_request_normalizes_bounded_input() -> None:
 
     assert request.instructions == "Compare payment terms"
     assert request.options.currency == "RUB"
+
+
+def test_spreadsheet_builder_requires_goal_and_normalizes_desired_columns() -> None:
+    request = CreateWorkRunRequest.model_validate(
+        {
+            "kind": "spreadsheet_builder_xlsx",
+            "document_ids": [uuid.uuid4()],
+            "instructions": "  Build a clean inventory table  ",
+            "options": {
+                "output_language": "en",
+                "desired_columns": [" Product name ", "Stock   status"],
+            },
+        }
+    )
+
+    assert request.instructions == "Build a clean inventory table"
+    assert request.options.desired_columns == ["Product name", "Stock status"]
+
+
+@pytest.mark.parametrize("instructions", [None, "   "])
+def test_spreadsheet_builder_rejects_missing_goal(instructions: str | None) -> None:
+    with pytest.raises(ValidationError):
+        CreateWorkRunRequest.model_validate(
+            {
+                "kind": "spreadsheet_builder_xlsx",
+                "document_ids": [uuid.uuid4()],
+                "instructions": instructions,
+            }
+        )
+
+
+def test_spreadsheet_builder_rejects_duplicate_desired_columns() -> None:
+    with pytest.raises(ValidationError):
+        CreateWorkRunRequest.model_validate(
+            {
+                "kind": "spreadsheet_builder_xlsx",
+                "document_ids": [uuid.uuid4()],
+                "instructions": "Build a table",
+                "options": {"desired_columns": ["Price", " price "]},
+            }
+        )
+
+
+@pytest.mark.parametrize("column", ["=NOW()", "x" * 121])
+def test_spreadsheet_builder_rejects_unsafe_desired_columns(column: str) -> None:
+    with pytest.raises(ValidationError):
+        CreateWorkRunRequest.model_validate(
+            {
+                "kind": "spreadsheet_builder_xlsx",
+                "document_ids": [uuid.uuid4()],
+                "instructions": "Build a table",
+                "options": {"desired_columns": [column]},
+            }
+        )
 
 
 @pytest.mark.parametrize(
