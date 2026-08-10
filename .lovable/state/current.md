@@ -1,5 +1,23 @@
 # Current State
 
+## 2026-08-10 production R2 Last-Modified fix
+
+- Sentry `GPT-MINI-APP-BACKEND-5X` traced to direct R2 image streaming passing
+  an unnormalized `LastModified` datetime to `format_datetime(..., usegmt=True)`.
+- Normalize aware and naive R2 timestamps with modern `datetime.UTC` before
+  emitting the optional HTTP `Last-Modified` header.
+- Added route-level and header-level regression coverage and bumped the backend
+  release from `1.6.3` to `1.6.4` for post-deploy Sentry verification.
+- Validation: six image-proxy tests and both version/entrypoint tests pass;
+  changed-file Ruff, Python compilation, and `git diff --check` pass. The two
+  remaining image-share tests require an unavailable `TEST_DATABASE_URL`.
+
+### Next steps
+
+1. Confirm TeamCity deploys backend release `1.6.4` from `master`.
+2. Exercise a tracked R2 image through `/api/v1/images/proxy` in production.
+3. Verify `GPT-MINI-APP-BACKEND-5X` receives no `1.6.4` events before resolving it.
+
 ## 2026-08-06 production image availability fallback
 
 - The authenticated image proxy now streams tracked assets directly from R2 by

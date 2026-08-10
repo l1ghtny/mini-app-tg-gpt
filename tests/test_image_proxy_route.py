@@ -1,11 +1,13 @@
+import os
+from datetime import datetime
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
-import httpx
-import os
-import pytest
-from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -198,6 +200,7 @@ def test_proxy_image_streams_tracked_asset_directly_from_r2(monkeypatch):
             "ContentType": "image/png",
             "ContentLength": 8,
             "ETag": '"r2-etag"',
+            "LastModified": datetime.fromisoformat("2026-08-08T12:55:53+02:00"),
         }
     )
     context = _FakeR2Context(r2_client)
@@ -216,9 +219,19 @@ def test_proxy_image_streams_tracked_asset_directly_from_r2(monkeypatch):
     assert response.content == b"r2-image"
     assert response.headers["content-type"].startswith("image/png")
     assert response.headers["etag"] == '"r2-etag"'
+    assert response.headers["last-modified"] == "Sat, 08 Aug 2026 10:55:53 GMT"
     assert r2_client.calls == [{"Bucket": "images", "Key": asset.key}]
     assert body.closed is True
     assert context.exited is True
+
+
+def test_r2_response_headers_treats_naive_last_modified_as_utc():
+    headers = image_api._r2_response_headers(
+        {"LastModified": datetime(2026, 8, 8, 10, 55, 53)},
+        "cat.png",
+    )
+
+    assert headers["Last-Modified"] == "Sat, 08 Aug 2026 10:55:53 GMT"
 
 
 def test_proxy_image_marks_missing_tracked_asset_unavailable(monkeypatch):

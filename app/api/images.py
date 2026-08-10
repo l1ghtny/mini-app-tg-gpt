@@ -1,8 +1,9 @@
+import logging
 import os
 import sys
 import time
 import uuid
-import logging
+from datetime import UTC, datetime
 from email.utils import format_datetime
 from typing import Any, AsyncIterator
 from urllib.parse import unquote, urlsplit
@@ -148,7 +149,11 @@ def _r2_response_headers(response: dict[str, Any], filename: str) -> dict[str, s
             upstream_headers[target] = str(value)
 
     last_modified = response.get("LastModified")
-    if last_modified is not None:
+    if isinstance(last_modified, datetime):
+        if last_modified.tzinfo is None:
+            last_modified = last_modified.replace(tzinfo=UTC)
+        else:
+            last_modified = last_modified.astimezone(UTC)
         upstream_headers["last-modified"] = format_datetime(last_modified, usegmt=True)
 
     return _proxy_response_headers(upstream_headers, filename)
