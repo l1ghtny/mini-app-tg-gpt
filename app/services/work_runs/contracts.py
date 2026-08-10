@@ -46,6 +46,21 @@ class WorkRunErrorCode(StrEnum):
     INTERNAL_ERROR = "work_run_internal_error"
 
 
+class WorkRunPlanStep(StrEnum):
+    READ_SOURCES = "read_sources"
+    ALIGN_COLUMNS = "align_columns"
+    COMBINE_ROWS = "combine_rows"
+    BUILD_WORKBOOK = "build_workbook"
+    VERIFY_RESULT = "verify_result"
+
+
+class WorkRunOutputFeature(StrEnum):
+    NATIVE_EXCEL_TABLE = "native_excel_table"
+    SUMMARY_SHEET = "summary_sheet"
+    SOURCES_SHEET = "sources_sheet"
+    INLINE_PREVIEW = "inline_preview"
+
+
 @dataclass(frozen=True)
 class WorkRunDefinition:
     """Code-versioned technical constraints for one workflow kind."""
@@ -58,6 +73,7 @@ class WorkRunDefinition:
     artifact_kind: str
     artifact_mime_type: str
     stages: tuple[str, ...]
+    plan_steps: tuple[WorkRunPlanStep, ...]
 
 
 _WORK_RUN_DEFINITIONS = {
@@ -85,6 +101,13 @@ _WORK_RUN_DEFINITIONS = {
             "cancelled",
             "failed",
         ),
+        plan_steps=(
+            WorkRunPlanStep.READ_SOURCES,
+            WorkRunPlanStep.ALIGN_COLUMNS,
+            WorkRunPlanStep.COMBINE_ROWS,
+            WorkRunPlanStep.BUILD_WORKBOOK,
+            WorkRunPlanStep.VERIFY_RESULT,
+        ),
     ),
     WorkRunKind.SPREADSHEET_BUILDER_XLSX: WorkRunDefinition(
         kind=WorkRunKind.SPREADSHEET_BUILDER_XLSX,
@@ -109,6 +132,13 @@ _WORK_RUN_DEFINITIONS = {
             "cancelling",
             "cancelled",
             "failed",
+        ),
+        plan_steps=(
+            WorkRunPlanStep.READ_SOURCES,
+            WorkRunPlanStep.ALIGN_COLUMNS,
+            WorkRunPlanStep.COMBINE_ROWS,
+            WorkRunPlanStep.BUILD_WORKBOOK,
+            WorkRunPlanStep.VERIFY_RESULT,
         ),
     ),
 }

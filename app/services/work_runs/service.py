@@ -54,8 +54,10 @@ from app.schemas.work_runs import (
     ArtifactSourceResponse,
     CreateWorkRunRequest,
     ReviseArtifactRequest,
+    SpreadsheetWorkRunResultSummary,
     WorkRunCapabilitiesResponse,
     WorkRunListResponse,
+    WorkRunPlanResponse,
     WorkRunResponse,
 )
 from app.services.work_runs.comparison import (
@@ -79,6 +81,7 @@ from app.services.work_runs.normalization import (
 from app.services.work_runs.contracts import (
     WorkRunErrorCode,
     WorkRunKind,
+    WorkRunOutputFeature,
     WorkRunStatus,
     get_work_run_definition,
     list_work_run_definitions,
@@ -332,11 +335,15 @@ async def capabilities(
         await session.exec(select(WorkRunPolicy).where(WorkRunPolicy.enabled.is_(True)))
     ).all()
     policy_by_kind = {policy.kind: policy for policy in policies}
+    definitions = list_work_run_definitions()
     available = [
         definition.kind
-        for definition in list_work_run_definitions()
+        for definition in definitions
         if definition.kind.value in policy_by_kind
     ]
+    definitions_by_kind = {
+        definition.kind: definition for definition in definitions
+    }
     selected = policy_by_kind.get(available[0].value) if available else None
     return WorkRunCapabilitiesResponse(
         enabled=bool(available),
@@ -346,6 +353,16 @@ async def capabilities(
             selected.monthly_allowance_per_user if selected else 0
         ),
         unavailable_reason=None if available else WorkRunErrorCode.DISABLED,
+        plans=[
+            WorkRunPlanResponse(
+                kind=kind,
+                kind_version=definitions_by_kind[kind].version,
+                min_documents=definitions_by_kind[kind].min_documents,
+                max_documents=definitions_by_kind[kind].max_documents,
+                steps=list(definitions_by_kind[kind].plan_steps),
+            )
+            for kind in available
+        ],
     )
 
 
@@ -1680,16 +1697,21 @@ async def process_spreadsheet_run(
         run.status = WorkRunStatus.SUCCEEDED.value
         run.stage = "completed"
         run.progress_percent = 100
-        run.result_summary = json.dumps(
-            {
-                "rows": rendered.row_count,
-                "columns": rendered.column_count,
-                "sources": len(rendered.sources),
-                "normalization_mode": (
-                    "model" if "normalization_v1" in run.input_manifest else "exact"
-                ),
-            },
-            separators=(",", ":"),
+        run.result_summary = SpreadsheetWorkRunResultSummary(
+            rows=rendered.row_count,
+            columns=rendered.column_count,
+            sources=len(rendered.sources),
+            normalization_mode=(
+                "model" if "normalization_v1" in run.input_manifest else "exact"
+            ),
+            output_features=[
+                WorkRunOutputFeature.NATIVE_EXCEL_TABLE,
+                WorkRunOutputFeature.SUMMARY_SHEET,
+                WorkRunOutputFeature.SOURCES_SHEET,
+                WorkRunOutputFeature.INLINE_PREVIEW,
+            ],
+        ).model_dump_json(
+            exclude_none=True,
         )
         run.completed_at = utcnow_naive()
         run.lease_expires_at = None

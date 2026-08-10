@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.services.work_runs.contracts import (
     WorkRunErrorCode,
     WorkRunKind,
+    WorkRunOutputFeature,
+    WorkRunPlanStep,
     WorkRunStatus,
     get_work_run_definition,
 )
@@ -106,12 +108,30 @@ class WorkRunAcceptedResponse(BaseModel):
     stream_url: str
 
 
+class WorkRunPlanResponse(BaseModel):
+    kind: WorkRunKind
+    kind_version: int = Field(ge=1)
+    min_documents: int = Field(ge=1)
+    max_documents: int = Field(ge=1)
+    steps: list[WorkRunPlanStep]
+
+
 class WorkRunCapabilitiesResponse(BaseModel):
     enabled: bool
     available_kinds: list[WorkRunKind]
     max_active_per_user: int
     monthly_allowance_per_user: int
     unavailable_reason: WorkRunErrorCode | None = None
+    plans: list[WorkRunPlanResponse] = Field(default_factory=list)
+
+
+class SpreadsheetWorkRunResultSummary(BaseModel):
+    version: Literal[1] = 1
+    rows: int = Field(ge=0)
+    columns: int = Field(ge=0)
+    sources: int = Field(ge=0)
+    normalization_mode: Literal["model", "exact"]
+    output_features: list[WorkRunOutputFeature]
 
 
 class WorkRunErrorResponse(BaseModel):

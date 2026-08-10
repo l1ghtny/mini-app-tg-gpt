@@ -9,11 +9,15 @@ from app.schemas.work_runs import (
     ArtifactPreviewResponse,
     CreateWorkRunRequest,
     ReviseArtifactRequest,
+    SpreadsheetWorkRunResultSummary,
     WorkRunAcceptedResponse,
+    WorkRunCapabilitiesResponse,
     WorkRunListResponse,
 )
 from app.services.work_runs.contracts import (
     WorkRunKind,
+    WorkRunOutputFeature,
+    WorkRunPlanStep,
     WorkRunStatus,
     can_transition_work_run,
     get_work_run_definition,
@@ -78,12 +82,50 @@ def test_registry_exposes_legacy_comparison_and_spreadsheet_builder() -> None:
     assert definition.max_documents == 5
     assert definition.accepted_extensions == frozenset({".csv", ".xlsx"})
     assert "normalizing_data" in definition.stages
+    assert definition.plan_steps == (
+        WorkRunPlanStep.READ_SOURCES,
+        WorkRunPlanStep.ALIGN_COLUMNS,
+        WorkRunPlanStep.COMBINE_ROWS,
+        WorkRunPlanStep.BUILD_WORKBOOK,
+        WorkRunPlanStep.VERIFY_RESULT,
+    )
 
     builder = get_work_run_definition(WorkRunKind.SPREADSHEET_BUILDER_XLSX)
     assert builder.version == 1
     assert builder.min_documents == 1
     assert builder.max_documents == 5
     assert builder.artifact_kind == "spreadsheet_builder_xlsx"
+
+
+def test_capabilities_plan_is_additive_and_defaults_for_old_callers() -> None:
+    capabilities = WorkRunCapabilitiesResponse.model_validate(
+        {
+            "enabled": True,
+            "available_kinds": ["spreadsheet_builder_xlsx"],
+            "max_active_per_user": 1,
+            "monthly_allowance_per_user": 25,
+        }
+    )
+
+    assert capabilities.plans == []
+
+
+def test_spreadsheet_result_summary_has_a_versioned_output_contract() -> None:
+    summary = SpreadsheetWorkRunResultSummary(
+        rows=12,
+        columns=4,
+        sources=2,
+        normalization_mode="model",
+        output_features=[
+            WorkRunOutputFeature.NATIVE_EXCEL_TABLE,
+            WorkRunOutputFeature.SUMMARY_SHEET,
+            WorkRunOutputFeature.SOURCES_SHEET,
+            WorkRunOutputFeature.INLINE_PREVIEW,
+        ],
+    )
+
+    assert summary.version == 1
+    assert summary.output_features[-1] == WorkRunOutputFeature.INLINE_PREVIEW
 
 
 def test_create_request_normalizes_bounded_input() -> None:
