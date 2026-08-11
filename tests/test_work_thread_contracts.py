@@ -114,6 +114,5 @@ def test_agentic_work_migration_is_additive_and_uses_committed_head(
     assert "'agentic_task', true, 1, 25, 1.000000, 10.000000, 2" in " ".join(
         sql.split()
     )
-    assert "set unit_price_web_search_call = 0.010000" in sql
     assert "drop table" not in sql
     assert "drop column" not in sql

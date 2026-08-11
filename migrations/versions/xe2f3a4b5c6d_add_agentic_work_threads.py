@@ -19,15 +19,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute(
-        """
-        UPDATE ai_model_pricing
-        SET unit_price_web_search_call = 0.010000
-        WHERE provider = 'openai'
-          AND model_name = 'gpt-5.6-luna'
-          AND unit_price_web_search_call = 0
-        """
-    )
     op.create_table(
         "work_thread",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -150,12 +141,3 @@ def downgrade() -> None:
     op.drop_index("ix_work_thread_conversation_id", table_name="work_thread")
     op.drop_index("ix_work_thread_user_id", table_name="work_thread")
     op.drop_table("work_thread")
-    op.execute(
-        """
-        UPDATE ai_model_pricing
-        SET unit_price_web_search_call = 0
-        WHERE provider = 'openai'
-          AND model_name = 'gpt-5.6-luna'
-          AND unit_price_web_search_call = 0.010000
-        """
-    )

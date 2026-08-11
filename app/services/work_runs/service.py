@@ -115,6 +115,7 @@ _ARTIFACT_STORAGE_TIMEOUT_SECONDS = 90
 _ARTIFACT_STORAGE_CALL_TIMEOUT_SECONDS = 100
 _EVENT_PUBLISH_TIMEOUT_SECONDS = 5
 logger = logging.getLogger(__name__)
+DEFAULT_WEB_SEARCH_CALL_COST_USD = Decimal("0.010000")
 
 
 class WorkRunExecutionError(RuntimeError):
@@ -1186,8 +1187,13 @@ async def _normalization_cost(
         pricing.unit_price_reasoning_per_1m,
         usage.reasoning_tokens,
     )
-    web_search_rate = Decimal(
+    configured_web_search_rate = Decimal(
         getattr(pricing, "unit_price_web_search_call", Decimal("0")) or 0
+    )
+    web_search_rate = (
+        configured_web_search_rate
+        if configured_web_search_rate > 0 or web_search_calls == 0
+        else DEFAULT_WEB_SEARCH_CALL_COST_USD
     )
     cost_web_search = (
         web_search_rate * Decimal(max(0, web_search_calls))

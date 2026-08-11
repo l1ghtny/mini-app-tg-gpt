@@ -127,6 +127,29 @@ async def test_normalization_cost_records_immutable_pricing_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_normalization_cost_uses_conservative_search_rate_when_unconfigured() -> None:
+    pricing = SimpleNamespace(
+        id=uuid.uuid4(),
+        currency="USD",
+        unit_price_input_per_1m=Decimal("1.000000"),
+        unit_price_cached_input_per_1m=Decimal("0.100000"),
+        unit_price_output_per_1m=Decimal("6.000000"),
+        unit_price_reasoning_per_1m=Decimal("6.000000"),
+        unit_price_web_search_call=Decimal("0"),
+    )
+
+    cost, snapshot = await service._normalization_cost(
+        _Session(pricing),  # type: ignore[arg-type]
+        model="gpt-5.6-luna",
+        usage=NormalizationUsage(0, 0, 0, 0),
+        web_search_calls=2,
+    )
+
+    assert cost == Decimal("0.020000")
+    assert snapshot["unit_price_web_search_call"] == "0.010000"
+
+
+@pytest.mark.asyncio
 async def test_normalization_operation_persists_reusable_result_and_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
