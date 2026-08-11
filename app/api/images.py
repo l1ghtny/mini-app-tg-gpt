@@ -159,17 +159,35 @@ def _r2_response_headers(response: dict[str, Any], filename: str) -> dict[str, s
     return _proxy_response_headers(upstream_headers, filename)
 
 
+async def _close_r2_stream(
+    body: Any | None,
+    client_context: Any,
+    exc_type: type[BaseException] | None = None,
+    exc: BaseException | None = None,
+    traceback: Any | None = None,
+) -> None:
+    try:
+        if body is not None:
+            body.close()
+    finally:
+        await client_context.__aexit__(exc_type, exc, traceback)
+
+
 async def _r2_body_chunks(body: Any, client_context: Any) -> AsyncIterator[bytes]:
     try:
         async for chunk in body.iter_chunks(chunk_size=64 * 1024):
             yield chunk
     except BaseException as exc:
-        body.close()
-        await client_context.__aexit__(type(exc), exc, exc.__traceback__)
+        await _close_r2_stream(
+            body,
+            client_context,
+            type(exc),
+            exc,
+            exc.__traceback__,
+        )
         raise
     else:
-        body.close()
-        await client_context.__aexit__(None, None, None)
+        await _close_r2_stream(body, client_context)
 
 
 async def _stream_tracked_image(
@@ -177,32 +195,31 @@ async def _stream_tracked_image(
 ) -> StreamingResponse:
     client_context = s3_client()
     client = await client_context.__aenter__()
+    body = None
     try:
         response = await client.get_object(Bucket=asset.bucket, Key=asset.key)
+        body = response["Body"]
+        content_type = (
+            (response.get("ContentType") or "application/octet-stream")
+            .split(";", 1)[0]
+            .strip()
+            .lower()
+        )
+        if not (
+            content_type.startswith("image/")
+            or content_type == "application/octet-stream"
+        ):
+            raise HTTPException(status_code=415, detail="Stored object is not an image")
+
+        filename = _image_filename(asset.public_url, content_type)
+        return StreamingResponse(
+            _r2_body_chunks(body, client_context),
+            media_type=content_type,
+            headers=_r2_response_headers(response, filename),
+        )
     except BaseException:
-        await client_context.__aexit__(*sys.exc_info())
+        await _close_r2_stream(body, client_context, *sys.exc_info())
         raise
-
-    body = response["Body"]
-    content_type = (
-        (response.get("ContentType") or "application/octet-stream")
-        .split(";", 1)[0]
-        .strip()
-        .lower()
-    )
-    if not (
-        content_type.startswith("image/") or content_type == "application/octet-stream"
-    ):
-        body.close()
-        await client_context.__aexit__(None, None, None)
-        raise HTTPException(status_code=415, detail="Stored object is not an image")
-
-    filename = _image_filename(asset.public_url, content_type)
-    return StreamingResponse(
-        _r2_body_chunks(body, client_context),
-        media_type=content_type,
-        headers=_r2_response_headers(response, filename),
-    )
 
 
 async def _refresh_uploaded_image_readiness(asset_id: uuid.UUID) -> None:

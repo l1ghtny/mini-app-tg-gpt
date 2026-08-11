@@ -1,5 +1,23 @@
 # Current State
 
+## 2026-08-11 production R2 stream cleanup
+
+- Centralized R2 response-body and client-context cleanup for normal stream
+  completion, stream errors, and every setup failure after `get_object()`
+  succeeds.
+- Added regression coverage that forces response-header construction to fail
+  and verifies both resources close with the original exception context.
+- Bumped the backend Sentry release from `1.6.4` to `1.6.5`.
+- Validation: ten focused image-proxy, R2-client, and release-wiring tests,
+  changed-file Ruff, Python compilation, and `git diff --check` pass.
+
+### Next steps
+
+1. Confirm TeamCity deploys backend release `1.6.5` to
+   `production_main_server`.
+2. Exercise `/api/v1/images/proxy` against a tracked image and confirm Sentry
+   issues `5X` and `5Y` do not recur.
+
 ## 2026-08-10 production R2 Last-Modified fix
 
 - Sentry `GPT-MINI-APP-BACKEND-5X` traced to direct R2 image streaming passing

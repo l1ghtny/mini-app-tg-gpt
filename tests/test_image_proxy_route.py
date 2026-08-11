@@ -91,12 +91,14 @@ class _FakeR2Context:
     def __init__(self, client: _FakeR2Client):
         self.client = client
         self.exited = False
+        self.exit_args = None
 
     async def __aenter__(self):
         return self.client
 
-    async def __aexit__(self, *_args):
+    async def __aexit__(self, *args):
         self.exited = True
+        self.exit_args = args
 
 
 def _build_test_client() -> TestClient:
@@ -232,6 +234,37 @@ def test_r2_response_headers_treats_naive_last_modified_as_utc():
     )
 
     assert headers["Last-Modified"] == "Sat, 08 Aug 2026 10:55:53 GMT"
+
+
+@pytest.mark.asyncio
+async def test_stream_tracked_image_closes_r2_when_response_setup_fails(monkeypatch):
+    asset = SimpleNamespace(
+        bucket="images",
+        key="images/free/generated/cat.png",
+        public_url="https://allowed.example/images/free/generated/cat.png",
+    )
+    body = _FakeR2Body(b"r2-image")
+    context = _FakeR2Context(
+        _FakeR2Client(
+            response={
+                "Body": body,
+                "ContentType": "image/png",
+            }
+        )
+    )
+
+    def _raise_header_error(*_args, **_kwargs):
+        raise ValueError("response header construction failed")
+
+    monkeypatch.setattr(image_api, "s3_client", lambda: context)
+    monkeypatch.setattr(image_api, "_r2_response_headers", _raise_header_error)
+
+    with pytest.raises(ValueError, match="response header construction failed"):
+        await image_api._stream_tracked_image(asset)
+
+    assert body.closed is True
+    assert context.exited is True
+    assert context.exit_args[0] is ValueError
 
 
 def test_proxy_image_marks_missing_tracked_asset_unavailable(monkeypatch):
