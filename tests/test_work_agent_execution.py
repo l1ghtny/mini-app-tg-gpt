@@ -112,12 +112,14 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
     )
     client = SimpleNamespace(responses=SimpleNamespace(create=create))
     observer = AsyncMock()
+    phase_observer = AsyncMock()
 
     result = await agent_execution._generate_validated_result(
         client=client,  # type: ignore[arg-type]
         request_payload=_request_payload(),
         tools=[{"type": "web_search"}],
         observe_response=observer,
+        observe_phase=phase_observer,
     )
 
     assert result.content == corrected_draft.output_text
@@ -154,6 +156,12 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
         "review_1",
         "draft_2",
         "review_2",
+    ]
+    assert [call.args for call in phase_observer.await_args_list] == [
+        ("drafting", 1),
+        ("reviewing", 1),
+        ("revising", 2),
+        ("reviewing", 2),
     ]
 
 

@@ -84,6 +84,7 @@ class ValidatedAgentResult:
 
 
 ProviderResponseObserver = Callable[[str, Any], Awaitable[None]]
+ExecutionPhaseObserver = Callable[[str, int], Awaitable[None]]
 
 
 def _tool_call_counts(response: Any) -> tuple[int, int]:
@@ -280,6 +281,7 @@ async def _generate_validated_result(
     request_payload: dict[str, object],
     tools: list[dict[str, object]],
     observe_response: ProviderResponseObserver,
+    observe_phase: ExecutionPhaseObserver | None = None,
 ) -> ValidatedAgentResult:
     revision_feedback: str | None = None
     review_count = 0
@@ -287,6 +289,8 @@ async def _generate_validated_result(
     last_response: Any | None = None
     last_issues: tuple[str, ...] = ()
     for attempt in range(1, MAX_AGENT_ATTEMPTS + 1):
+        if observe_phase is not None:
+            await observe_phase("drafting" if attempt == 1 else "revising", attempt)
         response = await _generate_draft(
             client=client,
             request_payload=request_payload,
@@ -299,6 +303,8 @@ async def _generate_validated_result(
             draft = _attach_source_links(draft, response)
             last_draft = draft
             last_response = response
+            if observe_phase is not None:
+                await observe_phase("reviewing", attempt)
             review_response = await _review_draft(
                 client=client,
                 request_payload=request_payload,
@@ -617,11 +623,34 @@ async def process_agentic_run(
             response=response,
         )
 
+    async def observe_phase(phase: str, attempt: int) -> None:
+        progress_by_phase = {
+            ("drafting", 1): 40,
+            ("reviewing", 1): 72,
+            ("revising", 2): 82,
+            ("reviewing", 2): 92,
+        }
+        run.options = {
+            **run.options,
+            "execution_activity": {
+                "phase": phase,
+                "attempt": attempt,
+            },
+        }
+        run.progress_percent = progress_by_phase.get(
+            (phase, attempt),
+            run.progress_percent,
+        )
+        session.add(run)
+        await session.commit()
+        await service._publish(redis, run, "work.activity")
+
     validated = await _generate_validated_result(
         client=AsyncOpenAI(),
         request_payload=request_payload,
         tools=tools,
         observe_response=observe_response,
+        observe_phase=observe_phase,
     )
     result = validated.content
     response = validated.response
@@ -640,6 +669,13 @@ async def process_agentic_run(
     run.status = WorkRunStatus.SUCCEEDED.value
     run.stage = "completed"
     run.progress_percent = 100
+    run.options = {
+        **run.options,
+        "execution_activity": {
+            "phase": "completed",
+            "attempt": validated.attempt_count,
+        },
+    }
     web_search_calls, file_search_calls = _tool_call_counts(response)
     run.result_summary = json.dumps(
         {
