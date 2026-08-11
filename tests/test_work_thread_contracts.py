@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from importlib import import_module
 from io import StringIO
 from types import SimpleNamespace
@@ -10,7 +11,13 @@ import pytest
 from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 
-from app.schemas.work_threads import CreateWorkThreadRequest, UpdateWorkPlanRequest
+from app.db.work_agent_models import WorkThreadMessage
+from app.schemas.work_threads import (
+    CreateWorkFollowUpRequest,
+    CreateWorkThreadRequest,
+    UpdateWorkPlanRequest,
+)
+from app.services.work_threads.history import bounded_thread_history
 from app.services.work_threads.planner import plan_work
 
 
@@ -42,6 +49,26 @@ def test_edited_plan_requires_distinct_stable_step_ids() -> None:
 
     with pytest.raises(ValueError, match="step ids must be unique"):
         UpdateWorkPlanRequest.model_validate(payload)
+
+
+def test_follow_up_contract_normalizes_instruction_and_limits_intent() -> None:
+    request = CreateWorkFollowUpRequest.model_validate(
+        {"instruction": "  Make   the recommendation shorter. ", "intent": "revise"}
+    )
+
+    assert request.instruction == "Make the recommendation shorter."
+    assert request.intent == "revise"
+
+
+def test_agent_history_keeps_previous_results_but_not_current_request() -> None:
+    messages = [
+        WorkThreadMessage(thread_id=uuid.uuid4(), role="assistant", kind="result", content="First result"),
+        WorkThreadMessage(thread_id=uuid.uuid4(), role="user", kind="follow_up", content="Make it shorter"),
+    ]
+
+    history = bounded_thread_history(messages, current_request="Make it shorter")
+
+    assert [item["content"] for item in history] == ["First result"]
 
 
 @pytest.mark.asyncio
@@ -77,6 +104,7 @@ async def test_planner_lets_the_model_choose_the_executor() -> None:
         goal="Tell me which supplier to choose",
         documents=[{"filename": "brief.pdf", "mime_type": "application/pdf"}],
         output_language="en",
+        context={"previous_result": "Supplier A is stronger."},
         client=client,
     )
 
@@ -86,6 +114,8 @@ async def test_planner_lets_the_model_choose_the_executor() -> None:
     request = create.await_args.kwargs
     assert request["text"]["format"]["type"] == "json_schema"
     assert "assumptions" in request["text"]["format"]["schema"]["required"]
+    user_payload = json.loads(request["input"][1]["content"][0]["text"])
+    assert user_payload["context"]["previous_result"] == "Supplier A is stronger."
 
 
 def test_agentic_work_migration_is_additive_and_uses_committed_head(

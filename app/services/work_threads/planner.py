@@ -77,6 +77,7 @@ async def plan_work(
     goal: str,
     documents: list[dict[str, str]],
     output_language: Literal["ru", "en"],
+    context: dict[str, object] | None = None,
     client: AsyncOpenAI | None = None,
     model: str = PLANNER_MODEL,
 ) -> PlannerResult:
@@ -111,6 +112,7 @@ async def plan_work(
                                 "goal": goal,
                                 "documents": documents,
                                 "output_language": output_language,
+                                "context": context,
                             },
                             ensure_ascii=False,
                             separators=(",", ":"),

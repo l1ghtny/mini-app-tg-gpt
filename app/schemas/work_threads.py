@@ -10,6 +10,7 @@ from app.schemas.work_runs import WorkRunAcceptedResponse, WorkRunResponse
 
 
 WorkExecutionKind = Literal["agentic_task", "spreadsheet_builder_xlsx"]
+WorkFollowUpIntent = Literal["continue", "revise", "use_result"]
 
 
 class CreateWorkThreadRequest(BaseModel):
@@ -35,6 +36,21 @@ class CreateWorkThreadRequest(BaseModel):
         if len(values) != len(set(values)):
             raise ValueError("document_ids must be unique")
         return values
+
+
+class CreateWorkFollowUpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instruction: str = Field(min_length=3, max_length=8000)
+    intent: WorkFollowUpIntent = "continue"
+
+    @field_validator("instruction")
+    @classmethod
+    def normalize_instruction(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if len(value) < 3:
+            raise ValueError("instruction is too short")
+        return value
 
 
 class WorkPlanStepResponse(BaseModel):

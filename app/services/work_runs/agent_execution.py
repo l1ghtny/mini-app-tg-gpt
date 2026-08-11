@@ -24,6 +24,7 @@ from app.db.work_agent_models import WorkPlan, WorkThread, WorkThreadMessage, Wo
 from app.services.work_runs import service
 from app.services.work_runs.contracts import WorkRunErrorCode, WorkRunStatus
 from app.services.work_runs.normalization import NormalizationUsage, normalization_usage
+from app.services.work_threads.history import bounded_thread_history
 
 
 AGENT_MODEL = "gpt-5.6-luna"
@@ -123,15 +124,26 @@ async def _reserve_budget(
 async def _thread_context(
     session: AsyncSession,
     run_id: uuid.UUID,
-) -> tuple[WorkThread | None, WorkPlan | None]:
+) -> tuple[WorkThread | None, WorkPlan | None, list[WorkThreadMessage]]:
     link = (
         await session.exec(
             select(WorkThreadRun).where(WorkThreadRun.work_run_id == run_id)
         )
     ).first()
     if link is None:
-        return None, None
-    return await session.get(WorkThread, link.thread_id), await session.get(WorkPlan, link.plan_id)
+        return None, None, []
+    messages = (
+        await session.exec(
+            select(WorkThreadMessage)
+            .where(WorkThreadMessage.thread_id == link.thread_id)
+            .order_by(WorkThreadMessage.created_at)
+        )
+    ).all()
+    return (
+        await session.get(WorkThread, link.thread_id),
+        await session.get(WorkPlan, link.plan_id),
+        list(messages),
+    )
 
 
 async def process_agentic_run(
@@ -194,7 +206,7 @@ async def process_agentic_run(
     await session.commit()
     await service._publish(redis, run, "work.stage")
 
-    thread, plan = await _thread_context(session, run.id)
+    thread, plan, thread_messages = await _thread_context(session, run.id)
     vector_store_ids = sorted(
         {
             document.openai_vector_store_id
@@ -234,7 +246,12 @@ async def process_agentic_run(
                         "type": "input_text",
                         "text": json.dumps(
                             {
-                                "goal": run.instructions,
+                                "original_goal": thread.goal if thread else run.instructions,
+                                "current_request": run.instructions,
+                                "work_history": bounded_thread_history(
+                                    thread_messages,
+                                    current_request=run.instructions or "",
+                                ),
                                 "approved_plan": {
                                     "summary": plan.summary if plan else None,
                                     "steps": plan.steps if plan else [],

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import timezone
 from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import delete
 from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -20,6 +22,7 @@ from app.db.models import (
 from app.db.work_agent_models import WorkPlan, WorkThread, WorkThreadMessage, WorkThreadRun
 from app.schemas.work_runs import CreateWorkRunRequest, OfferComparisonOptions
 from app.schemas.work_threads import (
+    CreateWorkFollowUpRequest,
     CreateWorkThreadRequest,
     UpdateWorkPlanRequest,
     WorkPlanResponse,
@@ -333,6 +336,7 @@ async def _reserve_planning_budget(
     *,
     goal: str,
     document_count: int,
+    context_chars: int = 0,
 ) -> Decimal:
     policy = (
         await session.exec(
@@ -346,7 +350,7 @@ async def _reserve_planning_budget(
         session,
         model="gpt-5.6-luna",
         usage=NormalizationUsage(
-            input_tokens=(len(goal) // 2) + 1200 + document_count * 50,
+            input_tokens=((len(goal) + context_chars) // 2) + 1200 + document_count * 50,
             cached_input_tokens=0,
             output_tokens=3000,
             reasoning_tokens=0,
@@ -371,6 +375,199 @@ async def _reserve_planning_budget(
     if Decimal(run_actual) + Decimal(plan_actual) + estimate > policy.global_daily_budget_usd:
         raise HTTPException(status_code=402, detail="work_run_daily_budget_exceeded")
     return estimate
+
+
+async def _latest_user_message(
+    session: AsyncSession,
+    thread_id: uuid.UUID,
+) -> WorkThreadMessage | None:
+    return (
+        await session.exec(
+            select(WorkThreadMessage)
+            .where(
+                WorkThreadMessage.thread_id == thread_id,
+                WorkThreadMessage.role == "user",
+            )
+            .order_by(col(WorkThreadMessage.created_at).desc())
+            .limit(1)
+        )
+    ).first()
+
+
+async def _follow_up_context(
+    session: AsyncSession,
+    thread: WorkThread,
+    *,
+    intent: str,
+) -> dict[str, object]:
+    latest_result = (
+        await session.exec(
+            select(WorkThreadMessage)
+            .where(
+                WorkThreadMessage.thread_id == thread.id,
+                WorkThreadMessage.role == "assistant",
+                WorkThreadMessage.kind == "result",
+            )
+            .order_by(col(WorkThreadMessage.created_at).desc())
+            .limit(1)
+        )
+    ).first()
+    return {
+        "original_goal": thread.goal,
+        "previous_result": latest_result.content[-16000:] if latest_result else None,
+        "follow_up_intent": intent,
+    }
+
+
+async def _plan_existing_thread(
+    session: AsyncSession,
+    *,
+    thread: WorkThread,
+    instruction: str,
+    intent: str,
+    add_message: bool,
+    expected_status: str,
+    conflict_detail: str,
+) -> WorkThread:
+    document_ids = [
+        uuid.UUID(value) for value in thread.context_manifest.get("document_ids", [])
+    ]
+    documents = await _owned_documents(
+        session,
+        user_id=thread.user_id,
+        document_ids=document_ids,
+    )
+    context = await _follow_up_context(session, thread, intent=intent)
+    estimated_cost = await _reserve_planning_budget(
+        session,
+        goal=instruction,
+        document_count=len(documents),
+        context_chars=len(json.dumps(context, ensure_ascii=False)),
+    )
+    locked_thread = (
+        await session.exec(
+            select(WorkThread)
+            .where(WorkThread.id == thread.id)
+            .with_for_update()
+        )
+    ).one()
+    if locked_thread.status != expected_status:
+        raise HTTPException(status_code=409, detail=conflict_detail)
+    thread = locked_thread
+    current = await _latest_plan(session, thread.id)
+    version = current.version + 1 if current else 1
+    if add_message:
+        session.add(
+            WorkThreadMessage(
+                thread_id=thread.id,
+                role="user",
+                kind="follow_up",
+                content=instruction,
+                message_metadata={"intent": intent},
+            )
+        )
+    thread.status = "planning"
+    session.add(thread)
+    await session.commit()
+
+    try:
+        result = await plan_work(
+            goal=instruction,
+            documents=[
+                {
+                    "filename": document.filename,
+                    "mime_type": document.mime_type or "application/octet-stream",
+                }
+                for document in documents
+            ],
+            output_language=thread.context_manifest.get("output_language", "ru"),
+            context=context,
+        )
+    except Exception as exc:
+        thread.status = "planning_failed"
+        session.add(thread)
+        await session.commit()
+        if isinstance(exc, WorkPlanningError):
+            raise HTTPException(status_code=502, detail="work_thread_planning_failed") from exc
+        raise
+
+    actual_cost, _ = await run_service._normalization_cost(
+        session,
+        model=result.model,
+        usage=NormalizationUsage(**result.usage),
+    )
+    await _store_plan(
+        session,
+        thread=thread,
+        result=result,
+        version=version,
+        estimated_cost=estimated_cost,
+        actual_cost=actual_cost,
+    )
+    thread.status = "ready"
+    session.add(thread)
+    await session.commit()
+    await session.refresh(thread)
+    return thread
+
+
+async def create_follow_up(
+    session: AsyncSession,
+    thread: WorkThread,
+    request: CreateWorkFollowUpRequest,
+) -> WorkThread:
+    if thread.status != "completed":
+        raise HTTPException(status_code=409, detail="work_thread_follow_up_unavailable")
+    return await _plan_existing_thread(
+        session,
+        thread=thread,
+        instruction=request.instruction,
+        intent=request.intent,
+        add_message=True,
+        expected_status="completed",
+        conflict_detail="work_thread_follow_up_unavailable",
+    )
+
+
+async def retry_plan(
+    session: AsyncSession,
+    thread: WorkThread,
+) -> WorkThread:
+    if thread.status != "planning_failed":
+        raise HTTPException(status_code=409, detail="work_thread_plan_not_retryable")
+    message = await _latest_user_message(session, thread.id)
+    if message is None:
+        raise HTTPException(status_code=409, detail="work_thread_plan_not_retryable")
+    return await _plan_existing_thread(
+        session,
+        thread=thread,
+        instruction=message.content,
+        intent=str(message.message_metadata.get("intent", "continue")),
+        add_message=False,
+        expected_status="planning_failed",
+        conflict_detail="work_thread_plan_not_retryable",
+    )
+
+
+async def remove_failed_thread(
+    session: AsyncSession,
+    thread: WorkThread,
+) -> None:
+    linked_runs = (
+        await session.exec(
+            select(func.count())
+            .select_from(WorkThreadRun)
+            .where(WorkThreadRun.thread_id == thread.id)
+        )
+    ).one()
+    if thread.status != "planning_failed" or int(linked_runs) > 0:
+        raise HTTPException(status_code=409, detail="work_thread_not_removable")
+    await session.exec(delete(WorkPlan).where(WorkPlan.thread_id == thread.id))
+    await session.exec(
+        delete(WorkThreadMessage).where(WorkThreadMessage.thread_id == thread.id)
+    )
+    await session.delete(thread)
+    await session.commit()
 
 
 async def list_threads(
@@ -482,6 +679,10 @@ async def approve_plan(
     if plan.status != "proposed":
         raise HTTPException(status_code=409, detail="work_plan_not_approvable")
 
+    latest_request = await _latest_user_message(session, thread.id)
+    if latest_request is None:
+        raise HTTPException(status_code=409, detail="work_plan_request_missing")
+
     document_ids = [
         uuid.UUID(value) for value in thread.context_manifest.get("document_ids", [])
     ]
@@ -496,7 +697,7 @@ async def approve_plan(
             conversation_id=thread.conversation_id,
             folder_id=thread.folder_id,
             document_ids=document_ids,
-            instructions=thread.goal,
+            instructions=latest_request.content,
             options=OfferComparisonOptions(
                 output_language=thread.context_manifest.get("output_language", "ru")
             ),

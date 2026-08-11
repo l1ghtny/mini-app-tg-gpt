@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from redis.asyncio import Redis
 from sse_starlette.sse import EventSourceResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -24,6 +24,7 @@ from app.schemas.work_runs import (
 )
 from app.schemas.work_threads import (
     ApproveWorkPlanRequest,
+    CreateWorkFollowUpRequest,
     CreateWorkThreadRequest,
     UpdateWorkPlanRequest,
     WorkPlanResponse,
@@ -82,6 +83,51 @@ async def get_work_thread(
 ):
     thread = await thread_service.owned_thread(session, current_user.id, thread_id)
     return await thread_service.thread_response(session, thread)
+
+
+@work_runs.post(
+    "/work-threads/{thread_id}/follow-ups",
+    status_code=status.HTTP_201_CREATED,
+    response_model=WorkThreadResponse,
+)
+async def create_work_thread_follow_up(
+    thread_id: uuid.UUID,
+    payload: CreateWorkFollowUpRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    thread = await thread_service.owned_thread(session, current_user.id, thread_id)
+    thread = await thread_service.create_follow_up(session, thread, payload)
+    return await thread_service.thread_response(session, thread)
+
+
+@work_runs.post(
+    "/work-threads/{thread_id}/retry-plan",
+    response_model=WorkThreadResponse,
+)
+async def retry_work_thread_plan(
+    thread_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    thread = await thread_service.owned_thread(session, current_user.id, thread_id)
+    thread = await thread_service.retry_plan(session, thread)
+    return await thread_service.thread_response(session, thread)
+
+
+@work_runs.delete(
+    "/work-threads/{thread_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_failed_work_thread(
+    thread_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    thread = await thread_service.owned_thread(session, current_user.id, thread_id)
+    await thread_service.remove_failed_thread(session, thread)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @work_runs.put(
