@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -46,6 +47,7 @@ from app.services.work_runs.evidence import (
 from app.services.work_runs.generated_artifacts import (
     MAX_GENERATED_ARTIFACT_TOTAL_BYTES,
     GeneratedArtifactError,
+    artifact_contract_error,
     build_generated_spreadsheet_preview,
     download_generated_artifact,
     generated_artifact_references,
@@ -58,8 +60,10 @@ from app.services.work_threads.history import bounded_thread_history
 AGENT_MODEL = "gpt-5.6-luna"
 MAX_AGENT_ATTEMPTS = 2
 MAX_RESULT_REVIEWS = 2
-ESTIMATED_WEB_SEARCH_CALLS = 4 * MAX_AGENT_ATTEMPTS
-ESTIMATED_FILE_SEARCH_CALLS = 4 * MAX_AGENT_ATTEMPTS
+MAX_STEERING_RESTARTS = 2
+ESTIMATED_DRAFT_CALLS = MAX_AGENT_ATTEMPTS + MAX_STEERING_RESTARTS
+ESTIMATED_WEB_SEARCH_CALLS = 4 * ESTIMATED_DRAFT_CALLS
+ESTIMATED_FILE_SEARCH_CALLS = 4 * ESTIMATED_DRAFT_CALLS
 FILE_SEARCH_CALL_COST_USD = Decimal("0.002500")
 CODE_INTERPRETER_CONTAINER_COST_USD = Decimal("0.030000")
 _EXECUTOR_PROMPT = (
@@ -78,7 +82,9 @@ _EXECUTOR_PROMPT = (
     "searches per attempt. Return polished, human-readable Markdown in the requested "
     "language, with source links when web search was used. If an expected output has "
     "kind artifact, use the python tool to create the requested file, cite the created "
-    "file in the final response, and also give the user a useful inline summary. Create "
+    "file in the final response, and also give the user a useful inline summary. Cite "
+    "every requested deliverable file, and do not cite temporary previews or rendered "
+    "images unless the user requested them as deliverables. Create "
     "files only when requested or when the approved expected output requires one. Lead "
     "with the deliverable."
 )
@@ -91,8 +97,10 @@ _REVIEWER_PROMPT = (
     "other work already happened. When the user requested a checklist or template "
     "without supporting evidence, require actionable forward-looking items rather than "
     "claims that the items already pass. Return concise revision instructions when it "
-    "does not pass. When an approved expected output has kind artifact, fail the draft "
-    "unless the response cites at least one generated file."
+    "does not pass. If research or sources were requested, require citations for the "
+    "material factual claims and reject obviously malformed, irrelevant, or placeholder "
+    "source references. When an approved expected output has kind artifact, fail the "
+    "draft unless the response cites at least one generated file."
 )
 
 
@@ -109,13 +117,17 @@ class ValidatedAgentResult:
     content: str
     response: Any
     attempt_count: int
+    generation_count: int
     review_count: int
     validation_passed: bool
     validation_issues: tuple[str, ...] = ()
+    steering_restarts: int = 0
+    artifact_contract_passed: bool = True
 
 
 ProviderResponseObserver = Callable[[str, Any], Awaitable[None]]
 ExecutionPhaseObserver = Callable[[str, int], Awaitable[None]]
+SteeringConsumer = Callable[[], Awaitable[str | None]]
 
 
 def _tool_call_counts(response: Any) -> tuple[int, int]:
@@ -131,6 +143,33 @@ def _code_interpreter_call_count(response: Any) -> int:
     return sum(
         1 for item in output if getattr(item, "type", None) == "code_interpreter_call"
     )
+
+
+def _provider_activity(response: Any) -> dict[str, int]:
+    web_search_calls, file_search_calls = _tool_call_counts(response)
+    return {
+        "web_search_calls": web_search_calls,
+        "file_search_calls": file_search_calls,
+        "code_interpreter_calls": _code_interpreter_call_count(response),
+        "generated_artifacts": len(generated_artifact_references(response)),
+    }
+
+
+def _operation_activity_totals(operation: ProviderOperation) -> dict[str, int]:
+    totals = {
+        "web_search_calls": 0,
+        "file_search_calls": 0,
+        "code_interpreter_calls": 0,
+        "generated_artifacts": 0,
+    }
+    usage = operation.usage if isinstance(operation.usage, dict) else {}
+    for call in usage.get("calls", []):
+        call_usage = call.get("usage", {}) if isinstance(call, dict) else {}
+        for key in totals:
+            value = call_usage.get(key, 0)
+            if isinstance(value, int) and not isinstance(value, bool):
+                totals[key] += value
+    return totals
 
 
 def _attach_source_links(draft: str, response: Any) -> str:
@@ -216,6 +255,7 @@ async def _review_draft(
     draft_response: Any,
 ) -> Any:
     web_search_calls, file_search_calls = _tool_call_counts(draft_response)
+    evidence = build_work_evidence(draft_response)
     return await _create_provider_response(
         client,
         model=AGENT_MODEL,
@@ -244,9 +284,19 @@ async def _review_draft(
                                     ),
                                     "web_search_calls": web_search_calls,
                                     "file_search_calls": file_search_calls,
-                                    "generated_artifact_count": len(
-                                        generated_artifact_references(draft_response)
+                                    "sources": list(evidence.get("sources", []))[:20],
+                                    "citation_count": len(
+                                        evidence.get("citations", [])
                                     ),
+                                    "generated_artifacts": [
+                                        {
+                                            "filename": reference.filename,
+                                            "mime_type": reference.mime_type,
+                                        }
+                                        for reference in generated_artifact_references(
+                                            draft_response
+                                        )
+                                    ],
                                 },
                                 "draft_result": draft,
                             },
@@ -277,27 +327,61 @@ async def _generate_validated_result(
     tools: list[dict[str, object]],
     observe_response: ProviderResponseObserver,
     observe_phase: ExecutionPhaseObserver | None = None,
+    consume_steering: SteeringConsumer | None = None,
 ) -> ValidatedAgentResult:
     revision_feedback: str | None = None
     review_count = 0
+    generation_count = 0
     last_draft = ""
     last_response: Any | None = None
     last_issues: tuple[str, ...] = ()
-    for attempt in range(1, MAX_AGENT_ATTEMPTS + 1):
+    last_artifact_contract_passed = True
+    steering_restarts = 0
+    attempt = 1
+    while attempt <= MAX_AGENT_ATTEMPTS:
         if observe_phase is not None:
-            await observe_phase("drafting" if attempt == 1 else "revising", attempt)
+            await observe_phase(
+                "drafting" if attempt == 1 else "revising",
+                attempt,
+            )
         response = await _generate_draft(
             client=client,
             request_payload=request_payload,
             tools=tools,
             revision_feedback=revision_feedback,
         )
-        await observe_response(f"draft_{attempt}", response)
+        generation_count += 1
+        await observe_response(f"draft_{generation_count}", response)
+        steering = (
+            await consume_steering()
+            if (
+                consume_steering is not None
+                and steering_restarts < MAX_STEERING_RESTARTS
+            )
+            else None
+        )
+        if steering:
+            steering_restarts += 1
+            request_payload["current_request"] = steering
+            revision_feedback = (
+                "The user redirected the active task. Discard the previous draft and "
+                "follow this latest instruction while preserving relevant context: "
+                + steering
+            )
+            continue
         draft = (getattr(response, "output_text", None) or "").strip()
         if draft:
             draft = _attach_source_links(draft, response)
             last_draft = draft
             last_response = response
+            contract_error = artifact_contract_error(response, request_payload)
+            if contract_error:
+                last_artifact_contract_passed = False
+                last_issues = (contract_error,)
+                revision_feedback = contract_error
+                attempt += 1
+                continue
+            last_artifact_contract_passed = True
             if observe_phase is not None:
                 await observe_phase("reviewing", attempt)
             review_response = await _review_draft(
@@ -308,6 +392,24 @@ async def _generate_validated_result(
             )
             await observe_response(f"review_{attempt}", review_response)
             review_count += 1
+            late_steering = (
+                await consume_steering()
+                if (
+                    consume_steering is not None
+                    and steering_restarts < MAX_STEERING_RESTARTS
+                )
+                else None
+            )
+            if late_steering:
+                steering_restarts += 1
+                request_payload["current_request"] = late_steering
+                revision_feedback = (
+                    "The user redirected the active task. Discard the reviewed draft "
+                    "and follow this latest instruction while preserving relevant "
+                    "context: "
+                    + late_steering
+                )
+                continue
             try:
                 review = _parse_result_review(review_response)
             except service.WorkRunExecutionError:
@@ -315,14 +417,18 @@ async def _generate_validated_result(
                 revision_feedback = (
                     "Review the draft yourself and return the complete useful deliverable."
                 )
+                attempt += 1
                 continue
             if review.passes:
                 return ValidatedAgentResult(
                     content=draft,
                     response=response,
                     attempt_count=attempt,
+                    generation_count=generation_count,
                     review_count=review_count,
                     validation_passed=True,
+                    steering_restarts=steering_restarts,
+                    artifact_contract_passed=True,
                 )
             last_issues = tuple(review.issues)
             revision_feedback = (
@@ -332,6 +438,7 @@ async def _generate_validated_result(
             )
         else:
             revision_feedback = "The draft was empty. Return the complete deliverable."
+        attempt += 1
     if (
         last_draft
         and last_response is not None
@@ -341,9 +448,12 @@ async def _generate_validated_result(
             content=last_draft,
             response=last_response,
             attempt_count=MAX_AGENT_ATTEMPTS,
+            generation_count=generation_count,
             review_count=review_count,
             validation_passed=False,
             validation_issues=last_issues,
+            steering_restarts=steering_restarts,
+            artifact_contract_passed=last_artifact_contract_passed,
         )
     raise service.WorkRunExecutionError(
         WorkRunErrorCode.VALIDATION_FAILED,
@@ -372,7 +482,8 @@ async def _reserve_budget(
     estimated = NormalizationUsage(
         input_tokens=math.ceil(len(run.instructions or "") / 2) + 16000,
         cached_input_tokens=0,
-        output_tokens=(6000 * MAX_AGENT_ATTEMPTS) + (1200 * MAX_RESULT_REVIEWS),
+        output_tokens=(6000 * ESTIMATED_DRAFT_CALLS)
+        + (1200 * MAX_RESULT_REVIEWS),
         reasoning_tokens=4000,
     )
     estimated_cost, usage = await service._normalization_cost(
@@ -473,6 +584,7 @@ async def _record_provider_response(
             "unit_price_file_search_call": str(FILE_SEARCH_CALL_COST_USD),
             "cost_file_search_usd": str(file_search_cost),
             "code_interpreter_calls": code_interpreter_calls,
+            "generated_artifacts": len(generated_artifact_references(response)),
             "total_cost_usd": str(call_cost),
         }
     )
@@ -533,6 +645,42 @@ async def _thread_context(
     )
 
 
+async def _consume_pending_steering(
+    *,
+    session: AsyncSession,
+    thread: WorkThread | None,
+    run: WorkRun,
+) -> str | None:
+    if thread is None:
+        return None
+    messages = (
+        await session.exec(
+            select(WorkThreadMessage)
+            .where(WorkThreadMessage.thread_id == thread.id)
+            .order_by(WorkThreadMessage.created_at)
+        )
+    ).all()
+    pending = [
+        message
+        for message in messages
+        if message.role == "user"
+        and message.message_metadata.get("steering_for_run_id") == str(run.id)
+        and not message.message_metadata.get("steering_applied")
+    ]
+    if not pending:
+        return None
+    for message in pending:
+        message.message_metadata = {
+            **message.message_metadata,
+            "steering_applied": True,
+        }
+        session.add(message)
+    run.options = {**run.options, "steering_pending": False}
+    session.add(run)
+    await session.commit()
+    return pending[-1].content
+
+
 async def _create_code_interpreter_container(
     *,
     client: AsyncOpenAI,
@@ -568,7 +716,7 @@ async def _delete_code_interpreter_container(
     if not container_id:
         return
     try:
-        await client.containers.delete(container_id)
+        await asyncio.wait_for(client.containers.delete(container_id), timeout=5)
     except Exception:
         # The provider expires containers automatically; cleanup must not turn a
         # successfully persisted user artifact into a failed Work run.
@@ -895,6 +1043,13 @@ async def process_agentic_run(
         ],
         "output_language": run.options.get("output_language", "ru"),
     }
+    initial_steering = await _consume_pending_steering(
+        session=session,
+        thread=thread,
+        run=run,
+    )
+    if initial_steering:
+        request_payload["current_request"] = initial_steering
 
     async def observe_response(phase: str, response: Any) -> None:
         await _record_provider_response(
@@ -904,19 +1059,55 @@ async def process_agentic_run(
             phase=phase,
             response=response,
         )
+        current_activity = run.options.get("execution_activity", {})
+        events = list(current_activity.get("events", []))
+        provider_activity = _provider_activity(response)
+        if any(provider_activity.values()):
+            events.append({"phase": phase, **provider_activity})
+        run.options = {
+            **run.options,
+            "execution_activity": {
+                **current_activity,
+                "events": events[-12:],
+            },
+        }
+        session.add(run)
+        await session.commit()
+        if any(provider_activity.values()):
+            await service._publish(redis, run, "work.activity")
+        if await service._cancel_if_requested(
+            session=session,
+            redis=redis,
+            run=run,
+        ):
+            raise service.WorkRunExecutionError(
+                WorkRunErrorCode.CANCELLED,
+                "work run was cancelled",
+            )
 
     async def observe_phase(phase: str, attempt: int) -> None:
+        if await service._cancel_if_requested(
+            session=session,
+            redis=redis,
+            run=run,
+        ):
+            raise service.WorkRunExecutionError(
+                WorkRunErrorCode.CANCELLED,
+                "work run was cancelled",
+            )
         progress_by_phase = {
             ("drafting", 1): 40,
             ("reviewing", 1): 72,
             ("revising", 2): 82,
             ("reviewing", 2): 92,
         }
+        current_activity = run.options.get("execution_activity", {})
         run.options = {
             **run.options,
             "execution_activity": {
                 "phase": phase,
                 "attempt": attempt,
+                "events": list(current_activity.get("events", [])),
             },
         }
         run.progress_percent = progress_by_phase.get(
@@ -927,6 +1118,13 @@ async def process_agentic_run(
         await session.commit()
         await service._publish(redis, run, "work.activity")
 
+    async def consume_steering() -> str | None:
+        return await _consume_pending_steering(
+            session=session,
+            thread=thread,
+            run=run,
+        )
+
     try:
         validated = await _generate_validated_result(
             client=client,
@@ -934,8 +1132,14 @@ async def process_agentic_run(
             tools=tools,
             observe_response=observe_response,
             observe_phase=observe_phase,
+            consume_steering=consume_steering,
         )
         evidence = build_work_evidence(validated.response, documents=documents)
+        if code_interpreter_enabled and not validated.artifact_contract_passed:
+            raise service.WorkRunExecutionError(
+                WorkRunErrorCode.VALIDATION_FAILED,
+                "the generated file did not match the approved deliverable",
+            )
         generated_artifacts = await _persist_generated_artifacts(
             session=session,
             run=run,
@@ -953,40 +1157,57 @@ async def process_agentic_run(
     result = validated.content
     response = validated.response
     operation.status = "succeeded"
-    operation.attempt_count = validated.attempt_count
+    operation.attempt_count = validated.generation_count
     operation.provider_response_id = getattr(response, "id", None)
     operation.provider_request_id = service._provider_request_id(response)
     operation.usage = {
         **operation.usage,
-        "generation_attempts": validated.attempt_count,
+        "generation_attempts": validated.generation_count,
         "review_calls": validated.review_count,
         "validation_passed": validated.validation_passed,
+        "artifact_contract_passed": validated.artifact_contract_passed,
         "validation_issues": list(validated.validation_issues),
+        "steering_restarts": validated.steering_restarts,
     }
     operation.completed_at = utcnow_naive()
     run.status = WorkRunStatus.SUCCEEDED.value
     run.stage = "completed"
     run.progress_percent = 100
+    current_activity = run.options.get("execution_activity", {})
     run.options = {
         **run.options,
         "execution_activity": {
             "phase": "completed",
             "attempt": validated.attempt_count,
+            "events": list(current_activity.get("events", [])),
         },
     }
-    web_search_calls, file_search_calls = _tool_call_counts(response)
+    activity_totals = _operation_activity_totals(operation)
+    source_count = len(evidence.get("sources", []))
+    citation_count = len(evidence.get("citations", []))
+    quality = {
+        "validation_passed": validated.validation_passed,
+        "artifact_requested": code_interpreter_enabled,
+        "artifact_contract_passed": validated.artifact_contract_passed,
+        "generation_attempts": validated.generation_count,
+        "review_calls": validated.review_count,
+        "steering_restarts": validated.steering_restarts,
+        "source_count": source_count,
+        "citation_count": citation_count,
+        "artifact_count": len(generated_artifacts),
+    }
     run.result_summary = json.dumps(
         {
             "version": 2,
             "format": "markdown",
             "content": result,
             "evidence": evidence,
+            "quality": quality,
             "activity": {
-                "web_search_calls": web_search_calls,
-                "file_search_calls": file_search_calls,
-                "code_interpreter_calls": _code_interpreter_call_count(response),
+                **activity_totals,
                 "generated_artifacts": len(generated_artifacts),
-                "generation_attempts": validated.attempt_count,
+                "steering_restarts": validated.steering_restarts,
+                "generation_attempts": validated.generation_count,
             },
         },
         ensure_ascii=False,

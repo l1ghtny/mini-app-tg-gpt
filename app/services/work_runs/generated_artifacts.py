@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import unicodedata
 import zipfile
 from collections.abc import Iterable, Mapping, Sequence
@@ -214,6 +215,63 @@ def generated_artifact_references(response: Any) -> list[GeneratedArtifactRefere
 
 def plan_expects_artifacts(expected_outputs: Sequence[Mapping[str, Any]]) -> bool:
     return any(output.get("kind") == "artifact" for output in expected_outputs)
+
+
+def artifact_contract_error(
+    response: Any,
+    request_payload: Mapping[str, Any],
+) -> str | None:
+    approved_plan = request_payload.get("approved_plan")
+    expected_outputs = (
+        approved_plan.get("expected_outputs", [])
+        if isinstance(approved_plan, Mapping)
+        else []
+    )
+    artifact_outputs = [
+        output
+        for output in expected_outputs
+        if isinstance(output, Mapping) and output.get("kind") == "artifact"
+    ]
+    if not artifact_outputs:
+        return None
+    references = generated_artifact_references(response)
+    if not references:
+        return "The approved deliverable requires a generated file, but none was cited."
+
+    contract_text = " ".join(
+        str(value)
+        for output in artifact_outputs
+        for value in (
+            output.get("label", ""),
+            output.get("description", ""),
+            *(output.get("acceptance_criteria", []) or []),
+        )
+    )
+    contract_text += " " + str(request_payload.get("current_request", ""))
+    requested_groups: list[tuple[str, set[str]]] = []
+    format_patterns = (
+        (r"\bpdf\b", "PDF", {".pdf"}),
+        (r"\b(?:docx|word document)\b", "Word document", {".docx"}),
+        (r"\b(?:pptx|powerpoint|slide deck)\b", "presentation", {".pptx"}),
+        (r"\b(?:xlsx|excel workbook)\b", "Excel workbook", {".xlsx"}),
+        (r"\bcsv\b", "CSV", {".csv"}),
+        (r"\bmarkdown\b", "Markdown", {".md"}),
+        (r"\bpng\b", "PNG", {".png"}),
+        (r"\b(?:jpe?g)\b", "JPEG", {".jpg", ".jpeg"}),
+    )
+    for pattern, label, extensions in format_patterns:
+        if re.search(pattern, contract_text, flags=re.IGNORECASE):
+            requested_groups.append((label, extensions))
+    produced_extensions = {
+        Path(reference.filename).suffix.lower() for reference in references
+    }
+    for label, extensions in requested_groups:
+        if produced_extensions.isdisjoint(extensions):
+            return (
+                f"The approved deliverable requires a {label} file, but the response "
+                f"only cited: {', '.join(sorted(produced_extensions))}."
+            )
+    return None
 
 
 def _validate_ooxml(path: Path, suffix: str) -> None:

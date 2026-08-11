@@ -33,7 +33,7 @@ from app.schemas.work_threads import (
     WorkThreadSummaryResponse,
 )
 from app.services.work_runs import service as run_service
-from app.services.work_runs.contracts import WorkRunKind
+from app.services.work_runs.contracts import WorkRunKind, WorkRunStatus
 from app.services.work_runs.normalization import NormalizationUsage
 from app.services.work_threads.planner import PlannerResult, WorkPlanningError, plan_work
 
@@ -881,6 +881,55 @@ async def send_message(
         ),
         None,
     )
+    if thread.status == "running" and request.steer_active:
+        if duplicate is not None:
+            return thread, None
+        if request.document_ids:
+            raise HTTPException(
+                status_code=409,
+                detail="work_steering_cannot_add_documents",
+            )
+        latest_link = (
+            await session.exec(
+                select(WorkThreadRun)
+                .where(WorkThreadRun.thread_id == thread.id)
+                .order_by(col(WorkThreadRun.ordinal).desc())
+                .limit(1)
+            )
+        ).first()
+        active_run = (
+            await session.get(WorkRun, latest_link.work_run_id)
+            if latest_link is not None
+            else None
+        )
+        if active_run is None or active_run.status not in {
+            WorkRunStatus.ACCEPTED.value,
+            WorkRunStatus.RESERVED.value,
+            WorkRunStatus.QUEUED.value,
+            WorkRunStatus.RUNNING.value,
+        }:
+            raise HTTPException(status_code=409, detail="work_message_active_run")
+        steering_message = WorkThreadMessage(
+            thread_id=thread.id,
+            role="user",
+            kind="follow_up",
+            content=request.content,
+            message_metadata={
+                "client_request_id": client_request_id,
+                "steering_for_run_id": str(active_run.id),
+                "steering_applied": False,
+            },
+        )
+        session.add(steering_message)
+        thread.updated_at = utcnow_naive()
+        active_run.options = {
+            **active_run.options,
+            "steering_pending": True,
+        }
+        session.add(thread)
+        session.add(active_run)
+        await session.commit()
+        return thread, None
     if thread.status in {"planning", "running"}:
         if duplicate is not None:
             return thread, None

@@ -19,6 +19,14 @@ _RUN_LABELS = (
     "error_code",
 )
 _RUN_VALUE_LABELS = ("kind", "kind_version", "status", "error_code")
+_QUALITY_LABELS = (
+    "kind",
+    "kind_version",
+    "validation_passed",
+    "artifact_contract_passed",
+)
+_QUALITY_VALUE_LABELS = (*_RUN_VALUE_LABELS, "signal")
+_TOOL_VALUE_LABELS = (*_RUN_VALUE_LABELS, "tool")
 
 WORK_RUN_LIFECYCLE = Counter(
     "lightny_work_run_lifecycle_total",
@@ -59,6 +67,23 @@ WORK_RUN_COST = Counter(
     "Recorded provider cost for terminal Lightny Work runs in USD.",
     _RUN_VALUE_LABELS,
 )
+WORK_RUN_QUALITY_EVALUATIONS = Counter(
+    "lightny_work_run_quality_evaluations_total",
+    "Completed Lightny Work result quality evaluations.",
+    _QUALITY_LABELS,
+)
+WORK_RUN_QUALITY_VALUE = Histogram(
+    "lightny_work_run_quality_value",
+    "Bounded quality and deliverable counts for completed Lightny Work runs.",
+    _QUALITY_VALUE_LABELS,
+    buckets=(0, 1, 2, 3, 4, 5, 8, 13, 21, 34, 55, 89, 144),
+)
+WORK_RUN_TOOL_CALL_COUNT = Histogram(
+    "lightny_work_run_tool_call_count",
+    "Provider tool calls used by a completed Lightny Work run.",
+    _TOOL_VALUE_LABELS,
+    buckets=(0, 1, 2, 3, 4, 5, 8, 13, 21, 34),
+)
 ARTIFACT_DOWNLOAD_URLS = Counter(
     "lightny_work_artifact_download_urls_created_total",
     "Authenticated artifact download URLs created by Lightny Work.",
@@ -76,6 +101,10 @@ _EVENT_METRICS = {
         WORK_RUN_RETRIES,
         ("kind", "kind_version", "source_status", "source_error_code"),
     ),
+    "work.run.quality_evaluated": (
+        WORK_RUN_QUALITY_EVALUATIONS,
+        _QUALITY_LABELS,
+    ),
     "work.artifact.download_url_created": (
         ARTIFACT_DOWNLOAD_URLS,
         ("kind", "mime_type", "status"),
@@ -87,6 +116,8 @@ _VALUE_METRICS = {
     "work.run.total_duration": (WORK_RUN_TOTAL_DURATION, _RUN_VALUE_LABELS),
     "work.run.attempt_count": (WORK_RUN_ATTEMPT_COUNT, _RUN_VALUE_LABELS),
     "work.run.actual_cost_usd": (WORK_RUN_COST, _RUN_VALUE_LABELS),
+    "work.run.quality_value": (WORK_RUN_QUALITY_VALUE, _QUALITY_VALUE_LABELS),
+    "work.run.tool_call_count": (WORK_RUN_TOOL_CALL_COUNT, _TOOL_VALUE_LABELS),
     "work.artifact.download_size": (
         ARTIFACT_DOWNLOAD_BYTES,
         ("kind", "mime_type", "status"),

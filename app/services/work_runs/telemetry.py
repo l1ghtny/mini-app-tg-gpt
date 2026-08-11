@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
+from typing import Any, Mapping
 
 from app.core.metrics import track_internal_event, track_internal_value
 from app.db.models import Artifact, WorkRun
@@ -9,12 +11,85 @@ from app.db.models import Artifact, WorkRun
 
 logger = logging.getLogger(__name__)
 _TERMINAL_EVENTS = frozenset({"work.done", "work.error", "work.cancelled"})
+_QUALITY_VALUE_KEYS = (
+    "generation_attempts",
+    "review_calls",
+    "steering_restarts",
+    "source_count",
+    "citation_count",
+    "artifact_count",
+)
+_ACTIVITY_VALUE_KEYS = (
+    "web_search_calls",
+    "file_search_calls",
+    "code_interpreter_calls",
+)
 
 
 def _elapsed_seconds(start: datetime | None, end: datetime | None) -> float | None:
     if start is None or end is None:
         return None
     return max(0.0, (end - start).total_seconds())
+
+
+def _result_payload(run: WorkRun) -> Mapping[str, Any] | None:
+    raw = getattr(run, "result_summary", None)
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _bounded_number(payload: Mapping[str, Any], key: str) -> float | None:
+    value = payload.get(key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+        return float(value)
+    return None
+
+
+def _record_quality_metrics(run: WorkRun) -> None:
+    payload = _result_payload(run)
+    if payload is None:
+        return
+    quality = payload.get("quality")
+    activity = payload.get("activity")
+    if not isinstance(quality, Mapping) or not isinstance(activity, Mapping):
+        return
+    artifact_requested = quality.get("artifact_requested") is True
+    quality_tags = {
+        "kind": getattr(run, "kind", "unknown"),
+        "kind_version": getattr(run, "kind_version", 0),
+        "validation_passed": str(quality.get("validation_passed") is True).lower(),
+        "artifact_contract_passed": (
+            str(quality.get("artifact_contract_passed") is True).lower()
+            if artifact_requested
+            else "not_applicable"
+        ),
+    }
+    track_internal_event("work.run.quality_evaluated", quality_tags)
+    value_tags = {
+        "kind": quality_tags["kind"],
+        "kind_version": quality_tags["kind_version"],
+        "status": run.status,
+        "error_code": getattr(run, "error_code", None),
+    }
+    for key in _QUALITY_VALUE_KEYS:
+        if (value := _bounded_number(quality, key)) is not None:
+            track_internal_value(
+                "work.run.quality_value",
+                value,
+                {**value_tags, "signal": key},
+            )
+    for key in _ACTIVITY_VALUE_KEYS:
+        if (value := _bounded_number(activity, key)) is not None:
+            track_internal_value(
+                "work.run.tool_call_count",
+                value,
+                {**value_tags, "tool": key.removesuffix("_calls")},
+            )
 
 
 def record_work_run_event(run: WorkRun, event_type: str) -> None:
@@ -70,6 +145,8 @@ def record_work_run_event(run: WorkRun, event_type: str) -> None:
         float(getattr(run, "actual_cost_usd", 0)),
         tags,
     )
+    if event_type == "work.done":
+        _record_quality_metrics(run)
 
 
 def record_work_run_retry(source: WorkRun) -> None:

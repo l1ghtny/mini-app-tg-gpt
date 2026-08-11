@@ -5,7 +5,7 @@ import uuid
 from importlib import import_module
 from io import StringIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from alembic.operations import Operations
@@ -20,6 +20,12 @@ from app.schemas.work_threads import (
 )
 from app.services.work_threads.history import bounded_thread_history
 from app.services.work_threads.planner import plan_work
+from app.services.work_threads import service as thread_service
+
+
+@pytest.fixture
+def rebuild_test_db() -> None:
+    """These contract and service-isolation tests do not use the database."""
 
 
 def test_work_thread_goal_does_not_require_a_preselected_workflow() -> None:
@@ -72,6 +78,71 @@ def test_conversation_message_accepts_unique_file_context() -> None:
 
     assert request.content == "Analyse this website and explain the risks."
     assert request.document_ids == [document_id]
+
+
+def test_conversation_message_can_steer_an_active_run() -> None:
+    request = SendWorkMessageRequest.model_validate(
+        {
+            "content": "Focus only on the pricing risks.",
+            "steer_active": True,
+        }
+    )
+
+    assert request.steer_active is True
+    assert request.document_ids == []
+
+
+@pytest.mark.asyncio
+async def test_active_steering_is_persisted_for_the_current_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thread_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    thread = SimpleNamespace(id=thread_id, status="running", updated_at=None)
+    active_run = SimpleNamespace(id=run_id, status="running", options={})
+    session = SimpleNamespace(
+        exec=AsyncMock(
+            side_effect=[
+                SimpleNamespace(all=lambda: []),
+                SimpleNamespace(first=lambda: SimpleNamespace(work_run_id=run_id)),
+            ]
+        ),
+        get=AsyncMock(return_value=active_run),
+        add=MagicMock(),
+        commit=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        thread_service,
+        "_existing_execution",
+        AsyncMock(return_value=None),
+    )
+
+    returned_thread, returned_run = await thread_service.send_message(
+        session=session,  # type: ignore[arg-type]
+        user=SimpleNamespace(id=uuid.uuid4()),
+        thread=thread,  # type: ignore[arg-type]
+        request=SendWorkMessageRequest(
+            content="Focus only on the pricing risks.",
+            steer_active=True,
+        ),
+        client_request_id="steering-request-1",
+    )
+
+    assert returned_thread is thread
+    assert returned_run is None
+    assert active_run.options["steering_pending"] is True
+    steering_message = next(
+        call.args[0]
+        for call in session.add.call_args_list
+        if isinstance(call.args[0], WorkThreadMessage)
+    )
+    assert steering_message.content == "Focus only on the pricing risks."
+    assert steering_message.message_metadata == {
+        "client_request_id": "steering-request-1",
+        "steering_for_run_id": str(run_id),
+        "steering_applied": False,
+    }
+    session.commit.assert_awaited_once()
 
 
 def test_agent_history_keeps_previous_results_but_not_current_request() -> None:

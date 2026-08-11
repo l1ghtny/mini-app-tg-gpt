@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -86,3 +87,81 @@ def test_artifact_download_records_kind_and_size_without_identifiers(
 
     assert counters[0][0] == "work.artifact.download_url_created"
     assert values == [("work.artifact.download_size", 2048.0, counters[0][1], "byte")]
+
+
+def test_completed_agent_result_records_bounded_quality_and_tool_metrics(
+    monkeypatch,
+) -> None:
+    counters: list[tuple[str, dict]] = []
+    values: list[tuple[str, float, dict, str]] = []
+    completed_at = datetime(2026, 8, 12, 10, 0, 20)
+    run = SimpleNamespace(
+        id=uuid.uuid4(),
+        kind="agentic_task",
+        kind_version=1,
+        status="succeeded",
+        stage="completed",
+        error_code=None,
+        worker_id="worker-123",
+        attempt_count=1,
+        actual_cost_usd=Decimal("0.043"),
+        queued_at=completed_at - timedelta(seconds=20),
+        started_at=completed_at - timedelta(seconds=18),
+        completed_at=completed_at,
+        result_summary=json.dumps(
+            {
+                "quality": {
+                    "validation_passed": True,
+                    "artifact_requested": True,
+                    "artifact_contract_passed": True,
+                    "generation_attempts": 2,
+                    "review_calls": 1,
+                    "steering_restarts": 1,
+                    "source_count": 3,
+                    "citation_count": 5,
+                    "artifact_count": 1,
+                },
+                "activity": {
+                    "web_search_calls": 2,
+                    "file_search_calls": 1,
+                    "code_interpreter_calls": 1,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        telemetry,
+        "track_internal_event",
+        lambda key, tags: counters.append((key, tags)),
+    )
+    monkeypatch.setattr(
+        telemetry,
+        "track_internal_value",
+        lambda key, value, tags, unit="none": values.append((key, value, tags, unit)),
+    )
+
+    telemetry.record_work_run_event(run, "work.done")
+
+    quality_event = next(item for item in counters if item[0] == "work.run.quality_evaluated")
+    assert quality_event[1] == {
+        "kind": "agentic_task",
+        "kind_version": 1,
+        "validation_passed": "true",
+        "artifact_contract_passed": "true",
+    }
+    quality_values = [item for item in values if item[0] == "work.run.quality_value"]
+    assert {item[2]["signal"] for item in quality_values} == {
+        "generation_attempts",
+        "review_calls",
+        "steering_restarts",
+        "source_count",
+        "citation_count",
+        "artifact_count",
+    }
+    tool_values = [item for item in values if item[0] == "work.run.tool_call_count"]
+    assert {item[2]["tool"] for item in tool_values} == {
+        "web_search",
+        "file_search",
+        "code_interpreter",
+    }
+    assert all("work_run_id" not in item[2] for item in [*quality_values, *tool_values])

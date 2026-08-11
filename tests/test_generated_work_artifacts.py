@@ -7,6 +7,7 @@ import pytest
 
 from app.services.work_runs.generated_artifacts import (
     GeneratedArtifactReference,
+    artifact_contract_error,
     build_generated_spreadsheet_preview,
     download_generated_artifact,
     generated_artifact_references,
@@ -81,6 +82,41 @@ def test_generated_artifacts_reject_unsafe_or_unsupported_outputs() -> None:
 def test_artifact_execution_is_opt_in_from_the_approved_plan() -> None:
     assert plan_expects_artifacts([{"kind": "artifact"}])
     assert not plan_expects_artifacts([{"kind": "answer"}])
+
+
+def test_generated_artifact_must_match_the_approved_file_format() -> None:
+    payload = {
+        "current_request": "Create the actual PDF file.",
+        "approved_plan": {
+            "expected_outputs": [
+                {
+                    "kind": "artifact",
+                    "label": "PDF brief",
+                    "description": "A polished one-page PDF.",
+                    "acceptance_criteria": ["The final response cites the PDF."],
+                }
+            ]
+        },
+    }
+    png_response = _response(
+        {
+            "type": "container_file_citation",
+            "container_id": "cntr-1",
+            "file_id": "cfile-1",
+            "filename": "preview.png",
+        }
+    )
+    pdf_response = _response(
+        {
+            "type": "container_file_citation",
+            "container_id": "cntr-1",
+            "file_id": "cfile-2",
+            "filename": "brief.pdf",
+        }
+    )
+
+    assert "requires a PDF" in artifact_contract_error(png_response, payload)
+    assert artifact_contract_error(pdf_response, payload) is None
 
 
 def test_planner_contract_can_request_a_general_artifact() -> None:

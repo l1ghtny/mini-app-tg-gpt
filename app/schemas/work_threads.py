@@ -58,6 +58,7 @@ class SendWorkMessageRequest(BaseModel):
 
     content: str = Field(min_length=3, max_length=8000)
     document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=5)
+    steer_active: bool = False
 
     @field_validator("content")
     @classmethod

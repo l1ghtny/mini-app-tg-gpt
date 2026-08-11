@@ -124,6 +124,7 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
 
     assert result.content == corrected_draft.output_text
     assert result.attempt_count == 2
+    assert result.generation_count == 2
     assert result.review_count == 2
     assert result.validation_passed is True
     assert result.validation_issues == ()
@@ -140,7 +141,9 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
         "searchable_source_files": [],
         "web_search_calls": 0,
         "file_search_calls": 0,
-        "generated_artifact_count": 0,
+        "sources": [],
+        "citation_count": 0,
+        "generated_artifacts": [],
     }
     assert (
         review_payload["approved_plan"]["expected_outputs"][0]["acceptance_criteria"][1]
@@ -164,6 +167,86 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
         ("revising", 2),
         ("reviewing", 2),
     ]
+
+
+@pytest.mark.asyncio
+async def test_active_steering_discards_the_draft_before_review() -> None:
+    first_draft = _response("draft-before-steering", "The original result." * 10)
+    redirected_draft = _response(
+        "draft-after-steering",
+        "The redirected result follows the user's latest instruction." * 4,
+    )
+    passed_review = _response(
+        "review-after-steering",
+        json.dumps(
+            {"passes": True, "issues": [], "revision_instructions": ""}
+        ),
+    )
+    create = AsyncMock(
+        side_effect=[first_draft, redirected_draft, passed_review]
+    )
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    consume_steering = AsyncMock(
+        side_effect=["Focus only on the pricing risks.", None, None]
+    )
+
+    result = await agent_execution._generate_validated_result(
+        client=client,  # type: ignore[arg-type]
+        request_payload=_request_payload(),
+        tools=[{"type": "web_search"}],
+        observe_response=AsyncMock(),
+        consume_steering=consume_steering,
+    )
+
+    assert result.content == redirected_draft.output_text
+    assert result.steering_restarts == 1
+    assert result.generation_count == 2
+    assert create.await_count == 3
+    redirected_request = create.await_args_list[1].kwargs
+    redirected_payload = json.loads(
+        redirected_request["input"][1]["content"][0]["text"]
+    )
+    assert redirected_payload["current_request"] == "Focus only on the pricing risks."
+    assert "user redirected" in redirected_request["input"][0]["content"][0][
+        "text"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_active_steering_after_review_still_replaces_the_result() -> None:
+    first_draft = _response("draft-before-late-steering", "The original result." * 10)
+    first_review = _response(
+        "review-before-late-steering",
+        json.dumps({"passes": True, "issues": [], "revision_instructions": ""}),
+    )
+    redirected_draft = _response(
+        "draft-after-late-steering",
+        "The new result focuses only on pricing risk." * 5,
+    )
+    redirected_review = _response(
+        "review-after-late-steering",
+        json.dumps({"passes": True, "issues": [], "revision_instructions": ""}),
+    )
+    create = AsyncMock(
+        side_effect=[first_draft, first_review, redirected_draft, redirected_review]
+    )
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    consume_steering = AsyncMock(
+        side_effect=[None, "Focus only on pricing risk.", None, None]
+    )
+
+    result = await agent_execution._generate_validated_result(
+        client=client,  # type: ignore[arg-type]
+        request_payload=_request_payload(),
+        tools=[{"type": "web_search"}],
+        observe_response=AsyncMock(),
+        consume_steering=consume_steering,
+    )
+
+    assert result.content == redirected_draft.output_text
+    assert result.steering_restarts == 1
+    assert result.generation_count == 2
+    assert result.review_count == 2
 
 
 @pytest.mark.asyncio
