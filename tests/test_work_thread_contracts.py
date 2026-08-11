@@ -85,7 +85,14 @@ async def test_planner_lets_the_model_choose_the_executor() -> None:
                     {"id": "decide", "title": "Decide", "description": "Compare trade-offs and recommend an option."},
                 ],
                 "expected_outputs": [
-                    {"kind": "answer", "label": "Decision brief", "description": "A readable recommendation."}
+                    {
+                        "kind": "answer",
+                        "label": "Decision brief",
+                        "description": "A readable recommendation.",
+                        "acceptance_criteria": [
+                            "Names the recommended supplier and explains the decisive evidence."
+                        ],
+                    }
                 ],
                 "assumptions": [],
             }
@@ -114,6 +121,11 @@ async def test_planner_lets_the_model_choose_the_executor() -> None:
     request = create.await_args.kwargs
     assert request["text"]["format"]["type"] == "json_schema"
     assert "assumptions" in request["text"]["format"]["schema"]["required"]
+    output_schema = request["text"]["format"]["schema"]["$defs"]["PlannedOutput"]
+    assert "acceptance_criteria" in output_schema["required"]
+    assert result.plan.expected_outputs[0].acceptance_criteria == [
+        "Names the recommended supplier and explains the decisive evidence."
+    ]
     user_payload = json.loads(request["input"][1]["content"][0]["text"])
     assert user_payload["context"]["previous_result"] == "Supplier A is stronger."
 
