@@ -83,10 +83,11 @@ class CreateWorkRunRequest(BaseModel):
                 f"and {definition.max_documents} documents"
             )
         if (
-            self.kind == WorkRunKind.SPREADSHEET_BUILDER_XLSX
+            self.kind
+            in {WorkRunKind.SPREADSHEET_BUILDER_XLSX, WorkRunKind.AGENTIC_TASK}
             and self.instructions is None
         ):
-            raise ValueError("spreadsheet_builder_xlsx requires a goal")
+            raise ValueError(f"{self.kind} requires a goal")
         if (
             self.kind == WorkRunKind.OFFER_COMPARISON_XLSX
             and self.options.desired_columns
@@ -111,7 +112,7 @@ class WorkRunAcceptedResponse(BaseModel):
 class WorkRunPlanResponse(BaseModel):
     kind: WorkRunKind
     kind_version: int = Field(ge=1)
-    min_documents: int = Field(ge=1)
+    min_documents: int = Field(ge=0)
     max_documents: int = Field(ge=1)
     steps: list[WorkRunPlanStep]
 

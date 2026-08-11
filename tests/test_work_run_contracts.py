@@ -71,10 +71,10 @@ def test_work_run_settings_reject_invalid_values(name: str, value: str) -> None:
 
 def test_registry_exposes_legacy_comparison_and_spreadsheet_builder() -> None:
     definitions = list_work_run_definitions()
-    assert tuple(definition.kind for definition in definitions) == (
-        WorkRunKind.OFFER_COMPARISON_XLSX,
-        WorkRunKind.SPREADSHEET_BUILDER_XLSX,
-    )
+    kinds = {definition.kind for definition in definitions}
+    assert WorkRunKind.OFFER_COMPARISON_XLSX in kinds
+    assert WorkRunKind.SPREADSHEET_BUILDER_XLSX in kinds
+    assert WorkRunKind.AGENTIC_TASK in kinds
 
     definition = get_work_run_definition(WorkRunKind.OFFER_COMPARISON_XLSX)
     assert definition.version == 2
@@ -95,6 +95,11 @@ def test_registry_exposes_legacy_comparison_and_spreadsheet_builder() -> None:
     assert builder.min_documents == 1
     assert builder.max_documents == 5
     assert builder.artifact_kind == "spreadsheet_builder_xlsx"
+
+    agent = get_work_run_definition(WorkRunKind.AGENTIC_TASK)
+    assert agent.min_documents == 0
+    assert agent.max_documents == 5
+    assert agent.plan_steps == ()
 
 
 def test_capabilities_plan_is_additive_and_defaults_for_old_callers() -> None:

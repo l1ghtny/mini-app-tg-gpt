@@ -106,20 +106,24 @@ async def test_normalization_cost_records_immutable_pricing_snapshot() -> None:
         unit_price_cached_input_per_1m=Decimal("0.100000"),
         unit_price_output_per_1m=Decimal("6.000000"),
         unit_price_reasoning_per_1m=Decimal("6.000000"),
+        unit_price_web_search_call=Decimal("0.010000"),
     )
 
     cost, snapshot = await service._normalization_cost(
         _Session(pricing),  # type: ignore[arg-type]
         model="gpt-5.6-luna",
         usage=NormalizationUsage(1000, 200, 100, 25),
+        web_search_calls=2,
     )
 
-    assert cost == Decimal("0.001570")
+    assert cost == Decimal("0.021570")
     assert snapshot["pricing_id"] == str(pricing_id)
     assert snapshot["unit_price_input_per_1m"] == "1.000000"
     assert snapshot["unit_price_cached_input_per_1m"] == "0.100000"
     assert snapshot["unit_price_output_per_1m"] == "6.000000"
     assert snapshot["unit_price_reasoning_per_1m"] == "6.000000"
+    assert snapshot["unit_price_web_search_call"] == "0.010000"
+    assert snapshot["web_search_calls"] == 2
 
 
 @pytest.mark.asyncio
@@ -254,6 +258,7 @@ async def test_budget_reservation_rejects_projected_daily_overspend(
     session = _Session(
         policy,
         Decimal("1.00"),
+        Decimal("0"),
         Decimal("1.60"),
         Decimal("0.20"),
     )

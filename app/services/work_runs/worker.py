@@ -15,6 +15,8 @@ from app.db.database import engine
 from app.db.models import WorkRun, utcnow_naive
 from app.redis.settings import settings as redis_settings
 from app.services.work_runs.contracts import WorkRunStatus
+from app.services.work_runs.agent_execution import process_agentic_run
+from app.services.work_runs.contracts import WorkRunKind
 from app.services.work_runs.service import fail_run, process_spreadsheet_run
 
 
@@ -72,12 +74,20 @@ async def run_worker(stop_event: asyncio.Event) -> None:
                         pass
                     continue
                 try:
-                    await process_spreadsheet_run(
-                        session=session,
-                        redis=redis,
-                        run=run,
-                        worker_id=executor_id,
-                    )
+                    if run.kind == WorkRunKind.AGENTIC_TASK.value:
+                        await process_agentic_run(
+                            session=session,
+                            redis=redis,
+                            run=run,
+                            worker_id=executor_id,
+                        )
+                    else:
+                        await process_spreadsheet_run(
+                            session=session,
+                            redis=redis,
+                            run=run,
+                            worker_id=executor_id,
+                        )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

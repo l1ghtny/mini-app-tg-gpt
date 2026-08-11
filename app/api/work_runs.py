@@ -22,8 +22,18 @@ from app.schemas.work_runs import (
     WorkRunListResponse,
     WorkRunResponse,
 )
+from app.schemas.work_threads import (
+    ApproveWorkPlanRequest,
+    CreateWorkThreadRequest,
+    UpdateWorkPlanRequest,
+    WorkPlanResponse,
+    WorkThreadExecutionResponse,
+    WorkThreadListResponse,
+    WorkThreadResponse,
+)
 from app.services.work_runs import service
 from app.services.work_runs.contracts import WorkRunStatus
+from app.services.work_threads import service as thread_service
 
 
 work_runs = APIRouter(tags=["work-runs"])
@@ -33,6 +43,104 @@ _TERMINAL = {
     WorkRunStatus.CANCELLED,
     WorkRunStatus.REFUNDED,
 }
+
+
+@work_runs.get("/work-threads", response_model=WorkThreadListResponse)
+async def list_work_threads(
+    offset: int = Query(default=0, ge=0, le=5000),
+    limit: int = Query(default=20, ge=1, le=50),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await thread_service.list_threads(
+        session,
+        current_user.id,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@work_runs.post(
+    "/work-threads",
+    status_code=status.HTTP_201_CREATED,
+    response_model=WorkThreadResponse,
+)
+async def create_work_thread(
+    payload: CreateWorkThreadRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    thread = await thread_service.create_thread(session, current_user, payload)
+    return await thread_service.thread_response(session, thread)
+
+
+@work_runs.get("/work-threads/{thread_id}", response_model=WorkThreadResponse)
+async def get_work_thread(
+    thread_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    thread = await thread_service.owned_thread(session, current_user.id, thread_id)
+    return await thread_service.thread_response(session, thread)
+
+
+@work_runs.put(
+    "/work-threads/{thread_id}/plan",
+    response_model=WorkPlanResponse,
+)
+async def update_work_thread_plan(
+    thread_id: uuid.UUID,
+    payload: UpdateWorkPlanRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    thread = await thread_service.owned_thread(session, current_user.id, thread_id)
+    plan = await thread_service.update_plan(session, thread, payload)
+    return thread_service.plan_response(plan)
+
+
+@work_runs.post(
+    "/work-threads/{thread_id}/approve",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=WorkThreadExecutionResponse,
+)
+async def approve_work_thread_plan(
+    thread_id: uuid.UUID,
+    payload: ApproveWorkPlanRequest,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=128
+    ),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+):
+    thread = await thread_service.owned_thread(session, current_user.id, thread_id)
+    _, run = await thread_service.approve_plan(
+        session=session,
+        user=current_user,
+        thread=thread,
+        plan_version=payload.plan_version,
+        client_request_id=idempotency_key,
+    )
+    await RedisEventBus(redis).publish_work(
+        str(run.id),
+        {
+            "type": "work.queued",
+            "work_run_id": str(run.id),
+            "status": run.status,
+            "stage": run.stage,
+            "progress_percent": run.progress_percent,
+        },
+    )
+    return WorkThreadExecutionResponse(
+        thread=await thread_service.thread_response(session, thread),
+        run={
+            "id": run.id,
+            "status": WorkRunStatus(run.status),
+            "stage": run.stage,
+            "stream_url": f"/api/v1/work-runs/{run.id}/stream",
+        },
+    )
 
 
 @work_runs.get("/work-runs/capabilities", response_model=WorkRunCapabilitiesResponse)

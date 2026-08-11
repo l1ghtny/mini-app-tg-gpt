@@ -7,6 +7,7 @@ from enum import StrEnum
 class WorkRunKind(StrEnum):
     OFFER_COMPARISON_XLSX = "offer_comparison_xlsx"
     SPREADSHEET_BUILDER_XLSX = "spreadsheet_builder_xlsx"
+    AGENTIC_TASK = "agentic_task"
 
 
 class WorkRunStatus(StrEnum):
@@ -77,6 +78,29 @@ class WorkRunDefinition:
 
 
 _WORK_RUN_DEFINITIONS = {
+    WorkRunKind.AGENTIC_TASK: WorkRunDefinition(
+        kind=WorkRunKind.AGENTIC_TASK,
+        version=1,
+        min_documents=0,
+        max_documents=5,
+        accepted_extensions=frozenset(
+            {".csv", ".docx", ".md", ".pdf", ".txt", ".xlsx"}
+        ),
+        artifact_kind="agent_output",
+        artifact_mime_type="text/markdown",
+        stages=(
+            "accepted",
+            "reserving_allowance",
+            "waiting_for_worker",
+            "loading_sources",
+            "working",
+            "completed",
+            "cancelling",
+            "cancelled",
+            "failed",
+        ),
+        plan_steps=(),
+    ),
     WorkRunKind.OFFER_COMPARISON_XLSX: WorkRunDefinition(
         kind=WorkRunKind.OFFER_COMPARISON_XLSX,
         version=2,
@@ -170,6 +194,7 @@ _ALLOWED_STATUS_TRANSITIONS = {
     WorkRunStatus.RUNNING: frozenset(
         {
             WorkRunStatus.VALIDATING,
+            WorkRunStatus.SUCCEEDED,
             WorkRunStatus.CANCELLING,
             WorkRunStatus.FAILED,
         }

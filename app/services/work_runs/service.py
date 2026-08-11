@@ -35,6 +35,7 @@ from app.db.models import (
     WorkRunPolicy,
     utcnow_naive,
 )
+from app.db.work_agent_models import WorkPlan, WorkThread, WorkThreadRun
 from app.r2.private_artifacts import (
     build_artifact_key,
     build_artifact_preview_key,
@@ -964,6 +965,19 @@ async def complete_cancellation(
     if ledger and ledger.state == State.reserved:
         ledger.state = State.refunded
         session.add(ledger)
+    operations = (
+        await session.exec(
+            select(ProviderOperation).where(
+                ProviderOperation.work_run_id == run.id,
+                ProviderOperation.status == "running",
+            )
+        )
+    ).all()
+    for operation in operations:
+        operation.status = "cancelled"
+        operation.completed_at = now
+        session.add(operation)
+    await _set_linked_thread_status(session, run.id, "cancelled")
     session.add(run)
     await session.commit()
     await _publish(redis, run, "work.cancelled")
@@ -1137,6 +1151,7 @@ async def _normalization_cost(
     *,
     model: str,
     usage: NormalizationUsage,
+    web_search_calls: int = 0,
 ) -> tuple[Decimal, dict[str, object]]:
     pricing_service = PricingService(session)
     pricing = await pricing_service.get_pricing("openai", model)
@@ -1171,8 +1186,18 @@ async def _normalization_cost(
         pricing.unit_price_reasoning_per_1m,
         usage.reasoning_tokens,
     )
+    web_search_rate = Decimal(
+        getattr(pricing, "unit_price_web_search_call", Decimal("0")) or 0
+    )
+    cost_web_search = (
+        web_search_rate * Decimal(max(0, web_search_calls))
+    ).quantize(Decimal("0.000001"))
     total_cost = (
-        cost_input + cost_cached_input + cost_output + cost_reasoning
+        cost_input
+        + cost_cached_input
+        + cost_output
+        + cost_reasoning
+        + cost_web_search
     ).quantize(Decimal("0.000001"))
     return total_cost, {
         "model": model,
@@ -1182,14 +1207,17 @@ async def _normalization_cost(
         "unit_price_cached_input_per_1m": str(cached_input_rate),
         "unit_price_output_per_1m": str(pricing.unit_price_output_per_1m),
         "unit_price_reasoning_per_1m": str(pricing.unit_price_reasoning_per_1m),
+        "unit_price_web_search_call": str(web_search_rate),
         "input_tokens": usage.input_tokens,
         "cached_input_tokens": usage.cached_input_tokens,
         "output_tokens": usage.output_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
+        "web_search_calls": max(0, web_search_calls),
         "cost_input_usd": str(cost_input),
         "cost_cached_input_usd": str(cost_cached_input),
         "cost_output_usd": str(cost_output),
         "cost_reasoning_usd": str(cost_reasoning),
+        "cost_web_search_usd": str(cost_web_search),
         "total_cost_usd": str(total_cost),
     }
 
@@ -1242,6 +1270,13 @@ async def _reserve_normalization_budget(
             )
         )
     ).one()
+    planning_today = (
+        await session.exec(
+            select(func.coalesce(func.sum(WorkPlan.actual_cost_usd), 0)).where(
+                WorkPlan.created_at >= _day_start()
+            )
+        )
+    ).one()
     active_estimates = (
         await session.exec(
             select(func.coalesce(func.sum(WorkRun.estimated_cost_usd), 0)).where(
@@ -1263,6 +1298,7 @@ async def _reserve_normalization_budget(
     ).one()
     projected_daily_cost = (
         Decimal(actual_today)
+        + Decimal(planning_today)
         + Decimal(active_estimates)
         + Decimal(ambiguous_estimates)
         + estimated_cost
@@ -1719,6 +1755,7 @@ async def process_spreadsheet_run(
         if ledger and ledger.state == State.reserved:
             ledger.state = State.consumed
             session.add(ledger)
+        await _set_linked_thread_status(session, run.id, "completed")
         session.add(artifact)
         session.add(run)
         await session.commit()
@@ -1760,6 +1797,38 @@ async def fail_run(
     if ledger and ledger.state == State.reserved:
         ledger.state = State.refunded
         session.add(ledger)
+    operations = (
+        await session.exec(
+            select(ProviderOperation).where(
+                ProviderOperation.work_run_id == run.id,
+                ProviderOperation.status == "running",
+            )
+        )
+    ).all()
+    for operation in operations:
+        operation.status = "failed"
+        operation.error_code = run.error_code
+        operation.completed_at = run.completed_at
+        session.add(operation)
+    await _set_linked_thread_status(session, run.id, "failed")
     session.add(run)
     await session.commit()
     await _publish(redis, run, "work.error")
+
+
+async def _set_linked_thread_status(
+    session: AsyncSession,
+    work_run_id: uuid.UUID,
+    status_value: str,
+) -> None:
+    link = (
+        await session.exec(
+            select(WorkThreadRun).where(WorkThreadRun.work_run_id == work_run_id)
+        )
+    ).first()
+    if link is None:
+        return
+    thread = await session.get(WorkThread, link.thread_id)
+    if thread is not None:
+        thread.status = status_value
+        session.add(thread)
