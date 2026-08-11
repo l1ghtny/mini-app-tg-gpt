@@ -28,6 +28,7 @@ class _FakeS3Client:
         get_payload: bytes | None = None,
     ) -> None:
         self.put_calls: list[dict[str, object]] = []
+        self.get_calls: list[dict[str, object]] = []
         self.head_response = head_response
         self.get_payload = get_payload
 
@@ -39,8 +40,9 @@ class _FakeS3Client:
         assert self.head_response is not None
         return self.head_response
 
-    def get_object(self, **_: object) -> dict[str, object]:
+    def get_object(self, **kwargs: object) -> dict[str, object]:
         assert self.get_payload is not None
+        self.get_calls.append(kwargs)
         return {
             "Body": io.BytesIO(self.get_payload),
             "ContentLength": len(self.get_payload),
@@ -179,6 +181,38 @@ async def test_preview_is_private_json_and_can_be_loaded(
         )
         == payload
     )
+
+
+@pytest.mark.asyncio
+async def test_artifact_stream_forwards_range_and_closes_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"artifact-bytes"
+    client = _FakeS3Client(get_payload=payload)
+    monkeypatch.setattr(
+        private_artifacts,
+        "get_private_artifacts_bucket",
+        lambda: "private-documents",
+    )
+    monkeypatch.setattr(private_artifacts, "_private_s3_client", lambda: client)
+
+    stream = await private_artifacts.open_artifact_stream(
+        bucket="private-documents",
+        key="artifacts/run/report.pdf",
+        range_header="bytes=0-7",
+    )
+    received = b"".join([chunk async for chunk in stream.iter_bytes(chunk_size=4)])
+
+    assert received == payload
+    assert stream.size_bytes == len(payload)
+    assert client.get_calls == [
+        {
+            "Bucket": "private-documents",
+            "Key": "artifacts/run/report.pdf",
+            "Range": "bytes=0-7",
+        }
+    ]
+    assert stream._closed is True
 
 
 @pytest.mark.asyncio

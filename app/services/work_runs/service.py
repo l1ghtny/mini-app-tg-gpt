@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Callable
 
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
@@ -42,7 +43,6 @@ from app.r2.private_artifacts import (
     download_artifact_content,
     download_artifact_preview,
     get_private_artifacts_bucket,
-    presign_artifact_download,
 )
 from app.r2.private_documents import (
     PrivateDocumentStorageConfigurationError,
@@ -69,6 +69,10 @@ from app.services.work_runs.comparison import (
     load_source_tables,
     render_comparison_workbook,
     validate_rendered_workbook,
+)
+from app.services.work_runs.artifact_delivery import (
+    ARTIFACT_DELIVERY_TTL_SECONDS,
+    ArtifactDisposition,
 )
 from app.services.work_runs.normalization import (
     ComparisonNormalizationResponseError,
@@ -118,6 +122,7 @@ _ARTIFACT_STORAGE_CALL_TIMEOUT_SECONDS = 100
 _EVENT_PUBLISH_TIMEOUT_SECONDS = 5
 logger = logging.getLogger(__name__)
 DEFAULT_WEB_SEARCH_CALL_COST_USD = Decimal("0.010000")
+ArtifactDeliveryUrlBuilder = Callable[[Artifact, ArtifactDisposition], str]
 
 
 class WorkRunExecutionError(RuntimeError):
@@ -1002,6 +1007,7 @@ async def artifact_download(
     session: AsyncSession,
     user_id: uuid.UUID,
     artifact_id: uuid.UUID,
+    delivery_url: ArtifactDeliveryUrlBuilder,
 ) -> ArtifactDownloadResponse:
     artifact = (
         await session.exec(
@@ -1017,14 +1023,8 @@ async def artifact_download(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="artifact_not_found"
         )
-    expires = 900
-    url = await presign_artifact_download(
-        bucket=artifact.bucket,
-        key=artifact.storage_key,
-        filename=artifact.filename,
-        mime_type=artifact.mime_type,
-        expires=expires,
-    )
+    expires = ARTIFACT_DELIVERY_TTL_SECONDS
+    url = delivery_url(artifact, "attachment")
     record_artifact_download(artifact)
     return ArtifactDownloadResponse(url=url, expires_in=expires)
 
@@ -1033,6 +1033,7 @@ async def artifact_inline_preview(
     session: AsyncSession,
     user_id: uuid.UUID,
     artifact_id: uuid.UUID,
+    delivery_url: ArtifactDeliveryUrlBuilder,
 ) -> ArtifactInlinePreviewResponse:
     artifact = (
         await session.exec(
@@ -1051,15 +1052,8 @@ async def artifact_inline_preview(
         )
     preview_kind = (artifact.artifact_metadata or {}).get("preview_kind")
     if preview_kind in {"image", "pdf"}:
-        expires = 900
-        url = await presign_artifact_download(
-            bucket=artifact.bucket,
-            key=artifact.storage_key,
-            filename=artifact.filename,
-            mime_type=artifact.mime_type,
-            disposition="inline",
-            expires=expires,
-        )
+        expires = ARTIFACT_DELIVERY_TTL_SECONDS
+        url = delivery_url(artifact, "inline")
         return ArtifactInlinePreviewResponse(
             kind=preview_kind,
             mime_type=artifact.mime_type,
@@ -1091,6 +1085,29 @@ async def artifact_inline_preview(
         status_code=status.HTTP_404_NOT_FOUND,
         detail="artifact_preview_not_found",
     )
+
+
+async def artifact_content(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+) -> Artifact:
+    artifact = (
+        await session.exec(
+            select(Artifact).where(
+                Artifact.id == artifact_id,
+                Artifact.user_id == user_id,
+                Artifact.status == "ready",
+                Artifact.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    if artifact is None or not artifact.bucket or not artifact.storage_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="artifact_not_found",
+        )
+    return artifact
 
 
 async def artifact_preview(

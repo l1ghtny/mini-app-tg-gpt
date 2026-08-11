@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, AsyncIterator
 
 import boto3
 from botocore.exceptions import ClientError
@@ -19,6 +21,29 @@ from app.r2.settings import Settings
 _MAX_PREVIEW_BYTES = 2_000_000
 _MAX_INLINE_TEXT_BYTES = 300_000
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@dataclass
+class ArtifactObjectStream:
+    body: Any
+    size_bytes: int
+    _closed: bool = field(default=False, init=False)
+
+    async def iter_bytes(self, chunk_size: int = 64 * 1024) -> AsyncIterator[bytes]:
+        try:
+            while True:
+                chunk = await asyncio.to_thread(self.body.read, chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            await self.close()
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await asyncio.to_thread(self.body.close)
 
 
 def get_private_artifacts_bucket() -> str:
@@ -233,6 +258,40 @@ async def download_artifact_content(
     )
 
 
+def _open_artifact_stream(
+    *,
+    bucket: str,
+    key: str,
+    range_header: str | None,
+) -> ArtifactObjectStream:
+    kwargs = {"Bucket": bucket, "Key": key}
+    if range_header:
+        kwargs["Range"] = range_header
+    response = _private_s3_client().get_object(**kwargs)
+    return ArtifactObjectStream(
+        body=response["Body"],
+        size_bytes=int(response.get("ContentLength") or 0),
+    )
+
+
+async def open_artifact_stream(
+    *,
+    bucket: str,
+    key: str,
+    range_header: str | None = None,
+) -> ArtifactObjectStream:
+    if bucket != get_private_artifacts_bucket():
+        raise PrivateDocumentStorageConfigurationError(
+            "artifact bucket is not configured"
+        )
+    return await asyncio.to_thread(
+        _open_artifact_stream,
+        bucket=bucket,
+        key=key,
+        range_header=range_header,
+    )
+
+
 async def delete_artifact(*, bucket: str, key: str) -> None:
     if bucket != get_private_artifacts_bucket():
         raise PrivateDocumentStorageConfigurationError(
@@ -243,44 +302,3 @@ async def delete_artifact(*, bucket: str, key: str) -> None:
         _private_s3_client().delete_object(Bucket=bucket, Key=key)
 
     await asyncio.to_thread(delete)
-
-
-async def presign_artifact_download(
-    *,
-    bucket: str,
-    key: str,
-    filename: str,
-    mime_type: str = _XLSX_MIME,
-    disposition: str = "attachment",
-    expires: int = 900,
-) -> str:
-    if bucket != get_private_artifacts_bucket():
-        raise PrivateDocumentStorageConfigurationError(
-            "artifact bucket is not configured"
-        )
-    safe_filename = (
-        "".join(
-            character
-            for character in Path(filename).name
-            if character.isascii() and (character.isalnum() or character in "._-")
-        )
-        or "artifact"
-    )
-    if disposition not in {"attachment", "inline"}:
-        raise ValueError("invalid artifact content disposition")
-
-    def presign() -> str:
-        return _private_s3_client().generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": bucket,
-                "Key": key,
-                "ResponseContentDisposition": (
-                    f'{disposition}; filename="{safe_filename}"'
-                ),
-                "ResponseContentType": mime_type,
-            },
-            ExpiresIn=expires,
-        )
-
-    return await asyncio.to_thread(presign)

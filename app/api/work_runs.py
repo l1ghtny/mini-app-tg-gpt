@@ -3,15 +3,29 @@ from __future__ import annotations
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
+from botocore.exceptions import ClientError
 from redis.asyncio import Redis
 from sse_starlette.sse import EventSourceResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
+from starlette.background import BackgroundTask
+from starlette.responses import StreamingResponse
 
 from app.api.dependencies import get_bus, get_current_user, get_redis
 from app.db.database import get_session
 from app.db.models import AppUser, WorkRun
 from app.db.work_agent_models import WorkThread
+from app.r2.private_artifacts import open_artifact_stream
+from app.r2.private_documents import PrivateDocumentStorageConfigurationError
 from app.redis.event_bus import RedisEventBus
 from app.schemas.work_runs import (
     ArtifactDownloadResponse,
@@ -37,6 +51,15 @@ from app.schemas.work_threads import (
     WorkThreadResponse,
 )
 from app.services.work_runs import service
+from app.services.work_runs.artifact_delivery import (
+    ArtifactDisposition,
+    InvalidArtifactDeliveryToken,
+    InvalidArtifactRange,
+    artifact_content_disposition,
+    create_artifact_delivery_token,
+    decode_artifact_delivery_token,
+    parse_artifact_range,
+)
 from app.services.work_runs.contracts import WorkRunStatus
 from app.services.work_threads import service as thread_service
 
@@ -48,6 +71,20 @@ _TERMINAL = {
     WorkRunStatus.CANCELLED,
     WorkRunStatus.REFUNDED,
 }
+
+
+def _artifact_delivery_url(
+    request: Request,
+    artifact,
+    disposition: ArtifactDisposition,
+) -> str:
+    token = create_artifact_delivery_token(
+        artifact_id=artifact.id,
+        user_id=artifact.user_id,
+        disposition=disposition,
+    )
+    url = request.url_for("serve_artifact_content", artifact_id=str(artifact.id))
+    return str(url.include_query_params(token=token))
 
 
 async def _conversation_turn_response(
@@ -493,10 +530,20 @@ async def stream_work_run(
 )
 async def download_artifact(
     artifact_id: uuid.UUID,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
-    return await service.artifact_download(session, current_user.id, artifact_id)
+    return await service.artifact_download(
+        session,
+        current_user.id,
+        artifact_id,
+        lambda artifact, disposition: _artifact_delivery_url(
+            request,
+            artifact,
+            disposition,
+        ),
+    )
 
 
 @work_runs.get(
@@ -517,6 +564,7 @@ async def preview_artifact(
 )
 async def inline_preview_artifact(
     artifact_id: uuid.UUID,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
@@ -524,6 +572,94 @@ async def inline_preview_artifact(
         session,
         current_user.id,
         artifact_id,
+        lambda artifact, disposition: _artifact_delivery_url(
+            request,
+            artifact,
+            disposition,
+        ),
+    )
+
+
+@work_runs.get(
+    "/artifacts/{artifact_id}/content",
+    name="serve_artifact_content",
+    response_class=StreamingResponse,
+)
+async def serve_artifact_content(
+    artifact_id: uuid.UUID,
+    request: Request,
+    token: str = Query(..., min_length=16),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        grant = decode_artifact_delivery_token(
+            token,
+            expected_artifact_id=artifact_id,
+        )
+    except InvalidArtifactDeliveryToken as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="artifact_delivery_invalid",
+        ) from exc
+    artifact = await service.artifact_content(
+        session,
+        grant.user_id,
+        artifact_id,
+    )
+    try:
+        byte_range = parse_artifact_range(
+            request.headers.get("range"),
+            total_size=artifact.size_bytes,
+        )
+    except InvalidArtifactRange as exc:
+        raise HTTPException(
+            status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+            detail="artifact_range_invalid",
+            headers={"Content-Range": f"bytes */{artifact.size_bytes}"},
+        ) from exc
+    try:
+        object_stream = await open_artifact_stream(
+            bucket=artifact.bucket,
+            key=artifact.storage_key,
+            range_header=byte_range.request_header if byte_range else None,
+        )
+    except PrivateDocumentStorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="artifact_delivery_unavailable",
+        ) from exc
+    except ClientError as exc:
+        error_code = str(exc.response.get("Error", {}).get("Code", ""))
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if error_code in {"404", "NoSuchKey", "NotFound"}
+            else status.HTTP_502_BAD_GATEWAY
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail="artifact_delivery_failed",
+        ) from exc
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=300",
+        "Content-Disposition": artifact_content_disposition(
+            artifact.filename,
+            grant.disposition,
+        ),
+        "Content-Length": str(object_stream.size_bytes),
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+    }
+    response_status = status.HTTP_200_OK
+    if byte_range:
+        response_status = status.HTTP_206_PARTIAL_CONTENT
+        headers["Content-Range"] = byte_range.content_range
+    return StreamingResponse(
+        object_stream.iter_bytes(),
+        status_code=response_status,
+        media_type=artifact.mime_type,
+        headers=headers,
+        background=BackgroundTask(object_stream.close),
     )
 
 
