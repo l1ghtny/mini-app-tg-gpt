@@ -35,7 +35,7 @@ class PlannedWork(BaseModel):
     execution_kind: Literal["agentic_task", "spreadsheet_builder_xlsx"]
     steps: list[PlannedStep] = Field(min_length=2, max_length=8)
     expected_outputs: list[PlannedOutput] = Field(min_length=1, max_length=4)
-    assumptions: list[str] = Field(default_factory=list, max_length=5)
+    assumptions: list[str] = Field(max_length=5)
 
 
 @dataclass(frozen=True)

@@ -85,6 +85,7 @@ async def test_planner_lets_the_model_choose_the_executor() -> None:
     assert result.usage["reasoning_tokens"] == 10
     request = create.await_args.kwargs
     assert request["text"]["format"]["type"] == "json_schema"
+    assert "assumptions" in request["text"]["format"]["schema"]["required"]
 
 
 def test_agentic_work_migration_is_additive_and_uses_committed_head(
