@@ -86,7 +86,7 @@ class WorkPlanStepResponse(BaseModel):
 class WorkExpectedOutputResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["answer", "spreadsheet"]
+    kind: Literal["answer", "artifact", "spreadsheet"]
     label: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=500)
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=6)

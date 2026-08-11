@@ -39,6 +39,7 @@ from app.db.work_agent_models import WorkPlan, WorkThread, WorkThreadRun
 from app.r2.private_artifacts import (
     build_artifact_key,
     build_artifact_preview_key,
+    download_artifact_content,
     download_artifact_preview,
     get_private_artifacts_bucket,
     presign_artifact_download,
@@ -50,6 +51,7 @@ from app.r2.private_documents import (
 from app.redis.event_bus import RedisEventBus
 from app.schemas.work_runs import (
     ArtifactDownloadResponse,
+    ArtifactInlinePreviewResponse,
     ArtifactPreviewResponse,
     ArtifactResponse,
     ArtifactSourceResponse,
@@ -1020,10 +1022,75 @@ async def artifact_download(
         bucket=artifact.bucket,
         key=artifact.storage_key,
         filename=artifact.filename,
+        mime_type=artifact.mime_type,
         expires=expires,
     )
     record_artifact_download(artifact)
     return ArtifactDownloadResponse(url=url, expires_in=expires)
+
+
+async def artifact_inline_preview(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+) -> ArtifactInlinePreviewResponse:
+    artifact = (
+        await session.exec(
+            select(Artifact).where(
+                Artifact.id == artifact_id,
+                Artifact.user_id == user_id,
+                Artifact.status == "ready",
+                Artifact.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    if artifact is None or not artifact.bucket or not artifact.storage_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="artifact_preview_not_found",
+        )
+    preview_kind = (artifact.artifact_metadata or {}).get("preview_kind")
+    if preview_kind in {"image", "pdf"}:
+        expires = 900
+        url = await presign_artifact_download(
+            bucket=artifact.bucket,
+            key=artifact.storage_key,
+            filename=artifact.filename,
+            mime_type=artifact.mime_type,
+            disposition="inline",
+            expires=expires,
+        )
+        return ArtifactInlinePreviewResponse(
+            kind=preview_kind,
+            mime_type=artifact.mime_type,
+            url=url,
+            expires_in=expires,
+        )
+    if preview_kind == "text":
+        try:
+            payload = await download_artifact_content(
+                bucket=artifact.bucket,
+                key=artifact.storage_key,
+            )
+            content = payload.decode("utf-8-sig")
+        except (ClientError, UnicodeDecodeError, ValueError) as exc:
+            logger.exception(
+                "artifact inline preview is invalid",
+                extra={"artifact_id": artifact.id},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="artifact_preview_invalid",
+            ) from exc
+        return ArtifactInlinePreviewResponse(
+            kind="text",
+            mime_type=artifact.mime_type,
+            content=content,
+        )
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="artifact_preview_not_found",
+    )
 
 
 async def artifact_preview(

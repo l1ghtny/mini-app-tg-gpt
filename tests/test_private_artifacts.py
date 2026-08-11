@@ -65,6 +65,18 @@ def test_artifact_key_keeps_revision_versions_distinct() -> None:
     )
 
 
+def test_generated_artifact_key_uses_a_safe_filename_and_extension() -> None:
+    key = private_artifacts.build_artifact_key(
+        user_id=uuid.uuid4(),
+        work_run_id=uuid.uuid4(),
+        artifact_id=uuid.uuid4(),
+        version=2,
+        filename="Launch brief (final).pdf",
+    )
+
+    assert key.endswith("/Launchbrieffinal-v2.pdf")
+
+
 @pytest.mark.asyncio
 async def test_upload_artifact_uses_single_put_object(
     monkeypatch: pytest.MonkeyPatch,
@@ -99,6 +111,32 @@ async def test_upload_artifact_uses_single_put_object(
             "Metadata": {"sha256": "a" * 64},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_upload_generated_artifact_preserves_its_mime_type(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "brief.pdf"
+    artifact_path.write_bytes(b"%PDF-1.7")
+    client = _FakeS3Client()
+    monkeypatch.setattr(
+        private_artifacts,
+        "get_private_artifacts_bucket",
+        lambda: "private-documents",
+    )
+    monkeypatch.setattr(private_artifacts, "_private_s3_client", lambda: client)
+
+    await private_artifacts.upload_artifact(
+        bucket="private-documents",
+        key="artifacts/run/brief-v1.pdf",
+        path=artifact_path,
+        sha256="b" * 64,
+        mime_type="application/pdf",
+    )
+
+    assert client.put_calls[0]["ContentType"] == "application/pdf"
 
 
 @pytest.mark.asyncio

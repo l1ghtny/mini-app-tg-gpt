@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from openai import AsyncOpenAI
@@ -15,6 +18,8 @@ from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import (
+    Artifact,
+    ArtifactSource,
     ProviderOperation,
     RequestLedger,
     State,
@@ -24,11 +29,27 @@ from app.db.models import (
     utcnow_naive,
 )
 from app.db.work_agent_models import WorkPlan, WorkThread, WorkThreadMessage, WorkThreadRun
+from app.r2.private_artifacts import (
+    build_artifact_key,
+    build_artifact_preview_key,
+    get_private_artifacts_bucket,
+    upload_artifact,
+    upload_artifact_preview,
+)
+from app.schemas.work_runs import ArtifactPreviewResponse
 from app.services.work_runs import service
 from app.services.work_runs.contracts import WorkRunErrorCode, WorkRunStatus
 from app.services.work_runs.evidence import (
     attach_legacy_source_links,
     build_work_evidence,
+)
+from app.services.work_runs.generated_artifacts import (
+    MAX_GENERATED_ARTIFACT_TOTAL_BYTES,
+    GeneratedArtifactError,
+    build_generated_spreadsheet_preview,
+    download_generated_artifact,
+    generated_artifact_references,
+    plan_expects_artifacts,
 )
 from app.services.work_runs.normalization import NormalizationUsage, normalization_usage
 from app.services.work_threads.history import bounded_thread_history
@@ -40,6 +61,7 @@ MAX_RESULT_REVIEWS = 2
 ESTIMATED_WEB_SEARCH_CALLS = 4 * MAX_AGENT_ATTEMPTS
 ESTIMATED_FILE_SEARCH_CALLS = 4 * MAX_AGENT_ATTEMPTS
 FILE_SEARCH_CALL_COST_USD = Decimal("0.002500")
+CODE_INTERPRETER_CONTAINER_COST_USD = Decimal("0.030000")
 _EXECUTOR_PROMPT = (
     "Complete the approved Work task. Return the requested deliverable itself, not "
     "a progress report, a description of your process, or a list of work allegedly "
@@ -54,7 +76,11 @@ _EXECUTOR_PROMPT = (
     "current request. Otherwise use web search only when current or external evidence "
     "materially improves the result, with at most four web searches and four file "
     "searches per attempt. Return polished, human-readable Markdown in the requested "
-    "language, with source links when web search was used. Lead with the deliverable."
+    "language, with source links when web search was used. If an expected output has "
+    "kind artifact, use the python tool to create the requested file, cite the created "
+    "file in the final response, and also give the user a useful inline summary. Create "
+    "files only when requested or when the approved expected output requires one. Lead "
+    "with the deliverable."
 )
 _REVIEWER_PROMPT = (
     "Review a draft Work result against the user's request, approved expected outputs, "
@@ -65,7 +91,8 @@ _REVIEWER_PROMPT = (
     "other work already happened. When the user requested a checklist or template "
     "without supporting evidence, require actionable forward-looking items rather than "
     "claims that the items already pass. Return concise revision instructions when it "
-    "does not pass."
+    "does not pass. When an approved expected output has kind artifact, fail the draft "
+    "unless the response cites at least one generated file."
 )
 
 
@@ -96,6 +123,13 @@ def _tool_call_counts(response: Any) -> tuple[int, int]:
     return (
         sum(1 for item in output if getattr(item, "type", None) == "web_search_call"),
         sum(1 for item in output if getattr(item, "type", None) == "file_search_call"),
+    )
+
+
+def _code_interpreter_call_count(response: Any) -> int:
+    output = getattr(response, "output", None) or []
+    return sum(
+        1 for item in output if getattr(item, "type", None) == "code_interpreter_call"
     )
 
 
@@ -210,6 +244,9 @@ async def _review_draft(
                                     ),
                                     "web_search_calls": web_search_calls,
                                     "file_search_calls": file_search_calls,
+                                    "generated_artifact_count": len(
+                                        generated_artifact_references(draft_response)
+                                    ),
                                 },
                                 "draft_result": draft,
                             },
@@ -318,6 +355,7 @@ async def _reserve_budget(
     session: AsyncSession,
     *,
     run: WorkRun,
+    code_interpreter_enabled: bool = False,
 ) -> tuple[Decimal, dict[str, object]]:
     policy = (
         await session.exec(
@@ -352,11 +390,19 @@ async def _reserve_budget(
         FILE_SEARCH_CALL_COST_USD * Decimal(estimated_file_search_calls)
     )
     estimated_cost += estimated_file_search_cost
+    estimated_code_interpreter_cost = (
+        CODE_INTERPRETER_CONTAINER_COST_USD
+        if code_interpreter_enabled
+        else Decimal("0")
+    )
+    estimated_cost += estimated_code_interpreter_cost
     usage.update(
         {
             "file_search_calls": estimated_file_search_calls,
             "unit_price_file_search_call": str(FILE_SEARCH_CALL_COST_USD),
             "cost_file_search_usd": str(estimated_file_search_cost),
+            "code_interpreter_enabled": code_interpreter_enabled,
+            "cost_code_interpreter_usd": str(estimated_code_interpreter_cost),
             "total_cost_usd": str(estimated_cost),
         }
     )
@@ -412,6 +458,7 @@ async def _record_provider_response(
 ) -> None:
     usage = normalization_usage(response)
     web_search_calls, file_search_calls = _tool_call_counts(response)
+    code_interpreter_calls = _code_interpreter_call_count(response)
     call_cost, usage_payload = await service._normalization_cost(
         session,
         model=AGENT_MODEL,
@@ -425,6 +472,7 @@ async def _record_provider_response(
             "file_search_calls": file_search_calls,
             "unit_price_file_search_call": str(FILE_SEARCH_CALL_COST_USD),
             "cost_file_search_usd": str(file_search_cost),
+            "code_interpreter_calls": code_interpreter_calls,
             "total_cost_usd": str(call_cost),
         }
     )
@@ -442,6 +490,12 @@ async def _record_provider_response(
     )
     operation.usage = {
         "estimate": existing_usage.get("estimate"),
+        "code_interpreter_container_id": existing_usage.get(
+            "code_interpreter_container_id"
+        ),
+        "cost_code_interpreter_usd": existing_usage.get(
+            "cost_code_interpreter_usd", "0"
+        ),
         "calls": calls,
         "total_cost_usd": str(operation_cost),
     }
@@ -477,6 +531,246 @@ async def _thread_context(
         await session.get(WorkPlan, link.plan_id),
         list(messages),
     )
+
+
+async def _create_code_interpreter_container(
+    *,
+    client: AsyncOpenAI,
+    run: WorkRun,
+    documents: list[UserDocument],
+) -> str:
+    container_id: str | None = None
+    try:
+        container = await client.containers.create(
+            name=f"lightny-work-{run.id}",
+            memory_limit="1g",
+        )
+        container_id = container.id
+        for document in documents:
+            if document.openai_file_id:
+                await client.containers.files.create(
+                    container_id,
+                    file_id=document.openai_file_id,
+                )
+        return container_id
+    except Exception as exc:
+        await _delete_code_interpreter_container(client, container_id)
+        raise service.WorkRunExecutionError(
+            WorkRunErrorCode.PROVIDER_FAILED,
+            "could not prepare the artifact workspace",
+        ) from exc
+
+
+async def _delete_code_interpreter_container(
+    client: AsyncOpenAI,
+    container_id: str | None,
+) -> None:
+    if not container_id:
+        return
+    try:
+        await client.containers.delete(container_id)
+    except Exception:
+        # The provider expires containers automatically; cleanup must not turn a
+        # successfully persisted user artifact into a failed Work run.
+        return
+
+
+async def _persist_generated_artifacts(
+    *,
+    session: AsyncSession,
+    run: WorkRun,
+    client: AsyncOpenAI,
+    response: Any,
+    evidence: dict[str, object],
+) -> list[Artifact]:
+    references = generated_artifact_references(response)
+    if not references:
+        return []
+    persisted: list[Artifact] = []
+    total_size_bytes = 0
+    bucket = get_private_artifacts_bucket()
+    with tempfile.TemporaryDirectory(prefix="lightny-work-artifacts-") as temp_dir:
+        temp_path = Path(temp_dir)
+        for ordinal, reference in enumerate(references):
+            destination = temp_path / f"{ordinal}-{reference.filename}"
+            try:
+                downloaded = await download_generated_artifact(
+                    client,
+                    reference,
+                    destination,
+                )
+            except GeneratedArtifactError as exc:
+                raise service.WorkRunExecutionError(
+                    WorkRunErrorCode.VALIDATION_FAILED,
+                    str(exc),
+                ) from exc
+            total_size_bytes += downloaded.size_bytes
+            if total_size_bytes > MAX_GENERATED_ARTIFACT_TOTAL_BYTES:
+                raise service.WorkRunExecutionError(
+                    WorkRunErrorCode.VALIDATION_FAILED,
+                    "generated artifacts exceed the total size limit",
+                )
+
+            preview_path: Path | None = None
+            preview_sha256: str | None = None
+            preview_size_bytes: int | None = None
+            if Path(reference.filename).suffix.lower() == ".xlsx":
+                try:
+                    preview = ArtifactPreviewResponse.model_validate(
+                        build_generated_spreadsheet_preview(
+                            downloaded.path,
+                            goal=run.instructions,
+                            source_count=len(evidence.get("sources", [])),
+                        )
+                    )
+                except Exception as exc:
+                    raise service.WorkRunExecutionError(
+                        WorkRunErrorCode.VALIDATION_FAILED,
+                        "generated spreadsheet could not be previewed",
+                    ) from exc
+                preview_path = temp_path / f"{ordinal}-{reference.filename}.preview.json"
+                preview_path.write_text(preview.model_dump_json(), encoding="utf-8")
+                preview_payload = preview_path.read_bytes()
+                preview_size_bytes = len(preview_payload)
+                preview_sha256 = hashlib.sha256(preview_payload).hexdigest()
+
+            artifact_id = uuid.uuid5(
+                run.id,
+                f"generated-artifact:{ordinal}:{reference.filename}",
+            )
+            artifact = await session.get(Artifact, artifact_id)
+            public_metadata: dict[str, object] = {
+                "generated_by": "work_agent",
+                "preview_kind": reference.preview_kind,
+                "preview_available": (
+                    reference.preview_kind is not None or preview_path is not None
+                ),
+            }
+            if preview_path is not None:
+                public_metadata.update(
+                    {
+                        "preview_kind": None,
+                        "preview_version": 1,
+                        "preview_rows": len(preview.rows),
+                        "preview_columns": len(preview.columns),
+                    }
+                )
+            internal_metadata = {
+                "_provider_container_id": reference.container_id,
+                "_provider_file_id": reference.file_id,
+            }
+            if preview_size_bytes is not None and preview_sha256 is not None:
+                internal_metadata.update(
+                    {
+                        "_preview_size_bytes": preview_size_bytes,
+                        "_preview_sha256": preview_sha256,
+                    }
+                )
+            if artifact is None:
+                artifact = Artifact(
+                    id=artifact_id,
+                    work_run_id=run.id,
+                    user_id=run.user_id,
+                    conversation_id=run.conversation_id,
+                    folder_id=run.folder_id,
+                    version=1,
+                    kind=reference.kind,
+                    status="rendering",
+                    filename=reference.filename,
+                    mime_type=reference.mime_type,
+                    size_bytes=downloaded.size_bytes,
+                    sha256=downloaded.sha256,
+                    artifact_metadata={**public_metadata, **internal_metadata},
+                )
+            else:
+                artifact.status = "rendering"
+                artifact.filename = reference.filename
+                artifact.mime_type = reference.mime_type
+                artifact.size_bytes = downloaded.size_bytes
+                artifact.sha256 = downloaded.sha256
+                artifact.artifact_metadata = {**public_metadata, **internal_metadata}
+            session.add(artifact)
+            await session.commit()
+
+            key = build_artifact_key(
+                user_id=run.user_id,
+                work_run_id=run.id,
+                artifact_id=artifact.id,
+                version=artifact.version,
+                filename=artifact.filename,
+            )
+            try:
+                await upload_artifact(
+                    bucket=bucket,
+                    key=key,
+                    path=downloaded.path,
+                    sha256=downloaded.sha256,
+                    mime_type=reference.mime_type,
+                )
+                if preview_path is not None and preview_sha256 is not None:
+                    await upload_artifact_preview(
+                        bucket=bucket,
+                        key=build_artifact_preview_key(key),
+                        path=preview_path,
+                        sha256=preview_sha256,
+                    )
+            except Exception as exc:
+                artifact.status = "failed"
+                session.add(artifact)
+                await session.commit()
+                raise service.WorkRunExecutionError(
+                    WorkRunErrorCode.STORAGE_FAILED,
+                    "generated artifact could not be stored",
+                ) from exc
+            artifact.bucket = bucket
+            artifact.storage_key = key
+            artifact.status = "ready"
+            session.add(artifact)
+
+            existing_sources = (
+                await session.exec(
+                    select(ArtifactSource).where(
+                        ArtifactSource.artifact_id == artifact.id
+                    )
+                )
+            ).all()
+            if not existing_sources:
+                source_ordinal = 0
+                for source in evidence.get("sources", []):
+                    if not isinstance(source, dict):
+                        continue
+                    source_type = source.get("type")
+                    title = source.get("title")
+                    document_id = source.get("document_id")
+                    provider_metadata: dict[str, object] = {}
+                    if source_type == "web" and isinstance(source.get("url"), str):
+                        provider_metadata["url"] = source["url"]
+                    try:
+                        parsed_document_id = (
+                            uuid.UUID(document_id)
+                            if isinstance(document_id, str)
+                            else None
+                        )
+                    except ValueError:
+                        parsed_document_id = None
+                    session.add(
+                        ArtifactSource(
+                            artifact_id=artifact.id,
+                            source_type=(
+                                source_type
+                                if source_type in {"document", "web"}
+                                else "other"
+                            ),
+                            document_id=parsed_document_id,
+                            title=title if isinstance(title, str) else None,
+                            provider_metadata=provider_metadata,
+                            ordinal=source_ordinal,
+                        )
+                    )
+                    source_ordinal += 1
+            await session.commit()
+            persisted.append(artifact)
+    return persisted
 
 
 async def process_agentic_run(
@@ -519,7 +813,14 @@ async def process_agentic_run(
 
     if await service._cancel_if_requested(session=session, redis=redis, run=run):
         return
-    estimated_cost, estimated_usage = await _reserve_budget(session, run=run)
+    thread, plan, thread_messages = await _thread_context(session, run.id)
+    expected_outputs = plan.expected_outputs if plan else []
+    code_interpreter_enabled = plan_expects_artifacts(expected_outputs)
+    estimated_cost, estimated_usage = await _reserve_budget(
+        session,
+        run=run,
+        code_interpreter_enabled=code_interpreter_enabled,
+    )
     operation = ProviderOperation(
         work_run_id=run.id,
         operation_key="general-agent-v1",
@@ -539,7 +840,6 @@ async def process_agentic_run(
     await session.commit()
     await service._publish(redis, run, "work.stage")
 
-    thread, plan, thread_messages = await _thread_context(session, run.id)
     vector_store_ids = sorted(
         {
             document.openai_vector_store_id
@@ -550,6 +850,30 @@ async def process_agentic_run(
     tools: list[dict[str, object]] = [{"type": "web_search"}]
     if vector_store_ids:
         tools.append({"type": "file_search", "vector_store_ids": vector_store_ids})
+    client = AsyncOpenAI()
+    container_id: str | None = None
+    if code_interpreter_enabled:
+        container_id = await _create_code_interpreter_container(
+            client=client,
+            run=run,
+            documents=list(documents),
+        )
+        tools.append({"type": "code_interpreter", "container": container_id})
+        operation.actual_cost_usd = CODE_INTERPRETER_CONTAINER_COST_USD
+        run.actual_cost_usd = (
+            Decimal(run.actual_cost_usd or 0)
+            + CODE_INTERPRETER_CONTAINER_COST_USD
+        )
+        operation.usage = {
+            **operation.usage,
+            "code_interpreter_container_id": container_id,
+            "cost_code_interpreter_usd": str(
+                CODE_INTERPRETER_CONTAINER_COST_USD
+            ),
+        }
+        session.add(operation)
+        session.add(run)
+        await session.commit()
     request_payload: dict[str, object] = {
         "original_goal": thread.goal if thread else run.instructions,
         "current_request": run.instructions,
@@ -560,7 +884,7 @@ async def process_agentic_run(
         "approved_plan": {
             "summary": plan.summary if plan else None,
             "steps": plan.steps if plan else [],
-            "expected_outputs": plan.expected_outputs if plan else [],
+            "expected_outputs": expected_outputs,
             "assumptions": plan.assumptions if plan else [],
         },
         "source_files": [document.filename for document in documents],
@@ -603,13 +927,29 @@ async def process_agentic_run(
         await session.commit()
         await service._publish(redis, run, "work.activity")
 
-    validated = await _generate_validated_result(
-        client=AsyncOpenAI(),
-        request_payload=request_payload,
-        tools=tools,
-        observe_response=observe_response,
-        observe_phase=observe_phase,
-    )
+    try:
+        validated = await _generate_validated_result(
+            client=client,
+            request_payload=request_payload,
+            tools=tools,
+            observe_response=observe_response,
+            observe_phase=observe_phase,
+        )
+        evidence = build_work_evidence(validated.response, documents=documents)
+        generated_artifacts = await _persist_generated_artifacts(
+            session=session,
+            run=run,
+            client=client,
+            response=validated.response,
+            evidence=evidence,
+        )
+        if code_interpreter_enabled and not generated_artifacts:
+            raise service.WorkRunExecutionError(
+                WorkRunErrorCode.VALIDATION_FAILED,
+                "the approved artifact was not created",
+            )
+    finally:
+        await _delete_code_interpreter_container(client, container_id)
     result = validated.content
     response = validated.response
     operation.status = "succeeded"
@@ -635,7 +975,6 @@ async def process_agentic_run(
         },
     }
     web_search_calls, file_search_calls = _tool_call_counts(response)
-    evidence = build_work_evidence(response, documents=documents)
     run.result_summary = json.dumps(
         {
             "version": 2,
@@ -645,6 +984,8 @@ async def process_agentic_run(
             "activity": {
                 "web_search_calls": web_search_calls,
                 "file_search_calls": file_search_calls,
+                "code_interpreter_calls": _code_interpreter_call_count(response),
+                "generated_artifacts": len(generated_artifacts),
                 "generation_attempts": validated.attempt_count,
             },
         },

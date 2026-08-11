@@ -927,11 +927,6 @@ class Artifact(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow_naive, index=True)
     deleted_at: Optional[datetime] = Field(default=None)
 
-    __table_args__ = (
-        UniqueConstraint("work_run_id", "version", name="uq_artifact_run_version"),
-    )
-
-
 class ArtifactSource(SQLModel, table=True):
     __tablename__ = "artifact_source"
 

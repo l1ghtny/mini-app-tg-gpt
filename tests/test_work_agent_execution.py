@@ -140,6 +140,7 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
         "searchable_source_files": [],
         "web_search_calls": 0,
         "file_search_calls": 0,
+        "generated_artifact_count": 0,
     }
     assert (
         review_payload["approved_plan"]["expected_outputs"][0]["acceptance_criteria"][1]

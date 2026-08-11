@@ -17,6 +17,8 @@ from app.r2.settings import Settings
 
 
 _MAX_PREVIEW_BYTES = 2_000_000
+_MAX_INLINE_TEXT_BYTES = 300_000
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def get_private_artifacts_bucket() -> str:
@@ -34,8 +36,20 @@ def build_artifact_key(
     work_run_id: uuid.UUID,
     artifact_id: uuid.UUID,
     version: int = 1,
+    filename: str | None = None,
 ) -> str:
-    return f"artifacts/{user_id}/{work_run_id}/{artifact_id}/comparison-v{version}.xlsx"
+    if filename is None:
+        storage_filename = f"comparison-v{version}.xlsx"
+    else:
+        source = Path(filename).name
+        suffix = Path(source).suffix.lower()
+        safe_stem = "".join(
+            character
+            for character in Path(source).stem
+            if character.isascii() and (character.isalnum() or character in "._-")
+        ).strip("._-")
+        storage_filename = f"{safe_stem or 'artifact'}-v{version}{suffix}"
+    return f"artifacts/{user_id}/{work_run_id}/{artifact_id}/{storage_filename}"
 
 
 def build_artifact_preview_key(artifact_key: str) -> str:
@@ -57,16 +71,16 @@ def _private_s3_client():
     )
 
 
-def _put_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
+def _put_artifact(
+    *, bucket: str, key: str, path: Path, sha256: str, mime_type: str = _XLSX_MIME
+) -> None:
     client = _private_s3_client()
     with path.open("rb") as artifact_file:
         client.put_object(
             Body=artifact_file,
             Bucket=bucket,
             Key=key,
-            ContentType=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
+            ContentType=mime_type,
             Metadata={"sha256": sha256},
         )
 
@@ -83,7 +97,14 @@ def _put_artifact_preview(*, bucket: str, key: str, path: Path, sha256: str) -> 
         )
 
 
-async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> None:
+async def upload_artifact(
+    *,
+    bucket: str,
+    key: str,
+    path: Path,
+    sha256: str,
+    mime_type: str = _XLSX_MIME,
+) -> None:
     if bucket != get_private_artifacts_bucket():
         raise PrivateDocumentStorageConfigurationError(
             "artifact bucket is not configured"
@@ -94,6 +115,7 @@ async def upload_artifact(*, bucket: str, key: str, path: Path, sha256: str) -> 
         key=key,
         path=path,
         sha256=sha256,
+        mime_type=mime_type,
     )
 
 
@@ -181,6 +203,36 @@ async def download_artifact_preview(*, bucket: str, key: str) -> bytes:
     )
 
 
+def _download_artifact_content(*, bucket: str, key: str, max_bytes: int) -> bytes:
+    response = _private_s3_client().get_object(Bucket=bucket, Key=key)
+    body = response["Body"]
+    try:
+        declared_size = int(response.get("ContentLength") or 0)
+        if declared_size > max_bytes:
+            raise ValueError("artifact content is too large")
+        payload = body.read(max_bytes + 1)
+    finally:
+        body.close()
+    if len(payload) > max_bytes:
+        raise ValueError("artifact content is too large")
+    return payload
+
+
+async def download_artifact_content(
+    *, bucket: str, key: str, max_bytes: int = _MAX_INLINE_TEXT_BYTES
+) -> bytes:
+    if bucket != get_private_artifacts_bucket():
+        raise PrivateDocumentStorageConfigurationError(
+            "artifact bucket is not configured"
+        )
+    return await asyncio.to_thread(
+        _download_artifact_content,
+        bucket=bucket,
+        key=key,
+        max_bytes=max_bytes,
+    )
+
+
 async def delete_artifact(*, bucket: str, key: str) -> None:
     if bucket != get_private_artifacts_bucket():
         raise PrivateDocumentStorageConfigurationError(
@@ -194,7 +246,13 @@ async def delete_artifact(*, bucket: str, key: str) -> None:
 
 
 async def presign_artifact_download(
-    *, bucket: str, key: str, filename: str, expires: int = 900
+    *,
+    bucket: str,
+    key: str,
+    filename: str,
+    mime_type: str = _XLSX_MIME,
+    disposition: str = "attachment",
+    expires: int = 900,
 ) -> str:
     if bucket != get_private_artifacts_bucket():
         raise PrivateDocumentStorageConfigurationError(
@@ -206,8 +264,10 @@ async def presign_artifact_download(
             for character in Path(filename).name
             if character.isascii() and (character.isalnum() or character in "._-")
         )
-        or "comparison.xlsx"
+        or "artifact"
     )
+    if disposition not in {"attachment", "inline"}:
+        raise ValueError("invalid artifact content disposition")
 
     def presign() -> str:
         return _private_s3_client().generate_presigned_url(
@@ -215,10 +275,10 @@ async def presign_artifact_download(
             Params={
                 "Bucket": bucket,
                 "Key": key,
-                "ResponseContentDisposition": f'attachment; filename="{safe_filename}"',
-                "ResponseContentType": (
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                "ResponseContentDisposition": (
+                    f'{disposition}; filename="{safe_filename}"'
                 ),
+                "ResponseContentType": mime_type,
             },
             ExpiresIn=expires,
         )

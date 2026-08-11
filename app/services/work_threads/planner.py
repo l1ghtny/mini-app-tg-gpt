@@ -22,7 +22,7 @@ class PlannedStep(BaseModel):
 class PlannedOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["answer", "spreadsheet"]
+    kind: Literal["answer", "artifact", "spreadsheet"]
     label: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=500)
     acceptance_criteria: list[str] = Field(min_length=1, max_length=6)
@@ -98,7 +98,9 @@ async def plan_work(
                             "only when at least one CSV/XLSX source exists and a workbook is the "
                             "natural primary result. Otherwise choose agentic_task. Do not force "
                             "tasks into predefined templates. State assumptions instead of inventing "
-                            "facts. For every expected output, define concrete acceptance criteria "
+                            "facts. Use output kind artifact when the user asks for a downloadable "
+                            "document, PDF, presentation, image, or other generated file that the "
+                            "general agent should create. For every expected output, define concrete acceptance criteria "
                             "for the deliverable itself: required content, structure, quantity, "
                             "evidence, and material caveats. Criteria must not assume that checks, "
                             "tests, research, or verification have already happened. Write every "

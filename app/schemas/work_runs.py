@@ -219,6 +219,23 @@ class ArtifactDownloadResponse(BaseModel):
     expires_in: int
 
 
+class ArtifactInlinePreviewResponse(BaseModel):
+    kind: Literal["image", "pdf", "text"]
+    mime_type: str
+    url: str | None = None
+    content: str | None = None
+    truncated: bool = False
+    expires_in: int | None = None
+
+    @model_validator(mode="after")
+    def validate_preview_payload(self) -> Self:
+        if self.kind in {"image", "pdf"} and not self.url:
+            raise ValueError("binary inline previews require a URL")
+        if self.kind == "text" and self.content is None:
+            raise ValueError("text inline previews require content")
+        return self
+
+
 ArtifactPreviewCell = str | int | float | bool | None
 
 
