@@ -18,6 +18,7 @@ from app.r2.private_documents import (
     delete_document_source,
     download_document_source,
     get_private_documents_bucket,
+    presign_document_source,
     upload_document_source,
 )
 from app.r2.settings import Settings
@@ -100,6 +101,7 @@ class _MemoryS3:
         self.objects: dict[tuple[str, str], bytes] = {}
         self.extra_args: dict[str, object] | None = None
         self.last_body: _MemoryBody | None = None
+        self.presign_request: dict[str, object] | None = None
 
     async def upload_fileobj(self, *, Fileobj, Bucket, Key, ExtraArgs) -> None:
         self.objects[(Bucket, Key)] = Fileobj.read()
@@ -111,6 +113,14 @@ class _MemoryS3:
 
     async def delete_object(self, *, Bucket, Key) -> None:
         self.objects.pop((Bucket, Key), None)
+
+    async def generate_presigned_url(self, operation, *, Params, ExpiresIn):
+        self.presign_request = {
+            "operation": operation,
+            "params": Params,
+            "expires_in": ExpiresIn,
+        }
+        return "https://private.example/signed-source"
 
 
 @pytest.mark.asyncio
@@ -166,12 +176,29 @@ async def test_private_document_source_round_trip(monkeypatch, tmp_path: Path) -
         metadata={"document-id": "document"},
     )
     await download_document_source(bucket=bucket, key=key, target_path=str(target))
+    signed_url = await presign_document_source(
+        bucket=bucket,
+        key=key,
+        filename="Customer Price List.csv",
+        content_type="text/csv",
+    )
 
     assert target.read_bytes() == source.read_bytes()
     assert client.last_body is not None and client.last_body.closed
     assert client.extra_args == {
         "ContentType": "text/csv",
         "Metadata": {"document-id": "document"},
+    }
+    assert signed_url == "https://private.example/signed-source"
+    assert client.presign_request == {
+        "operation": "get_object",
+        "params": {
+            "Bucket": bucket,
+            "Key": key,
+            "ResponseContentDisposition": 'inline; filename="CustomerPriceList.csv"',
+            "ResponseContentType": "text/csv",
+        },
+        "expires_in": 900,
     }
 
     await delete_document_source(bucket=bucket, key=key)

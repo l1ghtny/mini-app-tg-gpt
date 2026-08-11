@@ -35,11 +35,13 @@ from app.r2.private_documents import (
     delete_document_source,
     download_document_source,
     get_private_documents_bucket,
+    presign_document_source,
     upload_document_source,
 )
 from app.schemas.documents import (
     ConversationDocumentsUpdateResponse,
     DocumentCapabilitiesResponse,
+    DocumentSourceDownloadResponse,
     DocumentProviderArtifactResponse,
     DocumentsListResponse,
     UserDocumentResponse,
@@ -458,6 +460,37 @@ async def list_documents(session: AsyncSession, user: AppUser) -> DocumentsListR
             for doc in documents
         ]
     )
+
+
+async def get_document_source_download(
+    session: AsyncSession,
+    user: AppUser,
+    document_id: uuid.UUID,
+) -> DocumentSourceDownloadResponse:
+    document = await session.get(UserDocument, document_id)
+    if (
+        document is None
+        or document.user_id != user.id
+        or document.deleted_at is not None
+        or document.source_storage_status != _SOURCE_STORAGE_STATUS_STORED
+        or not document.source_bucket
+        or not document.source_storage_key
+    ):
+        raise HTTPException(status_code=404, detail={"error": "document_not_found"})
+    try:
+        url = await presign_document_source(
+            bucket=document.source_bucket,
+            key=document.source_storage_key,
+            filename=document.filename,
+            content_type=document.mime_type,
+            expires=900,
+        )
+    except PrivateDocumentStorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "document_source_storage_misconfigured"},
+        ) from exc
+    return DocumentSourceDownloadResponse(url=url, expires_in=900)
 
 
 def _cleanup_temp_path(tmp_path: str) -> None:

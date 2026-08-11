@@ -49,6 +49,11 @@ class DocumentsListResponse(BaseModel):
     documents: list[UserDocumentResponse]
 
 
+class DocumentSourceDownloadResponse(BaseModel):
+    url: str
+    expires_in: int
+
+
 class DocumentCapabilitiesResponse(BaseModel):
     status: Literal["none", "active"]
     tier_name: Optional[str] = None

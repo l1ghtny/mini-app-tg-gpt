@@ -113,6 +113,36 @@ async def download_document_source(
             body.close()
 
 
+async def presign_document_source(
+    *,
+    bucket: str,
+    key: str,
+    filename: str,
+    content_type: str | None,
+    expires: int = 900,
+) -> str:
+    _require_configured_bucket(bucket)
+    safe_filename = (
+        "".join(
+            character
+            for character in Path(filename).name
+            if character.isascii() and (character.isalnum() or character in "._-")
+        )
+        or "document"
+    )
+    async with _private_s3_client() as s3:
+        return await s3.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": bucket,
+                "Key": key,
+                "ResponseContentDisposition": f'inline; filename="{safe_filename}"',
+                "ResponseContentType": content_type or "application/octet-stream",
+            },
+            ExpiresIn=expires,
+        )
+
+
 async def delete_document_source(*, bucket: str, key: str) -> None:
     _require_configured_bucket(bucket)
     async with _private_s3_client() as s3:

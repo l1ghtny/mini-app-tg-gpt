@@ -8,7 +8,12 @@ from app.api import document_helpers
 from app.api.dependencies import get_current_user
 from app.db.database import get_session
 from app.db.models import AppUser
-from app.schemas.documents import DocumentCapabilitiesResponse, DocumentsListResponse, UserDocumentResponse
+from app.schemas.documents import (
+    DocumentCapabilitiesResponse,
+    DocumentSourceDownloadResponse,
+    DocumentsListResponse,
+    UserDocumentResponse,
+)
 
 documents = APIRouter(tags=["documents"], prefix="/documents")
 
@@ -44,6 +49,22 @@ async def get_document_capabilities(
     current_user: AppUser = Depends(get_current_user),
 ):
     return await document_helpers.get_document_capabilities(session, current_user)
+
+
+@documents.get(
+    "/{document_id}/source",
+    response_model=DocumentSourceDownloadResponse,
+)
+async def get_document_source(
+    document_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await document_helpers.get_document_source_download(
+        session=session,
+        user=current_user,
+        document_id=document_id,
+    )
 
 
 @documents.delete("/{document_id}", status_code=204, response_class=Response)

@@ -26,6 +26,10 @@ from app.db.models import (
 from app.db.work_agent_models import WorkPlan, WorkThread, WorkThreadMessage, WorkThreadRun
 from app.services.work_runs import service
 from app.services.work_runs.contracts import WorkRunErrorCode, WorkRunStatus
+from app.services.work_runs.evidence import (
+    attach_legacy_source_links,
+    build_work_evidence,
+)
 from app.services.work_runs.normalization import NormalizationUsage, normalization_usage
 from app.services.work_threads.history import bounded_thread_history
 
@@ -95,54 +99,8 @@ def _tool_call_counts(response: Any) -> tuple[int, int]:
     )
 
 
-def _annotation_value(annotation: Any, name: str) -> str | None:
-    if isinstance(annotation, dict):
-        value = annotation.get(name)
-        if isinstance(value, str):
-            return value
-        nested = annotation.get("url_citation")
-        if isinstance(nested, dict) and isinstance(nested.get(name), str):
-            return nested[name]
-        return None
-    value = getattr(annotation, name, None)
-    if isinstance(value, str):
-        return value
-    nested = getattr(annotation, "url_citation", None)
-    nested_value = getattr(nested, name, None)
-    return nested_value if isinstance(nested_value, str) else None
-
-
-def _response_citations(response: Any) -> list[tuple[str, str]]:
-    citations: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for item in getattr(response, "output", None) or []:
-        for content in getattr(item, "content", None) or []:
-            for annotation in getattr(content, "annotations", None) or []:
-                url = _annotation_value(annotation, "url")
-                if (
-                    not url
-                    or not url.startswith(("https://", "http://"))
-                    or url in seen
-                ):
-                    continue
-                title = (_annotation_value(annotation, "title") or url).replace(
-                    "]", ""
-                ).replace("[", "")
-                seen.add(url)
-                citations.append((title, url))
-    return citations
-
-
 def _attach_source_links(draft: str, response: Any) -> str:
-    links = [
-        (title, url)
-        for title, url in _response_citations(response)
-        if url not in draft
-    ]
-    if not links:
-        return draft
-    source_lines = [f"- [{title}]({url})" for title, url in links]
-    return f"{draft.rstrip()}\n\n### Sources\n" + "\n".join(source_lines)
+    return attach_legacy_source_links(draft, build_work_evidence(response))
 
 
 def _draft_has_user_value(draft: str) -> bool:
@@ -677,11 +635,13 @@ async def process_agentic_run(
         },
     }
     web_search_calls, file_search_calls = _tool_call_counts(response)
+    evidence = build_work_evidence(response, documents=documents)
     run.result_summary = json.dumps(
         {
-            "version": 1,
+            "version": 2,
             "format": "markdown",
             "content": result,
+            "evidence": evidence,
             "activity": {
                 "web_search_calls": web_search_calls,
                 "file_search_calls": file_search_calls,
@@ -705,7 +665,11 @@ async def process_agentic_run(
                 role="assistant",
                 kind="result",
                 content=result,
-                message_metadata={"work_run_id": str(run.id)},
+                message_metadata={
+                    "work_run_id": str(run.id),
+                    "evidence": evidence,
+                    "legacy_sources_appended": "\n\n### Sources\n" in result,
+                },
             )
         )
     session.add(operation)
