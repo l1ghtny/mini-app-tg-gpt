@@ -24,6 +24,7 @@ from app.schemas.work_runs import CreateWorkRunRequest, OfferComparisonOptions
 from app.schemas.work_threads import (
     CreateWorkFollowUpRequest,
     CreateWorkThreadRequest,
+    SendWorkMessageRequest,
     UpdateWorkPlanRequest,
     WorkPlanResponse,
     WorkThreadListResponse,
@@ -200,6 +201,9 @@ async def create_thread(
     session: AsyncSession,
     user: AppUser,
     request: CreateWorkThreadRequest,
+    *,
+    client_request_id: str | None = None,
+    raise_on_planning_failure: bool = True,
 ) -> WorkThread:
     available = await run_service.capabilities(session, user)
     if not available.enabled:
@@ -237,6 +241,11 @@ async def create_thread(
         context_manifest={
             "document_ids": [str(document_id) for document_id in request.document_ids],
             "output_language": request.output_language,
+            **(
+                {"start_client_request_id": client_request_id}
+                if client_request_id
+                else {}
+            ),
         },
     )
     session.add(thread)
@@ -247,6 +256,11 @@ async def create_thread(
             role="user",
             kind="goal",
             content=request.goal,
+            message_metadata=(
+                {"client_request_id": client_request_id}
+                if client_request_id
+                else {}
+            ),
         )
     )
     await session.commit()
@@ -267,6 +281,8 @@ async def create_thread(
         thread.status = "planning_failed"
         session.add(thread)
         await session.commit()
+        if not raise_on_planning_failure:
+            return thread
         if isinstance(exc, WorkPlanningError):
             raise HTTPException(status_code=502, detail="work_thread_planning_failed") from exc
         raise
@@ -428,6 +444,8 @@ async def _plan_existing_thread(
     add_message: bool,
     expected_status: str,
     conflict_detail: str,
+    message_metadata: dict[str, object] | None = None,
+    raise_on_planning_failure: bool = True,
 ) -> WorkThread:
     document_ids = [
         uuid.UUID(value) for value in thread.context_manifest.get("document_ids", [])
@@ -456,14 +474,18 @@ async def _plan_existing_thread(
     thread = locked_thread
     current = await _latest_plan(session, thread.id)
     version = current.version + 1 if current else 1
+    if current is not None and current.status == "proposed":
+        current.status = "superseded"
+        session.add(current)
     if add_message:
+        metadata = {"intent": intent, **(message_metadata or {})}
         session.add(
             WorkThreadMessage(
                 thread_id=thread.id,
                 role="user",
                 kind="follow_up",
                 content=instruction,
-                message_metadata={"intent": intent},
+                message_metadata=metadata,
             )
         )
     thread.status = "planning"
@@ -487,6 +509,8 @@ async def _plan_existing_thread(
         thread.status = "planning_failed"
         session.add(thread)
         await session.commit()
+        if not raise_on_planning_failure:
+            return thread
         if isinstance(exc, WorkPlanningError):
             raise HTTPException(status_code=502, detail="work_thread_planning_failed") from exc
         raise
@@ -726,3 +750,241 @@ async def approve_plan(
     session.add(thread)
     await session.commit()
     return plan, run
+
+
+async def _existing_execution(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    client_request_id: str,
+    thread_id: uuid.UUID | None = None,
+) -> tuple[WorkThread, WorkRun] | None:
+    run = (
+        await session.exec(
+            select(WorkRun).where(
+                WorkRun.user_id == user_id,
+                WorkRun.client_request_id == client_request_id,
+            )
+        )
+    ).first()
+    if run is None:
+        return None
+    link = (
+        await session.exec(
+            select(WorkThreadRun).where(WorkThreadRun.work_run_id == run.id)
+        )
+    ).first()
+    if link is None or (thread_id is not None and link.thread_id != thread_id):
+        raise HTTPException(status_code=409, detail="work_message_idempotency_conflict")
+    thread = await session.get(WorkThread, link.thread_id)
+    if thread is None or thread.user_id != user_id:
+        raise HTTPException(status_code=409, detail="work_message_idempotency_conflict")
+    return thread, run
+
+
+async def start_conversation(
+    *,
+    session: AsyncSession,
+    user: AppUser,
+    request: CreateWorkThreadRequest,
+    client_request_id: str,
+) -> tuple[WorkThread, WorkRun | None]:
+    existing = await _existing_execution(
+        session,
+        user_id=user.id,
+        client_request_id=client_request_id,
+    )
+    if existing is not None:
+        return existing
+
+    recent = (
+        await session.exec(
+            select(WorkThread)
+            .where(WorkThread.user_id == user.id)
+            .order_by(col(WorkThread.created_at).desc())
+            .limit(100)
+        )
+    ).all()
+    thread = next(
+        (
+            item
+            for item in recent
+            if item.context_manifest.get("start_client_request_id")
+            == client_request_id
+        ),
+        None,
+    )
+    if thread is None:
+        thread = await create_thread(
+            session,
+            user,
+            request,
+            client_request_id=client_request_id,
+            raise_on_planning_failure=False,
+        )
+    elif thread.status == "planning_failed":
+        message = await _latest_user_message(session, thread.id)
+        if message is not None:
+            thread = await _plan_existing_thread(
+                session,
+                thread=thread,
+                instruction=message.content,
+                intent="continue",
+                add_message=False,
+                expected_status="planning_failed",
+                conflict_detail="work_message_not_available",
+                raise_on_planning_failure=False,
+            )
+    if thread.status != "ready":
+        return thread, None
+    plan = await _latest_plan(session, thread.id)
+    if plan is None:
+        return thread, None
+    _, run = await approve_plan(
+        session=session,
+        user=user,
+        thread=thread,
+        plan_version=plan.version,
+        client_request_id=client_request_id,
+    )
+    return thread, run
+
+
+async def send_message(
+    *,
+    session: AsyncSession,
+    user: AppUser,
+    thread: WorkThread,
+    request: SendWorkMessageRequest,
+    client_request_id: str,
+) -> tuple[WorkThread, WorkRun | None]:
+    existing = await _existing_execution(
+        session,
+        user_id=user.id,
+        client_request_id=client_request_id,
+        thread_id=thread.id,
+    )
+    if existing is not None:
+        return existing
+
+    messages = (
+        await session.exec(
+            select(WorkThreadMessage).where(WorkThreadMessage.thread_id == thread.id)
+        )
+    ).all()
+    duplicate = next(
+        (
+            message
+            for message in messages
+            if message.message_metadata.get("client_request_id")
+            == client_request_id
+        ),
+        None,
+    )
+    if thread.status in {"planning", "running"}:
+        if duplicate is not None:
+            return thread, None
+        raise HTTPException(status_code=409, detail="work_message_active_run")
+    if duplicate is None:
+        current_document_ids = [
+            uuid.UUID(value)
+            for value in thread.context_manifest.get("document_ids", [])
+        ]
+        combined_document_ids = list(
+            dict.fromkeys([*current_document_ids, *request.document_ids])
+        )
+        if len(combined_document_ids) > 5:
+            raise HTTPException(status_code=422, detail="work_thread_too_many_documents")
+        await _owned_documents(
+            session,
+            user_id=user.id,
+            document_ids=combined_document_ids,
+        )
+        manifest = dict(thread.context_manifest)
+        manifest["document_ids"] = [str(value) for value in combined_document_ids]
+        thread.context_manifest = manifest
+        session.add(thread)
+        await session.commit()
+        thread = await _plan_existing_thread(
+            session,
+            thread=thread,
+            instruction=request.content,
+            intent="continue",
+            add_message=True,
+            expected_status=thread.status,
+            conflict_detail="work_message_not_available",
+            message_metadata={
+                "client_request_id": client_request_id,
+                "document_ids": [str(value) for value in request.document_ids],
+            },
+            raise_on_planning_failure=False,
+        )
+    if thread.status != "ready":
+        return thread, None
+    plan = await _latest_plan(session, thread.id)
+    if plan is None:
+        return thread, None
+    _, run = await approve_plan(
+        session=session,
+        user=user,
+        thread=thread,
+        plan_version=plan.version,
+        client_request_id=client_request_id,
+    )
+    return thread, run
+
+
+async def retry_conversation_turn(
+    *,
+    session: AsyncSession,
+    user: AppUser,
+    thread: WorkThread,
+    client_request_id: str,
+) -> tuple[WorkThread, WorkRun | None]:
+    existing = await _existing_execution(
+        session,
+        user_id=user.id,
+        client_request_id=client_request_id,
+        thread_id=thread.id,
+    )
+    if existing is not None:
+        return existing
+    if (
+        thread.context_manifest.get("retry_client_request_id")
+        == client_request_id
+        and thread.status == "planning"
+    ):
+        return thread, None
+    if thread.status not in {"failed", "planning_failed"}:
+        raise HTTPException(status_code=409, detail="work_message_not_retryable")
+    message = await _latest_user_message(session, thread.id)
+    if message is None:
+        raise HTTPException(status_code=409, detail="work_message_not_retryable")
+    manifest = dict(thread.context_manifest)
+    manifest["retry_client_request_id"] = client_request_id
+    thread.context_manifest = manifest
+    session.add(thread)
+    await session.commit()
+    thread = await _plan_existing_thread(
+        session,
+        thread=thread,
+        instruction=message.content,
+        intent=str(message.message_metadata.get("intent", "continue")),
+        add_message=False,
+        expected_status=thread.status,
+        conflict_detail="work_message_not_retryable",
+        raise_on_planning_failure=False,
+    )
+    if thread.status != "ready":
+        return thread, None
+    plan = await _latest_plan(session, thread.id)
+    if plan is None:
+        return thread, None
+    _, run = await approve_plan(
+        session=session,
+        user=user,
+        thread=thread,
+        plan_version=plan.version,
+        client_request_id=client_request_id,
+    )
+    return thread, run

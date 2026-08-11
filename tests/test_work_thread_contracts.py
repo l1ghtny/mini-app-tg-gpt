@@ -15,6 +15,7 @@ from app.db.work_agent_models import WorkThreadMessage
 from app.schemas.work_threads import (
     CreateWorkFollowUpRequest,
     CreateWorkThreadRequest,
+    SendWorkMessageRequest,
     UpdateWorkPlanRequest,
 )
 from app.services.work_threads.history import bounded_thread_history
@@ -58,6 +59,19 @@ def test_follow_up_contract_normalizes_instruction_and_limits_intent() -> None:
 
     assert request.instruction == "Make the recommendation shorter."
     assert request.intent == "revise"
+
+
+def test_conversation_message_accepts_unique_file_context() -> None:
+    document_id = uuid.uuid4()
+    request = SendWorkMessageRequest.model_validate(
+        {
+            "content": "  Analyse   this website and explain the risks. ",
+            "document_ids": [str(document_id)],
+        }
+    )
+
+    assert request.content == "Analyse this website and explain the risks."
+    assert request.document_ids == [document_id]
 
 
 def test_agent_history_keeps_previous_results_but_not_current_request() -> None:

@@ -10,7 +10,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.dependencies import get_bus, get_current_user, get_redis
 from app.db.database import get_session
-from app.db.models import AppUser
+from app.db.models import AppUser, WorkRun
+from app.db.work_agent_models import WorkThread
 from app.redis.event_bus import RedisEventBus
 from app.schemas.work_runs import (
     ArtifactDownloadResponse,
@@ -26,7 +27,9 @@ from app.schemas.work_threads import (
     ApproveWorkPlanRequest,
     CreateWorkFollowUpRequest,
     CreateWorkThreadRequest,
+    SendWorkMessageRequest,
     UpdateWorkPlanRequest,
+    WorkConversationTurnResponse,
     WorkPlanResponse,
     WorkThreadExecutionResponse,
     WorkThreadListResponse,
@@ -44,6 +47,37 @@ _TERMINAL = {
     WorkRunStatus.CANCELLED,
     WorkRunStatus.REFUNDED,
 }
+
+
+async def _conversation_turn_response(
+    *,
+    session: AsyncSession,
+    redis: Redis,
+    thread: WorkThread,
+    run: WorkRun | None,
+) -> WorkConversationTurnResponse:
+    accepted = None
+    if run is not None:
+        await RedisEventBus(redis).publish_work(
+            str(run.id),
+            {
+                "type": "work.queued",
+                "work_run_id": str(run.id),
+                "status": run.status,
+                "stage": run.stage,
+                "progress_percent": run.progress_percent,
+            },
+        )
+        accepted = {
+            "id": run.id,
+            "status": WorkRunStatus(run.status),
+            "stage": run.stage,
+            "stream_url": f"/api/v1/work-runs/{run.id}/stream",
+        }
+    return WorkConversationTurnResponse(
+        thread=await thread_service.thread_response(session, thread),
+        run=accepted,
+    )
 
 
 @work_runs.get("/work-threads", response_model=WorkThreadListResponse)
@@ -75,6 +109,34 @@ async def create_work_thread(
     return await thread_service.thread_response(session, thread)
 
 
+@work_runs.post(
+    "/work-conversations",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=WorkConversationTurnResponse,
+)
+async def create_work_conversation(
+    payload: CreateWorkThreadRequest,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=128
+    ),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+):
+    thread, run = await thread_service.start_conversation(
+        session=session,
+        user=current_user,
+        request=payload,
+        client_request_id=idempotency_key,
+    )
+    return await _conversation_turn_response(
+        session=session,
+        redis=redis,
+        thread=thread,
+        run=run,
+    )
+
+
 @work_runs.get("/work-threads/{thread_id}", response_model=WorkThreadResponse)
 async def get_work_thread(
     thread_id: uuid.UUID,
@@ -99,6 +161,66 @@ async def create_work_thread_follow_up(
     thread = await thread_service.owned_thread(session, current_user.id, thread_id)
     thread = await thread_service.create_follow_up(session, thread, payload)
     return await thread_service.thread_response(session, thread)
+
+
+@work_runs.post(
+    "/work-threads/{thread_id}/messages",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=WorkConversationTurnResponse,
+)
+async def send_work_thread_message(
+    thread_id: uuid.UUID,
+    payload: SendWorkMessageRequest,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=128
+    ),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+):
+    thread = await thread_service.owned_thread(session, current_user.id, thread_id)
+    thread, run = await thread_service.send_message(
+        session=session,
+        user=current_user,
+        thread=thread,
+        request=payload,
+        client_request_id=idempotency_key,
+    )
+    return await _conversation_turn_response(
+        session=session,
+        redis=redis,
+        thread=thread,
+        run=run,
+    )
+
+
+@work_runs.post(
+    "/work-threads/{thread_id}/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=WorkConversationTurnResponse,
+)
+async def retry_work_thread_turn(
+    thread_id: uuid.UUID,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=128
+    ),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+):
+    thread = await thread_service.owned_thread(session, current_user.id, thread_id)
+    thread, run = await thread_service.retry_conversation_turn(
+        session=session,
+        user=current_user,
+        thread=thread,
+        client_request_id=idempotency_key,
+    )
+    return await _conversation_turn_response(
+        session=session,
+        redis=redis,
+        thread=thread,
+        run=run,
+    )
 
 
 @work_runs.post(

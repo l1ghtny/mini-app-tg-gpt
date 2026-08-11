@@ -53,6 +53,28 @@ class CreateWorkFollowUpRequest(BaseModel):
         return value
 
 
+class SendWorkMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=3, max_length=8000)
+    document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=5)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if len(value) < 3:
+            raise ValueError("message is too short")
+        return value
+
+    @field_validator("document_ids")
+    @classmethod
+    def unique_documents(cls, values: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(values) != len(set(values)):
+            raise ValueError("document_ids must be unique")
+        return values
+
+
 class WorkPlanStepResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -147,3 +169,8 @@ class ApproveWorkPlanRequest(BaseModel):
 class WorkThreadExecutionResponse(BaseModel):
     thread: WorkThreadResponse
     run: WorkRunAcceptedResponse
+
+
+class WorkConversationTurnResponse(BaseModel):
+    thread: WorkThreadResponse
+    run: WorkRunAcceptedResponse | None = None

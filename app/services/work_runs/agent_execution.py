@@ -79,6 +79,8 @@ class ValidatedAgentResult:
     response: Any
     attempt_count: int
     review_count: int
+    validation_passed: bool
+    validation_issues: tuple[str, ...] = ()
 
 
 ProviderResponseObserver = Callable[[str, Any], Awaitable[None]]
@@ -90,6 +92,61 @@ def _tool_call_counts(response: Any) -> tuple[int, int]:
         sum(1 for item in output if getattr(item, "type", None) == "web_search_call"),
         sum(1 for item in output if getattr(item, "type", None) == "file_search_call"),
     )
+
+
+def _annotation_value(annotation: Any, name: str) -> str | None:
+    if isinstance(annotation, dict):
+        value = annotation.get(name)
+        if isinstance(value, str):
+            return value
+        nested = annotation.get("url_citation")
+        if isinstance(nested, dict) and isinstance(nested.get(name), str):
+            return nested[name]
+        return None
+    value = getattr(annotation, name, None)
+    if isinstance(value, str):
+        return value
+    nested = getattr(annotation, "url_citation", None)
+    nested_value = getattr(nested, name, None)
+    return nested_value if isinstance(nested_value, str) else None
+
+
+def _response_citations(response: Any) -> list[tuple[str, str]]:
+    citations: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for item in getattr(response, "output", None) or []:
+        for content in getattr(item, "content", None) or []:
+            for annotation in getattr(content, "annotations", None) or []:
+                url = _annotation_value(annotation, "url")
+                if (
+                    not url
+                    or not url.startswith(("https://", "http://"))
+                    or url in seen
+                ):
+                    continue
+                title = (_annotation_value(annotation, "title") or url).replace(
+                    "]", ""
+                ).replace("[", "")
+                seen.add(url)
+                citations.append((title, url))
+    return citations
+
+
+def _attach_source_links(draft: str, response: Any) -> str:
+    links = [
+        (title, url)
+        for title, url in _response_citations(response)
+        if url not in draft
+    ]
+    if not links:
+        return draft
+    source_lines = [f"- [{title}]({url})" for title, url in links]
+    return f"{draft.rstrip()}\n\n### Sources\n" + "\n".join(source_lines)
+
+
+def _draft_has_user_value(draft: str) -> bool:
+    """Do not turn a rejected status line into a successful Work result."""
+    return len(draft) >= 80 or len(draft.split()) >= 15
 
 
 def _parse_result_review(response: Any) -> WorkResultReview:
@@ -226,6 +283,9 @@ async def _generate_validated_result(
 ) -> ValidatedAgentResult:
     revision_feedback: str | None = None
     review_count = 0
+    last_draft = ""
+    last_response: Any | None = None
+    last_issues: tuple[str, ...] = ()
     for attempt in range(1, MAX_AGENT_ATTEMPTS + 1):
         response = await _generate_draft(
             client=client,
@@ -236,6 +296,9 @@ async def _generate_validated_result(
         await observe_response(f"draft_{attempt}", response)
         draft = (getattr(response, "output_text", None) or "").strip()
         if draft:
+            draft = _attach_source_links(draft, response)
+            last_draft = draft
+            last_response = response
             review_response = await _review_draft(
                 client=client,
                 request_payload=request_payload,
@@ -244,14 +307,23 @@ async def _generate_validated_result(
             )
             await observe_response(f"review_{attempt}", review_response)
             review_count += 1
-            review = _parse_result_review(review_response)
+            try:
+                review = _parse_result_review(review_response)
+            except service.WorkRunExecutionError:
+                last_issues = ("The internal result review was unavailable.",)
+                revision_feedback = (
+                    "Review the draft yourself and return the complete useful deliverable."
+                )
+                continue
             if review.passes:
                 return ValidatedAgentResult(
                     content=draft,
                     response=response,
                     attempt_count=attempt,
                     review_count=review_count,
+                    validation_passed=True,
                 )
+            last_issues = tuple(review.issues)
             revision_feedback = (
                 review.revision_instructions.strip()
                 or "; ".join(review.issues)
@@ -259,6 +331,19 @@ async def _generate_validated_result(
             )
         else:
             revision_feedback = "The draft was empty. Return the complete deliverable."
+    if (
+        last_draft
+        and last_response is not None
+        and _draft_has_user_value(last_draft)
+    ):
+        return ValidatedAgentResult(
+            content=last_draft,
+            response=last_response,
+            attempt_count=MAX_AGENT_ATTEMPTS,
+            review_count=review_count,
+            validation_passed=False,
+            validation_issues=last_issues,
+        )
     raise service.WorkRunExecutionError(
         WorkRunErrorCode.VALIDATION_FAILED,
         "agent result did not satisfy the approved deliverable",
@@ -548,13 +633,25 @@ async def process_agentic_run(
         **operation.usage,
         "generation_attempts": validated.attempt_count,
         "review_calls": validated.review_count,
+        "validation_passed": validated.validation_passed,
+        "validation_issues": list(validated.validation_issues),
     }
     operation.completed_at = utcnow_naive()
     run.status = WorkRunStatus.SUCCEEDED.value
     run.stage = "completed"
     run.progress_percent = 100
+    web_search_calls, file_search_calls = _tool_call_counts(response)
     run.result_summary = json.dumps(
-        {"version": 1, "format": "markdown", "content": result},
+        {
+            "version": 1,
+            "format": "markdown",
+            "content": result,
+            "activity": {
+                "web_search_calls": web_search_calls,
+                "file_search_calls": file_search_calls,
+                "generation_attempts": validated.attempt_count,
+            },
+        },
         ensure_ascii=False,
     )
     run.completed_at = utcnow_naive()

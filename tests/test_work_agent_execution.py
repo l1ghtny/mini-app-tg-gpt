@@ -123,6 +123,8 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
     assert result.content == corrected_draft.output_text
     assert result.attempt_count == 2
     assert result.review_count == 2
+    assert result.validation_passed is True
+    assert result.validation_issues == ()
     assert create.await_count == 4
     first_prompt = create.await_args_list[0].kwargs["input"][0]["content"][0]["text"]
     assert "deliverable itself" in first_prompt
@@ -156,12 +158,70 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
 
 
 @pytest.mark.asyncio
-async def test_agent_fails_after_one_corrective_retry() -> None:
+async def test_agent_returns_the_best_draft_after_one_corrective_retry() -> None:
     failed_review = json.dumps(
         {
             "passes": False,
             "issues": ["The requested deliverable is still missing."],
             "revision_instructions": "Return the requested deliverable.",
+        }
+    )
+    useful_draft = (
+        "Supplier A is the stronger option because its delivery record is more "
+        "consistent and its support terms reduce operational risk. Confirm the "
+        "renewal clause before signing, then run a two-week implementation pilot."
+    )
+    create = AsyncMock(
+        side_effect=[
+            _response("draft-1", "Work completed."),
+            _response("review-1", failed_review),
+            _response("draft-2", useful_draft),
+            _response("review-2", failed_review),
+        ]
+    )
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+
+    result = await agent_execution._generate_validated_result(
+        client=client,  # type: ignore[arg-type]
+        request_payload=_request_payload(),
+        tools=[{"type": "web_search"}],
+        observe_response=AsyncMock(),
+    )
+
+    assert result.content == useful_draft
+    assert result.validation_passed is False
+    assert result.validation_issues == ("The requested deliverable is still missing.",)
+    assert create.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_agent_still_fails_when_every_draft_is_empty() -> None:
+    create = AsyncMock(
+        side_effect=[
+            _response("draft-1", ""),
+            _response("draft-2", ""),
+        ]
+    )
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+
+    with pytest.raises(service.WorkRunExecutionError) as error:
+        await agent_execution._generate_validated_result(
+            client=client,  # type: ignore[arg-type]
+            request_payload=_request_payload(),
+            tools=[{"type": "web_search"}],
+            observe_response=AsyncMock(),
+        )
+
+    assert error.value.code == WorkRunErrorCode.VALIDATION_FAILED
+
+
+@pytest.mark.asyncio
+async def test_agent_does_not_return_a_rejected_status_line_as_the_result() -> None:
+    failed_review = json.dumps(
+        {
+            "passes": False,
+            "issues": ["The requested deliverable is still missing."],
+            "revision_instructions": "Return the deliverable itself.",
         }
     )
     create = AsyncMock(
@@ -183,7 +243,33 @@ async def test_agent_fails_after_one_corrective_retry() -> None:
         )
 
     assert error.value.code == WorkRunErrorCode.VALIDATION_FAILED
-    assert create.await_count == 4
+
+
+def test_web_search_annotations_become_visible_source_links() -> None:
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[
+                    SimpleNamespace(
+                        annotations=[
+                            SimpleNamespace(
+                                type="url_citation",
+                                title="Example source",
+                                url="https://example.com/source",
+                            )
+                        ]
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = agent_execution._attach_source_links("Useful result.", response)
+
+    assert result.endswith(
+        "### Sources\n- [Example source](https://example.com/source)"
+    )
 
 
 class _Session:
