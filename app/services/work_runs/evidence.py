@@ -28,6 +28,13 @@ def _annotations(response: Any) -> Iterable[Any]:
             yield from _value(content, "annotations") or []
 
 
+def _used_document_tool(response: Any) -> bool:
+    return any(
+        _value(item, "type") in {"file_search_call", "code_interpreter_call"}
+        for item in (_value(response, "output") or [])
+    )
+
+
 def _clean_label(value: Any, fallback: str) -> str:
     label = value.strip() if isinstance(value, str) else ""
     label = label.replace("[", "").replace("]", "")
@@ -146,6 +153,34 @@ def build_work_evidence(
         if position is not None:
             citation.update({"start_index": start, "end_index": end})
         citations.append(citation)
+
+    output_text = _value(response, "output_text")
+    if _used_document_tool(response) and isinstance(output_text, str):
+        for document in documents:
+            filename = document.filename
+            start = 0
+            while (position := output_text.find(filename, start)) >= 0:
+                current_source_id = source_id(
+                    ("document", str(document.id)),
+                    {
+                        "type": "document",
+                        "title": _clean_label(filename, "Source document"),
+                        "filename": filename,
+                        "document_id": str(document.id),
+                    },
+                )
+                end = position + len(filename)
+                citation_key = (current_source_id, position, end)
+                if citation_key not in seen_citations:
+                    seen_citations.add(citation_key)
+                    citations.append(
+                        {
+                            "source_id": current_source_id,
+                            "start_index": position,
+                            "end_index": end,
+                        }
+                    )
+                start = end
 
     return {"version": 1, "sources": sources, "citations": citations}
 

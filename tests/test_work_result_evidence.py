@@ -116,6 +116,43 @@ def test_nested_annotations_and_unsafe_urls_are_handled_defensively() -> None:
     assert evidence["citations"] == [{"source_id": "source-1"}]
 
 
+def test_explicit_filenames_become_citations_after_document_tool_use() -> None:
+    document_id = uuid.uuid4()
+    document = SimpleNamespace(
+        id=document_id,
+        filename="supplier-offer.csv",
+        openai_file_id=None,
+    )
+    content = "The quoted price is 125 EUR [supplier-offer.csv]."
+    response = SimpleNamespace(
+        output_text=content,
+        output=[SimpleNamespace(type="code_interpreter_call")],
+    )
+
+    evidence = build_work_evidence(response, documents=[document])
+
+    start = content.index(document.filename)
+    assert evidence == {
+        "version": 1,
+        "sources": [
+            {
+                "id": "source-1",
+                "type": "document",
+                "title": document.filename,
+                "filename": document.filename,
+                "document_id": str(document_id),
+            }
+        ],
+        "citations": [
+            {
+                "source_id": "source-1",
+                "start_index": start,
+                "end_index": start + len(document.filename),
+            }
+        ],
+    }
+
+
 def test_legacy_markdown_only_adds_web_sources_missing_from_the_result() -> None:
     evidence = {
         "version": 1,

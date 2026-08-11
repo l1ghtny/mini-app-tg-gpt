@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
+from collections.abc import Mapping, Sequence
 from typing import Any, Awaitable, Callable
 
 from openai import AsyncOpenAI
@@ -37,6 +38,7 @@ from app.r2.private_artifacts import (
     upload_artifact,
     upload_artifact_preview,
 )
+from app.r2.private_documents import download_document_source
 from app.schemas.work_runs import ArtifactPreviewResponse
 from app.services.work_runs import service
 from app.services.work_runs.contracts import WorkRunErrorCode, WorkRunStatus
@@ -81,6 +83,9 @@ _EXECUTOR_PROMPT = (
     "materially improves the result, with at most four web searches and four file "
     "searches per attempt. Return polished, human-readable Markdown in the requested "
     "language, with source links when web search was used. If an expected output has "
+    "Attached source files may be available through file search or the python tool. "
+    "Inspect them with the available tool and cite the exact source filename beside "
+    "each material factual claim derived from a file. If an expected output has "
     "kind artifact, use the python tool to create the requested file, cite the created "
     "file in the final response, and also give the user a useful inline summary. Cite "
     "every requested deliverable file, and do not cite temporary previews or rendered "
@@ -123,6 +128,12 @@ class ValidatedAgentResult:
     validation_issues: tuple[str, ...] = ()
     steering_restarts: int = 0
     artifact_contract_passed: bool = True
+
+
+@dataclass(frozen=True)
+class PreparedCodeInterpreter:
+    container_id: str
+    provider_file_document_ids: Mapping[str, str]
 
 
 ProviderResponseObserver = Callable[[str, Any], Awaitable[None]]
@@ -253,9 +264,15 @@ async def _review_draft(
     request_payload: dict[str, object],
     draft: str,
     draft_response: Any,
+    evidence_documents: Sequence[Any] = (),
+    provider_file_document_ids: Mapping[str, str] | None = None,
 ) -> Any:
     web_search_calls, file_search_calls = _tool_call_counts(draft_response)
-    evidence = build_work_evidence(draft_response)
+    evidence = build_work_evidence(
+        draft_response,
+        documents=evidence_documents,
+        provider_file_document_ids=provider_file_document_ids,
+    )
     return await _create_provider_response(
         client,
         model=AGENT_MODEL,
@@ -328,6 +345,8 @@ async def _generate_validated_result(
     observe_response: ProviderResponseObserver,
     observe_phase: ExecutionPhaseObserver | None = None,
     consume_steering: SteeringConsumer | None = None,
+    evidence_documents: Sequence[Any] = (),
+    provider_file_document_ids: Mapping[str, str] | None = None,
 ) -> ValidatedAgentResult:
     revision_feedback: str | None = None
     review_count = 0
@@ -389,6 +408,8 @@ async def _generate_validated_result(
                 request_payload=request_payload,
                 draft=draft,
                 draft_response=response,
+                evidence_documents=evidence_documents,
+                provider_file_document_ids=provider_file_document_ids,
             )
             await observe_response(f"review_{attempt}", review_response)
             review_count += 1
@@ -686,21 +707,50 @@ async def _create_code_interpreter_container(
     client: AsyncOpenAI,
     run: WorkRun,
     documents: list[UserDocument],
-) -> str:
+) -> PreparedCodeInterpreter:
     container_id: str | None = None
+    provider_file_document_ids: dict[str, str] = {}
     try:
         container = await client.containers.create(
             name=f"lightny-work-{run.id}",
             memory_limit="1g",
         )
         container_id = container.id
-        for document in documents:
-            if document.openai_file_id:
-                await client.containers.files.create(
-                    container_id,
-                    file_id=document.openai_file_id,
-                )
-        return container_id
+        with tempfile.TemporaryDirectory(prefix=f"lightny-work-sources-{run.id}-") as temp_dir:
+            for index, document in enumerate(documents):
+                if document.openai_file_id:
+                    container_file = await client.containers.files.create(
+                        container_id,
+                        file_id=document.openai_file_id,
+                    )
+                else:
+                    if not document.source_bucket or not document.source_storage_key:
+                        raise service.WorkRunExecutionError(
+                            WorkRunErrorCode.DOCUMENTS_NOT_READY,
+                            f"source file is unavailable: {document.filename}",
+                        )
+                    source_dir = Path(temp_dir) / str(index)
+                    source_dir.mkdir()
+                    source_path = source_dir / Path(document.filename).name
+                    await download_document_source(
+                        bucket=document.source_bucket,
+                        key=document.source_storage_key,
+                        target_path=str(source_path),
+                    )
+                    container_file = await client.containers.files.create(
+                        container_id,
+                        file=source_path,
+                    )
+                for provider_file_id in (
+                    document.openai_file_id,
+                    getattr(container_file, "id", None),
+                ):
+                    if isinstance(provider_file_id, str) and provider_file_id:
+                        provider_file_document_ids[provider_file_id] = str(document.id)
+        return PreparedCodeInterpreter(
+            container_id=container_id,
+            provider_file_document_ids=provider_file_document_ids,
+        )
     except Exception as exc:
         await _delete_code_interpreter_container(client, container_id)
         raise service.WorkRunExecutionError(
@@ -963,7 +1013,10 @@ async def process_agentic_run(
         return
     thread, plan, thread_messages = await _thread_context(session, run.id)
     expected_outputs = plan.expected_outputs if plan else []
-    code_interpreter_enabled = plan_expects_artifacts(expected_outputs)
+    artifact_requested = plan_expects_artifacts(expected_outputs)
+    code_interpreter_enabled = artifact_requested or any(
+        not document.openai_vector_store_id for document in documents
+    )
     estimated_cost, estimated_usage = await _reserve_budget(
         session,
         run=run,
@@ -1000,11 +1053,16 @@ async def process_agentic_run(
         tools.append({"type": "file_search", "vector_store_ids": vector_store_ids})
     client = AsyncOpenAI()
     container_id: str | None = None
+    provider_file_document_ids: Mapping[str, str] = {}
     if code_interpreter_enabled:
-        container_id = await _create_code_interpreter_container(
+        prepared_container = await _create_code_interpreter_container(
             client=client,
             run=run,
             documents=list(documents),
+        )
+        container_id = prepared_container.container_id
+        provider_file_document_ids = (
+            prepared_container.provider_file_document_ids
         )
         tools.append({"type": "code_interpreter", "container": container_id})
         operation.actual_cost_usd = CODE_INTERPRETER_CONTAINER_COST_USD
@@ -1039,7 +1097,7 @@ async def process_agentic_run(
         "searchable_source_files": [
             document.filename
             for document in documents
-            if document.openai_vector_store_id
+            if document.openai_vector_store_id or code_interpreter_enabled
         ],
         "output_language": run.options.get("output_language", "ru"),
     }
@@ -1133,9 +1191,15 @@ async def process_agentic_run(
             observe_response=observe_response,
             observe_phase=observe_phase,
             consume_steering=consume_steering,
+            evidence_documents=documents,
+            provider_file_document_ids=provider_file_document_ids,
         )
-        evidence = build_work_evidence(validated.response, documents=documents)
-        if code_interpreter_enabled and not validated.artifact_contract_passed:
+        evidence = build_work_evidence(
+            validated.response,
+            documents=documents,
+            provider_file_document_ids=provider_file_document_ids,
+        )
+        if artifact_requested and not validated.artifact_contract_passed:
             raise service.WorkRunExecutionError(
                 WorkRunErrorCode.VALIDATION_FAILED,
                 "the generated file did not match the approved deliverable",
@@ -1147,7 +1211,7 @@ async def process_agentic_run(
             response=validated.response,
             evidence=evidence,
         )
-        if code_interpreter_enabled and not generated_artifacts:
+        if artifact_requested and not generated_artifacts:
             raise service.WorkRunExecutionError(
                 WorkRunErrorCode.VALIDATION_FAILED,
                 "the approved artifact was not created",
@@ -1187,7 +1251,7 @@ async def process_agentic_run(
     citation_count = len(evidence.get("citations", []))
     quality = {
         "validation_passed": validated.validation_passed,
-        "artifact_requested": code_interpreter_enabled,
+        "artifact_requested": artifact_requested,
         "artifact_contract_passed": validated.artifact_contract_passed,
         "generation_attempts": validated.generation_count,
         "review_calls": validated.review_count,

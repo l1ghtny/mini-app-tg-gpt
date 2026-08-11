@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -361,6 +362,56 @@ def test_web_search_annotations_become_visible_source_links() -> None:
 
     assert result.endswith(
         "### Sources\n- [Example source](https://example.com/source)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_code_interpreter_stages_a_source_without_provider_file_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = uuid.uuid4()
+    document = SimpleNamespace(
+        id=document_id,
+        filename="supplier-offer.csv",
+        openai_file_id=None,
+        source_bucket="private-documents",
+        source_storage_key="documents/supplier-offer.csv",
+    )
+    download = AsyncMock()
+
+    async def materialize_source(**kwargs: str) -> None:
+        with open(kwargs["target_path"], "w", encoding="utf-8") as source:
+            source.write("supplier,price\nAcme,125\n")
+
+    download.side_effect = materialize_source
+    monkeypatch.setattr(agent_execution, "download_document_source", download)
+    container_files_create = AsyncMock(
+        return_value=SimpleNamespace(id="container-file-1")
+    )
+    client = SimpleNamespace(
+        containers=SimpleNamespace(
+            create=AsyncMock(return_value=SimpleNamespace(id="container-1")),
+            files=SimpleNamespace(create=container_files_create),
+            delete=AsyncMock(),
+        )
+    )
+
+    prepared = await agent_execution._create_code_interpreter_container(
+        client=client,  # type: ignore[arg-type]
+        run=SimpleNamespace(id=uuid.uuid4()),
+        documents=[document],
+    )
+
+    assert prepared.container_id == "container-1"
+    assert prepared.provider_file_document_ids == {
+        "container-file-1": str(document_id)
+    }
+    staged_path = container_files_create.await_args.kwargs["file"]
+    assert staged_path.name == document.filename
+    download.assert_awaited_once_with(
+        bucket=document.source_bucket,
+        key=document.source_storage_key,
+        target_path=str(staged_path),
     )
 
 
