@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import (
     APIRouter,
@@ -21,6 +22,7 @@ from starlette.background import BackgroundTask
 from starlette.responses import StreamingResponse
 
 from app.api.dependencies import get_bus, get_current_user, get_redis
+from app.core.config import settings
 from app.db.database import get_session
 from app.db.models import AppUser, WorkRun
 from app.db.work_agent_models import WorkThread
@@ -84,6 +86,12 @@ def _artifact_delivery_url(
         disposition=disposition,
     )
     url = request.url_for("serve_artifact_content", artifact_id=str(artifact.id))
+    if settings.WEBAPP_URL:
+        configured = urlsplit(settings.WEBAPP_URL.strip())
+        if configured.scheme not in {"http", "https"} or not configured.netloc:
+            raise RuntimeError("WEBAPP_URL must be an absolute HTTP(S) origin")
+        public_origin = f"{configured.scheme}://{configured.netloc}"
+        return f"{public_origin}{url.path}?{urlencode({'token': token})}"
     return str(url.include_query_params(token=token))
 
 

@@ -121,6 +121,7 @@ def test_artifact_download_uses_lightny_delivery_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "SECRET_KEY", "artifact-test-secret")
+    monkeypatch.setattr(settings, "WEBAPP_URL", "https://beta.app.lightny.ru")
     user = AppUser(telegram_id=777001)
     artifact = _artifact(user.id)
     client = _client(user, artifact)
@@ -130,6 +131,8 @@ def test_artifact_download_uses_lightny_delivery_route(
     assert response.status_code == 200
     url = response.json()["url"]
     parsed = urlsplit(url)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "beta.app.lightny.ru"
     assert parsed.path == f"/api/v1/artifacts/{artifact.id}/content"
     assert "cloudflarestorage.com" not in url
     token = parse_qs(parsed.query)["token"][0]
@@ -145,6 +148,7 @@ def test_inline_preview_streams_through_lightny_with_range_support(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "SECRET_KEY", "artifact-test-secret")
+    monkeypatch.setattr(settings, "WEBAPP_URL", "https://beta.app.lightny.ru")
     user = AppUser(telegram_id=777002)
     artifact = _artifact(user.id)
     client = _client(user, artifact)
