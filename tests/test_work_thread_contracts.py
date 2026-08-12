@@ -22,7 +22,7 @@ from app.schemas.work_threads import (
     UpdateWorkPlanRequest,
 )
 from app.services.work_threads.history import bounded_thread_history
-from app.services.work_threads.planner import plan_work
+from app.services.work_threads.planner import WorkPlanningError, plan_work
 from app.services.work_threads import service as thread_service
 from app.services.work_runs.contracts import WorkRunKind
 
@@ -254,7 +254,7 @@ def test_agent_history_keeps_previous_results_but_not_current_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_planner_lets_the_model_choose_the_executor() -> None:
+async def test_conversation_planner_uses_the_general_agent() -> None:
     response = SimpleNamespace(
         id="resp-plan-1",
         output_text=json.dumps(
@@ -302,14 +302,66 @@ async def test_planner_lets_the_model_choose_the_executor() -> None:
     assert result.usage["reasoning_tokens"] == 10
     request = create.await_args.kwargs
     assert request["text"]["format"]["type"] == "json_schema"
+    plan_schema = request["text"]["format"]["schema"]
+    assert plan_schema["properties"]["execution_kind"]["const"] == "agentic_task"
     assert "assumptions" in request["text"]["format"]["schema"]["required"]
-    output_schema = request["text"]["format"]["schema"]["$defs"]["PlannedOutput"]
+    output_schema = plan_schema["$defs"]["PlannedOutput"]
+    assert output_schema["properties"]["kind"]["enum"] == ["answer", "artifact"]
     assert "acceptance_criteria" in output_schema["required"]
     assert result.plan.expected_outputs[0].acceptance_criteria == [
         "Names the recommended supplier and explains the decisive evidence."
     ]
     user_payload = json.loads(request["input"][1]["content"][0]["text"])
     assert user_payload["context"]["previous_result"] == "Supplier A is stronger."
+    developer_prompt = request["input"][0]["content"][0]["text"]
+    assert "Attached file types are source context" in developer_prompt
+
+
+@pytest.mark.asyncio
+async def test_conversation_planner_rejects_the_specialized_spreadsheet_executor():
+    response = SimpleNamespace(
+        id="resp-plan-specialized",
+        output_text=json.dumps(
+            {
+                "title": "Supplier decision",
+                "summary": "Compare the attached supplier offers.",
+                "execution_kind": "spreadsheet_builder_xlsx",
+                "steps": [
+                    {
+                        "id": "review",
+                        "title": "Review",
+                        "description": "Read both files.",
+                    },
+                    {
+                        "id": "decide",
+                        "title": "Decide",
+                        "description": "Recommend one supplier.",
+                    },
+                ],
+                "expected_outputs": [
+                    {
+                        "kind": "spreadsheet",
+                        "label": "Comparison",
+                        "description": "A supplier comparison.",
+                        "acceptance_criteria": ["Recommends one supplier."],
+                    }
+                ],
+                "assumptions": [],
+            }
+        ),
+        usage=None,
+    )
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=AsyncMock(return_value=response))
+    )
+
+    with pytest.raises(WorkPlanningError, match="invalid plan"):
+        await plan_work(
+            goal="Compare these CSV files and recommend a supplier.",
+            documents=[{"filename": "offer.csv", "mime_type": "text/csv"}],
+            output_language="auto",
+            client=client,
+        )
 
 
 def test_agentic_work_migration_is_additive_and_uses_committed_head(
