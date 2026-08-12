@@ -77,7 +77,7 @@ async def plan_work(
     *,
     goal: str,
     documents: list[dict[str, str]],
-    output_language: Literal["ru", "en"],
+    output_language: Literal["auto", "ru", "en"],
     context: dict[str, object] | None = None,
     client: AsyncOpenAI | None = None,
     model: str = PLANNER_MODEL,
@@ -104,7 +104,9 @@ async def plan_work(
                             "for the deliverable itself: required content, structure, quantity, "
                             "evidence, and material caveats. Criteria must not assume that checks, "
                             "tests, research, or verification have already happened. Write every "
-                            "user-facing field in the requested language."
+                            "user-facing field in the requested language. When output_language "
+                            "is auto, use the language of the current goal. A language explicitly "
+                            "requested in the goal takes precedence over this setting."
                         ),
                     }
                 ],

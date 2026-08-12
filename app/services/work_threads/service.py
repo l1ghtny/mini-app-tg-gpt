@@ -27,6 +27,7 @@ from app.schemas.work_threads import (
     SendWorkMessageRequest,
     UpdateWorkPlanRequest,
     WorkPlanResponse,
+    WorkThreadDocumentResponse,
     WorkThreadListResponse,
     WorkThreadMessageResponse,
     WorkThreadResponse,
@@ -153,6 +154,21 @@ async def owned_thread(
     return thread
 
 
+def _thread_output_language(thread: WorkThread) -> str:
+    value = thread.context_manifest.get("output_language")
+    source = thread.context_manifest.get("output_language_source")
+    if source == "explicit" and value in {"ru", "en"}:
+        return str(value)
+    return "auto"
+
+
+def _spreadsheet_output_language(current_request: str) -> str:
+    # The deterministic workbook renderer currently has Russian and English labels.
+    return (
+        "ru" if any("\u0400" <= char <= "\u04ff" for char in current_request) else "en"
+    )
+
+
 async def thread_response(
     session: AsyncSession,
     thread: WorkThread,
@@ -180,6 +196,27 @@ async def thread_response(
     document_ids = [
         uuid.UUID(value) for value in thread.context_manifest.get("document_ids", [])
     ]
+    documents = []
+    if document_ids:
+        stored_documents = (
+            await session.exec(
+                select(UserDocument).where(
+                    UserDocument.user_id == thread.user_id,
+                    col(UserDocument.id).in_(document_ids),
+                )
+            )
+        ).all()
+        documents_by_id = {document.id: document for document in stored_documents}
+        documents = [
+            WorkThreadDocumentResponse(
+                id=document.id,
+                filename=document.filename,
+                mime_type=document.mime_type,
+                status=document.status,
+            )
+            for document_id in document_ids
+            if (document := documents_by_id.get(document_id)) is not None
+        ]
     return WorkThreadResponse(
         id=thread.id,
         title=thread.title,
@@ -191,6 +228,7 @@ async def thread_response(
         created_at=thread.created_at.replace(tzinfo=timezone.utc),
         updated_at=thread.updated_at.replace(tzinfo=timezone.utc),
         document_ids=document_ids,
+        documents=documents,
         messages=[_message_response(message) for message in messages],
         plan=plan_response(plan) if plan else None,
         runs=runs,
@@ -241,6 +279,12 @@ async def create_thread(
         context_manifest={
             "document_ids": [str(document_id) for document_id in request.document_ids],
             "output_language": request.output_language,
+            "output_language_source": (
+                "explicit"
+                if request.output_language != "auto"
+                and "output_language" in request.model_fields_set
+                else "auto"
+            ),
             **(
                 {"start_client_request_id": client_request_id}
                 if client_request_id
@@ -256,11 +300,16 @@ async def create_thread(
             role="user",
             kind="goal",
             content=request.goal,
-            message_metadata=(
-                {"client_request_id": client_request_id}
-                if client_request_id
-                else {}
-            ),
+            message_metadata={
+                "document_ids": [
+                    str(document_id) for document_id in request.document_ids
+                ],
+                **(
+                    {"client_request_id": client_request_id}
+                    if client_request_id
+                    else {}
+                ),
+            },
         )
     )
     await session.commit()
@@ -502,7 +551,7 @@ async def _plan_existing_thread(
                 }
                 for document in documents
             ],
-            output_language=thread.context_manifest.get("output_language", "ru"),
+            output_language=_thread_output_language(thread),
             context=context,
         )
     except Exception as exc:
@@ -713,6 +762,9 @@ async def approve_plan(
     run_kind = WorkRunKind(plan.execution_kind)
     if run_kind == WorkRunKind.SPREADSHEET_BUILDER_XLSX and not document_ids:
         raise HTTPException(status_code=422, detail="work_plan_needs_spreadsheet_source")
+    output_language = _thread_output_language(thread)
+    if run_kind == WorkRunKind.SPREADSHEET_BUILDER_XLSX and output_language == "auto":
+        output_language = _spreadsheet_output_language(latest_request.content)
     run = await run_service.create_run(
         session=session,
         user=user,
@@ -722,9 +774,7 @@ async def approve_plan(
             folder_id=thread.folder_id,
             document_ids=document_ids,
             instructions=latest_request.content,
-            options=OfferComparisonOptions(
-                output_language=thread.context_manifest.get("output_language", "ru")
-            ),
+            options=OfferComparisonOptions(output_language=output_language),
         ),
         client_request_id=client_request_id,
     )

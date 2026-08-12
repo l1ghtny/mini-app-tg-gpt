@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime
 from importlib import import_module
 from io import StringIO
 from types import SimpleNamespace
@@ -10,8 +11,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
+from pydantic import ValidationError
 
 from app.db.work_agent_models import WorkThreadMessage
+from app.schemas.work_runs import CreateWorkRunRequest
 from app.schemas.work_threads import (
     CreateWorkFollowUpRequest,
     CreateWorkThreadRequest,
@@ -21,6 +24,7 @@ from app.schemas.work_threads import (
 from app.services.work_threads.history import bounded_thread_history
 from app.services.work_threads.planner import plan_work
 from app.services.work_threads import service as thread_service
+from app.services.work_runs.contracts import WorkRunKind
 
 
 @pytest.fixture
@@ -39,6 +43,99 @@ def test_work_thread_goal_does_not_require_a_preselected_workflow() -> None:
 
     assert request.goal.startswith("Research")
     assert request.document_ids == []
+
+
+def test_work_thread_uses_the_current_request_language_by_default() -> None:
+    request = CreateWorkThreadRequest.model_validate(
+        {"goal": "Vergleiche diese Angebote und empfehle eines."}
+    )
+
+    assert request.output_language == "auto"
+
+
+def test_legacy_ui_language_does_not_override_work_conversation_language() -> None:
+    legacy_thread = SimpleNamespace(context_manifest={"output_language": "ru"})
+    explicit_thread = SimpleNamespace(
+        context_manifest={
+            "output_language": "ru",
+            "output_language_source": "explicit",
+        }
+    )
+
+    assert thread_service._thread_output_language(legacy_thread) == "auto"
+    assert thread_service._thread_output_language(explicit_thread) == "ru"
+
+
+def test_automatic_language_is_scoped_to_the_general_agent() -> None:
+    agent_request = CreateWorkRunRequest.model_validate(
+        {
+            "kind": WorkRunKind.AGENTIC_TASK,
+            "document_ids": [],
+            "instructions": "Analyse the request.",
+            "options": {"output_language": "auto"},
+        }
+    )
+
+    assert agent_request.options.output_language == "auto"
+    with pytest.raises(ValidationError, match="only supported for agentic work"):
+        CreateWorkRunRequest.model_validate(
+            {
+                "kind": WorkRunKind.SPREADSHEET_BUILDER_XLSX,
+                "document_ids": [uuid.uuid4()],
+                "instructions": "Build a workbook.",
+                "options": {"output_language": "auto"},
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_thread_response_exposes_document_names_in_context_order() -> None:
+    first_id = uuid.uuid4()
+    second_id = uuid.uuid4()
+    now = datetime.now()
+    thread = SimpleNamespace(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        title="Supplier comparison",
+        goal="Compare the attached offers",
+        status="completed",
+        conversation_id=None,
+        folder_id=None,
+        created_at=now,
+        updated_at=now,
+        context_manifest={"document_ids": [str(first_id), str(second_id)]},
+    )
+    documents = [
+        SimpleNamespace(
+            id=second_id,
+            filename="offer-b.csv",
+            mime_type="text/csv",
+            status="ready",
+        ),
+        SimpleNamespace(
+            id=first_id,
+            filename="offer-a.csv",
+            mime_type="text/csv",
+            status="ready",
+        ),
+    ]
+    session = SimpleNamespace(
+        exec=AsyncMock(
+            side_effect=[
+                SimpleNamespace(all=lambda: []),
+                SimpleNamespace(first=lambda: None),
+                SimpleNamespace(all=lambda: []),
+                SimpleNamespace(all=lambda: documents),
+            ]
+        ),
+    )
+
+    response = await thread_service.thread_response(session, thread)
+
+    assert [document.filename for document in response.documents] == [
+        "offer-a.csv",
+        "offer-b.csv",
+    ]
 
 
 def test_edited_plan_requires_distinct_stable_step_ids() -> None:

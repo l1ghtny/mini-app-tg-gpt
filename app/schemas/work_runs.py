@@ -21,7 +21,7 @@ class OfferComparisonOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
-    output_language: Literal["ru", "en"] = "ru"
+    output_language: Literal["auto", "ru", "en"] = "ru"
     desired_columns: list[str] = Field(default_factory=list, max_length=20)
 
     @field_validator("desired_columns")
@@ -94,6 +94,13 @@ class CreateWorkRunRequest(BaseModel):
         ):
             raise ValueError(
                 "desired_columns are only supported by spreadsheet_builder_xlsx"
+            )
+        if (
+            self.kind != WorkRunKind.AGENTIC_TASK
+            and self.options.output_language == "auto"
+        ):
+            raise ValueError(
+                "automatic output language is only supported for agentic work"
             )
         return self
 

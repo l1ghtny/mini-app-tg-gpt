@@ -20,7 +20,7 @@ class CreateWorkThreadRequest(BaseModel):
     document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=5)
     conversation_id: uuid.UUID | None = None
     folder_id: uuid.UUID | None = None
-    output_language: Literal["ru", "en"] = "ru"
+    output_language: Literal["auto", "ru", "en"] = "auto"
 
     @field_validator("goal")
     @classmethod
@@ -116,6 +116,13 @@ class WorkThreadMessageResponse(BaseModel):
     created_at: datetime
 
 
+class WorkThreadDocumentResponse(BaseModel):
+    id: uuid.UUID
+    filename: str
+    mime_type: str | None
+    status: str
+
+
 class WorkThreadSummaryResponse(BaseModel):
     id: uuid.UUID
     title: str
@@ -130,6 +137,7 @@ class WorkThreadSummaryResponse(BaseModel):
 
 class WorkThreadResponse(WorkThreadSummaryResponse):
     document_ids: list[uuid.UUID]
+    documents: list[WorkThreadDocumentResponse] = Field(default_factory=list)
     messages: list[WorkThreadMessageResponse]
     plan: WorkPlanResponse | None
     runs: list[WorkRunResponse]
