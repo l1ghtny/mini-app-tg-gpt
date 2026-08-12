@@ -104,9 +104,10 @@ async def plan_work(
                             "for the deliverable itself: required content, structure, quantity, "
                             "evidence, and material caveats. Criteria must not assume that checks, "
                             "tests, research, or verification have already happened. Write every "
-                            "user-facing field in the requested language. When output_language "
-                            "is auto, use the language of the current goal. A language explicitly "
-                            "requested in the goal takes precedence over this setting."
+                            "user-facing field in the language of the current goal. Do not infer "
+                            "the language from filenames, account locale, UI locale, saved thread "
+                            "metadata, or earlier conversation turns. A language explicitly "
+                            "requested in the current goal takes precedence."
                         ),
                     }
                 ],

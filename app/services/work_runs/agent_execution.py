@@ -81,11 +81,12 @@ _EXECUTOR_PROMPT = (
     "labelled evidence gaps. Respect explicit restrictions on web or file search in the "
     "current request. Otherwise use web search only when current or external evidence "
     "materially improves the result, with at most four web searches and four file "
-    "searches per attempt. Return polished, human-readable Markdown in the requested "
-    "language. When output_language is auto, match the current request; an explicit "
-    "language instruction in that request always wins. Include source links when web "
-    "search was used. If an expected output has "
-    "Attached source files may be available through file search or the python tool. "
+    "searches per attempt. Return polished, human-readable Markdown in the language "
+    "of current_request. Do not infer the response language from original_goal, work "
+    "history, filenames, account locale, UI locale, or saved thread metadata. An "
+    "explicit language instruction in current_request always wins. Include source "
+    "links when web search was used. Attached source files may be available through "
+    "file search or the python tool. "
     "Inspect them with the available tool and cite the exact source filename beside "
     "each material factual claim derived from a file. If an expected output has "
     "kind artifact, use the python tool to create the requested file, cite the created "
@@ -107,7 +108,9 @@ _REVIEWER_PROMPT = (
     "does not pass. If research or sources were requested, require citations for the "
     "material factual claims and reject obviously malformed, irrelevant, or placeholder "
     "source references. When an approved expected output has kind artifact, fail the "
-    "draft unless the response cites at least one generated file."
+    "draft unless the response cites at least one generated file. Fail a draft whose "
+    "language does not match current_request unless current_request explicitly asks "
+    "for another language."
 )
 
 

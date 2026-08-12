@@ -154,11 +154,9 @@ async def owned_thread(
     return thread
 
 
-def _thread_output_language(thread: WorkThread) -> str:
-    value = thread.context_manifest.get("output_language")
-    source = thread.context_manifest.get("output_language_source")
-    if source == "explicit" and value in {"ru", "en"}:
-        return str(value)
+def _thread_output_language(_thread: WorkThread) -> str:
+    # Work is conversational: each turn follows its current request rather than
+    # inheriting a UI locale or a language stored when the thread was created.
     return "auto"
 
 
@@ -278,13 +276,6 @@ async def create_thread(
         status="planning",
         context_manifest={
             "document_ids": [str(document_id) for document_id in request.document_ids],
-            "output_language": request.output_language,
-            "output_language_source": (
-                "explicit"
-                if request.output_language != "auto"
-                and "output_language" in request.model_fields_set
-                else "auto"
-            ),
             **(
                 {"start_client_request_id": client_request_id}
                 if client_request_id
@@ -324,7 +315,7 @@ async def create_thread(
                 }
                 for document in documents
             ],
-            output_language=request.output_language,
+            output_language="auto",
         )
     except Exception as exc:
         thread.status = "planning_failed"

@@ -53,7 +53,7 @@ def test_work_thread_uses_the_current_request_language_by_default() -> None:
     assert request.output_language == "auto"
 
 
-def test_legacy_ui_language_does_not_override_work_conversation_language() -> None:
+def test_stored_thread_language_does_not_override_the_current_turn() -> None:
     legacy_thread = SimpleNamespace(context_manifest={"output_language": "ru"})
     explicit_thread = SimpleNamespace(
         context_manifest={
@@ -63,7 +63,7 @@ def test_legacy_ui_language_does_not_override_work_conversation_language() -> No
     )
 
     assert thread_service._thread_output_language(legacy_thread) == "auto"
-    assert thread_service._thread_output_language(explicit_thread) == "ru"
+    assert thread_service._thread_output_language(explicit_thread) == "auto"
 
 
 def test_automatic_language_is_scoped_to_the_general_agent() -> None:
@@ -315,6 +315,7 @@ async def test_conversation_planner_uses_the_general_agent() -> None:
     assert user_payload["context"]["previous_result"] == "Supplier A is stronger."
     developer_prompt = request["input"][0]["content"][0]["text"]
     assert "Attached file types are source context" in developer_prompt
+    assert "saved thread metadata" in developer_prompt
 
 
 @pytest.mark.asyncio
