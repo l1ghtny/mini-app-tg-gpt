@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+from importlib import import_module
+from io import StringIO
+from pathlib import Path
+
+from alembic.config import Config
+from alembic.operations import Operations
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+
+
+def _render_upgrade(module_name: str) -> tuple[object, str]:
+    migration = import_module(module_name)
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+    migration.upgrade()
+    return migration, output.getvalue().lower()
+
+
+def test_shared_database_graph_contains_the_beta_revisions() -> None:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    scripts = ScriptDirectory.from_config(config)
+
+    assert scripts.get_current_head() == "xf3a4b5c6d7e"
+    assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
+    assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
+
+
+def test_agentic_work_migration_is_forward_compatible() -> None:
+    migration, sql = _render_upgrade(
+        "migrations.versions.xe2f3a4b5c6d_add_agentic_work_threads"
+    )
+
+    assert migration.down_revision == "vc1d2e3f4a5b"
+    for table in (
+        "work_thread",
+        "work_thread_message",
+        "work_plan",
+        "work_thread_run",
+    ):
+        assert f"create table {table}" in sql
+    assert "drop table" not in sql
+    assert "drop column" not in sql
+
+
+def test_multiple_artifact_migration_only_relaxes_the_old_constraint() -> None:
+    migration, sql = _render_upgrade(
+        "migrations.versions.xf3a4b5c6d7e_allow_multiple_work_artifacts"
+    )
+
+    assert migration.down_revision == "xe2f3a4b5c6d"
+    assert "drop constraint uq_artifact_run_version" in sql
+    assert "create index ix_artifact_work_run_version" in sql
+    assert "drop table" not in sql
+    assert "drop column" not in sql
+
+
+def test_beta_pipeline_checks_the_shared_head_before_deploying() -> None:
+    pipeline = (
+        Path(__file__).resolve().parents[1]
+        / "ops/teamcity/lightny-beta-pipeline.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "verify_shared_schema:" in pipeline
+    assert 'export MIGRATION_MODE="check"' in pipeline
+    assert "      - verify_shared_schema" in pipeline
