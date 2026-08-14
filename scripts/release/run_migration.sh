@@ -13,8 +13,24 @@ JOB_VISIBILITY_ATTEMPTS="${JOB_VISIBILITY_ATTEMPTS:-30}"
 JOB_VISIBILITY_RETRY_DELAY_SECONDS="${JOB_VISIBILITY_RETRY_DELAY_SECONDS:-1}"
 JOB_WAIT_NOT_FOUND_RETRIES="${JOB_WAIT_NOT_FOUND_RETRIES:-5}"
 JOB_TEMPLATE="${JOB_TEMPLATE:-k8s/migrate-job.yaml.tpl}"
+MIGRATION_MODE="${MIGRATION_MODE:-upgrade}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERIFY_REGISTRY_SCRIPT="${VERIFY_REGISTRY_SCRIPT:-${script_dir}/verify_registry_image.sh}"
+
+case "${MIGRATION_MODE}" in
+  upgrade)
+    ALEMBIC_COMMAND='["alembic", "upgrade", "head"]'
+    JOB_ACTION="Migration"
+    ;;
+  check)
+    ALEMBIC_COMMAND='["alembic", "current", "--check-heads"]'
+    JOB_ACTION="Shared schema verification"
+    ;;
+  *)
+    echo "ERROR: MIGRATION_MODE must be 'upgrade' or 'check'." >&2
+    exit 1
+    ;;
+esac
 
 if [[ -z "${IMAGE_TAG}" ]]; then
   echo "ERROR: IMAGE_TAG is required (or BUILD_NUMBER)." >&2
@@ -48,6 +64,7 @@ sed \
   -e "s/__IMAGE_TAG__/${IMAGE_TAG}/g" \
   -e "s/__SECRET_NAME__/${SECRET_NAME}/g" \
   -e "s/__JOB_SUFFIX__/${JOB_SUFFIX}/g" \
+  -e "s#__ALEMBIC_COMMAND__#${ALEMBIC_COMMAND}#g" \
   "${JOB_TEMPLATE}" > "${tmpfile}"
 
 kubectl apply -f "${tmpfile}"
@@ -62,7 +79,7 @@ for ((attempt = 1; attempt <= JOB_VISIBILITY_ATTEMPTS; attempt++)); do
 done
 
 if [[ "${job_visible}" != "true" ]]; then
-  echo "Migration job was created but did not become visible."
+  echo "${JOB_ACTION} job was created but did not become visible."
   exit 1
 fi
 
@@ -88,7 +105,7 @@ for ((attempt = 1; attempt <= JOB_WAIT_NOT_FOUND_RETRIES; attempt++)); do
 done
 
 if [[ "${wait_status}" -ne 0 ]]; then
-  echo "Migration job failed or did not complete in time."
+  echo "${JOB_ACTION} job failed or did not complete in time."
   echo "===== Job describe ====="
   kubectl describe -n "${K8S_NAMESPACE}" "job/${JOB_NAME}" || true
   echo "===== Job logs ====="
@@ -104,4 +121,4 @@ if [[ "${wait_status}" -ne 0 ]]; then
   exit 1
 fi
 
-echo "Migration completed successfully."
+echo "${JOB_ACTION} completed successfully."

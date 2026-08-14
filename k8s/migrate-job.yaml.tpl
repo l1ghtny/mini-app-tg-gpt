@@ -23,7 +23,7 @@ spec:
         - name: migrate
           image: __IMAGE_REGISTRY__/__IMAGE_NAME__:__IMAGE_TAG__
           imagePullPolicy: IfNotPresent
-          command: ["alembic", "upgrade", "head"]
+          command: __ALEMBIC_COMMAND__
           env:
             - name: DATABASE_URL
               valueFrom:

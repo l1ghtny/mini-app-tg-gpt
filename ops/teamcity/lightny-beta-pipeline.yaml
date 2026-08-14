@@ -68,12 +68,41 @@ jobs:
           path: frontend
           enabled: true
 
+  verify_shared_schema:
+    name: 3. Verify Shared Database Schema
+    runs-on: self-hosted
+    dependencies:
+      - build_backend
+    steps:
+      - type: script
+        name: Verify beta image matches the shared database head
+        script-content: |-
+          #!/bin/bash
+          set -euo pipefail
+
+          cd backend
+          export K8S_TOOLS_DIR="$PWD/.teamcity-tools"
+          export PATH="$K8S_TOOLS_DIR:$PATH"
+          bash scripts/release/install_k8s_tools.sh
+
+          export IMAGE_TAG="beta-%job.build_backend.build.number%"
+          export JOB_SUFFIX="beta-schema-%job.build_backend.build.number%"
+          export DEPLOY_ENV="beta"
+          export SECRET_NAME="backend-beta-env"
+          export MIGRATION_MODE="check"
+          bash scripts/release/run_migration.sh
+    repositories:
+      - TelegramMiniAppProject_LightnyBackendBeta:
+          path: backend
+          enabled: true
+
   deploy_beta:
-    name: 3. Deploy Shared-History Beta
+    name: 4. Deploy Shared-History Beta
     runs-on: self-hosted
     dependencies:
       - build_backend
       - build_frontend
+      - verify_shared_schema
     steps:
       - type: script
         name: Deploy isolated beta workloads
