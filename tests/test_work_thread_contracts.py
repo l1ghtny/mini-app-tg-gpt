@@ -6,7 +6,7 @@ from datetime import datetime
 from importlib import import_module
 from io import StringIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from alembic.operations import Operations
@@ -240,6 +240,40 @@ async def test_active_steering_is_persisted_for_the_current_run(
         "steering_applied": False,
     }
     session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_retry_starts_a_ready_thread_that_never_received_a_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thread = SimpleNamespace(id=uuid.uuid4(), status="ready", context_manifest={})
+    plan = SimpleNamespace(id=uuid.uuid4(), version=2, status="proposed")
+    run = SimpleNamespace(id=uuid.uuid4(), status="accepted")
+    approve = AsyncMock(return_value=(plan, run))
+    monkeypatch.setattr(
+        thread_service,
+        "_existing_execution",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(thread_service, "_latest_plan", AsyncMock(return_value=plan))
+    monkeypatch.setattr(thread_service, "approve_plan", approve)
+
+    returned_thread, returned_run = await thread_service.retry_conversation_turn(
+        session=SimpleNamespace(),  # type: ignore[arg-type]
+        user=SimpleNamespace(id=uuid.uuid4()),
+        thread=thread,  # type: ignore[arg-type]
+        client_request_id="retry-ready-thread-1",
+    )
+
+    assert returned_thread is thread
+    assert returned_run is run
+    approve.assert_awaited_once_with(
+        session=ANY,
+        user=ANY,
+        thread=thread,
+        plan_version=2,
+        client_request_id="retry-ready-thread-1",
+    )
 
 
 def test_agent_history_keeps_previous_results_but_not_current_request() -> None:

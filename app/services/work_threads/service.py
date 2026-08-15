@@ -1045,6 +1045,18 @@ async def retry_conversation_turn(
         and thread.status == "planning"
     ):
         return thread, None
+    if thread.status == "ready":
+        plan = await _latest_plan(session, thread.id)
+        if plan is None or plan.status != "proposed":
+            raise HTTPException(status_code=409, detail="work_message_not_retryable")
+        _, run = await approve_plan(
+            session=session,
+            user=user,
+            thread=thread,
+            plan_version=plan.version,
+            client_request_id=client_request_id,
+        )
+        return thread, run
     if thread.status not in {"failed", "planning_failed"}:
         raise HTTPException(status_code=409, detail="work_message_not_retryable")
     message = await _latest_user_message(session, thread.id)

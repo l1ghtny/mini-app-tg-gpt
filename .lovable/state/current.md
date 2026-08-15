@@ -1,5 +1,23 @@
 # Current State
 
+## 2026-08-15 Work start recovery
+
+- Objective: recover durable Work threads where planning completed but execution
+  approval never attached a run.
+- `retry_conversation_turn` now approves the latest proposed plan directly when
+  the thread is `ready`, preserving the retry idempotency key and avoiding a
+  second planner call.
+- Added contract coverage for the ready-thread recovery branch.
+- The change is additive and migration-free; existing work runs, plans, billing,
+  and production data remain compatible.
+
+### Next steps
+
+1. Focused contract validation passes: 15 Work thread tests, Ruff, compileall,
+   and `git diff --check`.
+2. Deploy together with the frontend empty-state/retry handling and verify a
+   historical ready-without-run task on beta.
+
 ## 2026-08-15 reasoning event Redis transport fix
 
 ### Root cause
