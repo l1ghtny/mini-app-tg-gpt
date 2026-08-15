@@ -1,0 +1,35 @@
+---
+name: Provider-neutral reasoning activity
+description: OpenAI and Google visible summaries share one bounded SSE and persistence contract.
+type: tech
+---
+
+## Context
+
+OpenAI and Google expose optional summaries of model reasoning through different
+stream shapes. Google may include the first summary on `step.start`, and either
+provider may omit summary text entirely. Provider-authored headings are not
+stable product copy and must not become the collapsed UI label.
+
+## Decision
+
+- Use `ReasoningActivity` for OpenAI and every Google interaction path.
+- Preserve rolling-compatible `reasoning.summary.delta` and
+  `reasoning.summary.done` events while adding provider, activity, and segment
+  identifiers.
+- Aggregate multiple provider summary segments in order and send the complete
+  aggregate on every done event so the client can reconcile streamed detail.
+- Persist the same bounded aggregate shown to the user, capped at 16,000
+  characters.
+- Emit lifecycle status for empty thought blocks, but never fabricate visible
+  summary text.
+- Treat summaries as provider-authored detail, not raw chain-of-thought or
+  product-controlled status copy.
+
+## Gotchas
+
+- Google `step.start.step.summary` can contain text that never arrives as a
+  later delta.
+- New deltas after a completed segment must reactivate the frontend activity.
+- Keep stable localized labels in the frontend; expanded detail may contain the
+  provider summary in the language requested by the user.

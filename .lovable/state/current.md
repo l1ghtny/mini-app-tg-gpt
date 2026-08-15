@@ -1,5 +1,34 @@
 # Current State
 
+## 2026-08-15 shared reasoning activity contract
+
+### Objective
+
+- Normalize OpenAI reasoning summaries and Google thought summaries into one
+  bounded, user-visible activity contract without exposing private reasoning.
+
+### Implemented
+
+- Added a provider-neutral accumulator that preserves existing SSE event names,
+  combines multiple summary sections, accepts Google summaries delivered on
+  `step.start`, handles empty summaries, and caps persisted detail at 16,000
+  characters.
+- OpenAI and both Google interaction paths now use the shared contract and store
+  the same final aggregate that the browser receives.
+- Provider-authored detail remains optional; stable product labels belong to the
+  frontend, and no summary is fabricated when a provider omits one.
+
+### Next steps
+
+1. Deploy both beta commits together and verify one OpenAI and one Gemini turn.
+
+### Validation
+
+- 19 focused reasoning/provider tests passed; the one database-backed provider
+  test was deselected because this isolated worktree has no disposable database.
+- The database-free Google interaction contract test passed.
+- Ruff, compileall, and diff whitespace checks passed.
+
 ## 2026-08-15 Google visible reasoning language contract
 
 - Google interaction thought summaries remain provider-authored detail, not a

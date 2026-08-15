@@ -14,6 +14,11 @@ from openai.types.responses.tool import CodeInterpreter, ImageGeneration
 
 from app.core.config import settings
 from app.services.background.save_openai_usage import log_usage
+from app.services.reasoning_activity import (
+    ReasoningActivity,
+    VISIBLE_REASONING_LANGUAGE_INSTRUCTION,
+    extract_summary_text,
+)
 from app.services.model_registry import (
     GOOGLE_THINKING_MODELS,
     IMAGE_MODEL_PROVIDER,
@@ -32,8 +37,7 @@ STYLE_GUIDE = (
     "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
     "- Use fenced code blocks for code.\n"
     "- Use standard [text](url) links.\n"
-    "Use the language of the user's latest message for the reply and any visible thought summary, "
-    "unless the user explicitly asks for another language.\n"
+    f"{VISIBLE_REASONING_LANGUAGE_INSTRUCTION}\n"
     "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
 )
 
@@ -370,7 +374,7 @@ async def _stream_google_response_with_function_handoff(
         reasoning_effort=reasoning_effort,
     )
 
-    accumulated_thoughts = ""
+    reasoning_activity = ReasoningActivity(provider="google")
     total_input_tokens = 0
     total_output_tokens = 0
     total_reasoning_tokens = 0
@@ -399,7 +403,7 @@ async def _stream_google_response_with_function_handoff(
             error_message=error_message,
         )
 
-    for _ in range(max_function_rounds + 1):
+    for round_index in range(max_function_rounds + 1):
         kwargs: dict[str, Any] = {
             "model": model,
             "input": current_input,
@@ -420,7 +424,6 @@ async def _stream_google_response_with_function_handoff(
             return
 
         response_meta_sent = False
-        thinking_started = False
         text_part_started: dict[int, bool] = {}
         step_types: dict[int, str] = {}
         citations: list[dict[str, str]] = []
@@ -457,15 +460,24 @@ async def _stream_google_response_with_function_handoff(
                         continue
                     step_types[event.index] = event.step.type
                     if event.step.type == "thought":
-                        yield {
-                            "type": "status",
-                            "stage": "thinking",
-                            "phase": "thinking",
-                            "status": "active",
-                            "label": "Thinking",
-                            "source_event": "google.thinking",
-                        }
-                        thinking_started = True
+                        segment_id = f"google-thought-{round_index}-{event.index}"
+                        for payload in reasoning_activity.start(
+                            segment_id=segment_id,
+                            source_event="google.step.start",
+                        ):
+                            yield payload
+                        initial_summary = extract_summary_text(
+                            getattr(event.step, "summary", None)
+                        )
+                        for payload in reasoning_activity.append(
+                            initial_summary,
+                            segment_id=segment_id,
+                            source_event="google.step.start",
+                        ):
+                            payload.setdefault("output_index", 0)
+                            payload.setdefault("summary_index", 0)
+                            payload.setdefault("item_id", segment_id)
+                            yield payload
                     elif event.step.type == "google_search_call":
                         total_web_search_calls += 1
                         yield {
@@ -516,31 +528,17 @@ async def _stream_google_response_with_function_handoff(
                         yield {"type": "text.delta", "index": event.index, "text": delta.text}
 
                     elif delta.type == "thought_summary":
-                        if not thinking_started:
-                            yield {
-                                "type": "status",
-                                "stage": "thinking",
-                                "phase": "thinking",
-                                "status": "active",
-                                "label": "Thinking",
-                                "source_event": "google.thinking",
-                            }
-                            thinking_started = True
-
-                        thought_text = ""
-                        if delta.content and hasattr(delta.content, "text"):
-                            thought_text = delta.content.text or ""
-                        elif isinstance(delta.content, str):
-                            thought_text = delta.content
-
-                        accumulated_thoughts += thought_text
-                        yield {
-                            "type": "reasoning.summary.delta",
-                            "delta": thought_text,
-                            "output_index": 0,
-                            "summary_index": 0,
-                            "item_id": "google-thought-0",
-                        }
+                        segment_id = f"google-thought-{round_index}-{event.index}"
+                        thought_text = extract_summary_text(delta.content)
+                        for payload in reasoning_activity.append(
+                            thought_text,
+                            segment_id=segment_id,
+                            source_event="google.step.delta",
+                        ):
+                            payload.setdefault("output_index", 0)
+                            payload.setdefault("summary_index", 0)
+                            payload.setdefault("item_id", segment_id)
+                            yield payload
 
                     elif delta.type == "text_annotation_delta":
                         if delta.annotations:
@@ -574,21 +572,15 @@ async def _stream_google_response_with_function_handoff(
                 elif et == "step.stop":
                     st = step_types.get(event.index)
                     if st == "thought":
-                        yield {
-                            "type": "reasoning.summary.done",
-                            "text": accumulated_thoughts,
-                            "output_index": 0,
-                            "summary_index": 0,
-                            "item_id": "google-thought-0",
-                        }
-                        yield {
-                            "type": "status",
-                            "stage": "thinking",
-                            "phase": "thinking",
-                            "status": "done",
-                            "label": "Thinking complete",
-                            "source_event": "google.thinking",
-                        }
+                        segment_id = f"google-thought-{round_index}-{event.index}"
+                        for payload in reasoning_activity.complete(
+                            segment_id=segment_id,
+                            source_event="google.step.stop",
+                        ):
+                            payload.setdefault("output_index", 0)
+                            payload.setdefault("summary_index", 0)
+                            payload.setdefault("item_id", segment_id)
+                            yield payload
                     elif st == "model_output":
                         if citations:
                             sources_text = "\n\n**Sources:**\n" + "\n".join(
@@ -645,7 +637,7 @@ async def _stream_google_response_with_function_handoff(
                 request_id=request_id,
                 model_name=model,
                 assistant_message_id=assistant_message_id,
-                accumulated_thoughts=accumulated_thoughts,
+                accumulated_thoughts=reasoning_activity.text,
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
                 reasoning_tokens=total_reasoning_tokens,
@@ -1163,11 +1155,10 @@ async def stream_normalized_google_response(
         stream = await client.aio.interactions.create(**kwargs)
 
         response_meta_sent = False
-        thinking_started = False
+        reasoning_activity = ReasoningActivity(provider="google")
         text_part_started = {}
         image_part_started = {}
         image_buffers = {}
-        accumulated_thoughts = ""
         step_types = {}
         citations = []
 
@@ -1188,15 +1179,24 @@ async def stream_normalized_google_response(
                 if event.step:
                     step_types[event.index] = event.step.type
                     if event.step.type == "thought":
-                        yield {
-                            "type": "status",
-                            "stage": "thinking",
-                            "phase": "thinking",
-                            "status": "active",
-                            "label": "Thinking",
-                            "source_event": "google.thinking",
-                        }
-                        thinking_started = True
+                        segment_id = f"google-thought-{event.index}"
+                        for payload in reasoning_activity.start(
+                            segment_id=segment_id,
+                            source_event="google.step.start",
+                        ):
+                            yield payload
+                        initial_summary = extract_summary_text(
+                            getattr(event.step, "summary", None)
+                        )
+                        for payload in reasoning_activity.append(
+                            initial_summary,
+                            segment_id=segment_id,
+                            source_event="google.step.start",
+                        ):
+                            payload.setdefault("output_index", 0)
+                            payload.setdefault("summary_index", 0)
+                            payload.setdefault("item_id", segment_id)
+                            yield payload
                     elif event.step.type == "google_search_call":
                         yield {
                             "type": "status",
@@ -1219,31 +1219,17 @@ async def stream_normalized_google_response(
                     yield {"type": "text.delta", "index": event.index, "text": delta.text}
 
                 elif delta.type == "thought_summary":
-                    if not thinking_started:
-                        yield {
-                            "type": "status",
-                            "stage": "thinking",
-                            "phase": "thinking",
-                            "status": "active",
-                            "label": "Thinking",
-                            "source_event": "google.thinking",
-                        }
-                        thinking_started = True
-
-                    thought_text = ""
-                    if delta.content and hasattr(delta.content, "text"):
-                        thought_text = delta.content.text or ""
-                    elif isinstance(delta.content, str):
-                        thought_text = delta.content
-
-                    accumulated_thoughts += thought_text
-                    yield {
-                        "type": "reasoning.summary.delta",
-                        "delta": thought_text,
-                        "output_index": 0,
-                        "summary_index": 0,
-                        "item_id": "google-thought-0",
-                    }
+                    segment_id = f"google-thought-{event.index}"
+                    thought_text = extract_summary_text(delta.content)
+                    for payload in reasoning_activity.append(
+                        thought_text,
+                        segment_id=segment_id,
+                        source_event="google.step.delta",
+                    ):
+                        payload.setdefault("output_index", 0)
+                        payload.setdefault("summary_index", 0)
+                        payload.setdefault("item_id", segment_id)
+                        yield payload
 
                 elif delta.type == "image":
                     if event.index not in image_part_started:
@@ -1266,21 +1252,15 @@ async def stream_normalized_google_response(
                 st = step_types.get(event.index)
 
                 if st == "thought":
-                    yield {
-                        "type": "reasoning.summary.done",
-                        "text": accumulated_thoughts,
-                        "output_index": 0,
-                        "summary_index": 0,
-                        "item_id": "google-thought-0",
-                    }
-                    yield {
-                        "type": "status",
-                        "stage": "thinking",
-                        "phase": "thinking",
-                        "status": "done",
-                        "label": "Thinking complete",
-                        "source_event": "google.thinking",
-                    }
+                    segment_id = f"google-thought-{event.index}"
+                    for payload in reasoning_activity.complete(
+                        segment_id=segment_id,
+                        source_event="google.step.stop",
+                    ):
+                        payload.setdefault("output_index", 0)
+                        payload.setdefault("summary_index", 0)
+                        payload.setdefault("item_id", segment_id)
+                        yield payload
 
                 elif st == "model_output":
                     if citations:
@@ -1329,10 +1309,10 @@ async def stream_normalized_google_response(
                 reasoning_tokens = usage_meta.total_thought_tokens if usage_meta else 0
 
                 async with AsyncSession(engine, expire_on_commit=False) as db_session:
-                    if accumulated_thoughts and assistant_message_id:
+                    if reasoning_activity.text and assistant_message_id:
                         message = await db_session.get(Message, assistant_message_id)
                         if message:
-                            message.reasoning_summary = accumulated_thoughts
+                            message.reasoning_summary = reasoning_activity.text
                             db_session.add(message)
                             await db_session.commit()
                     await log_usage(

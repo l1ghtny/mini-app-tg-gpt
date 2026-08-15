@@ -25,6 +25,10 @@ from app.core.metrics import track_event, track_internal_event
 from app.db.database import engine
 from app.redis.settings import settings
 from app.services.background.save_openai_usage import log_usage
+from app.services.reasoning_activity import (
+    ReasoningActivity,
+    VISIBLE_REASONING_LANGUAGE_INSTRUCTION,
+)
 
 STYLE_GUIDE = (
     "Format replies in Markdown:\n"
@@ -32,6 +36,7 @@ STYLE_GUIDE = (
     "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
     "- Use fenced code blocks for code.\n"
     "- Use standard [text](url) links.\n"
+    f"{VISIBLE_REASONING_LANGUAGE_INSTRUCTION}\n"
     "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
 )
 
@@ -286,8 +291,9 @@ class StreamState:
     last_flush: Dict[int, float] = field(default_factory=dict)
     seen_text_part_started: Dict[int, bool] = field(default_factory=dict)
     seen_image_part_started: Dict[int, bool] = field(default_factory=dict)
-    reasoning_started: bool = False
-    accumulated_thoughts: str = ""
+    reasoning_activity: ReasoningActivity = field(
+        default_factory=lambda: ReasoningActivity(provider="openai")
+    )
 
 
 def _build_status_event(
@@ -382,65 +388,49 @@ async def _map_openai_event(
         )
         return out
 
-    if et == "response.output_item.added" and getattr(event, "item", None) and event.item.type == "reasoning":
-        state.reasoning_started = True
-        out.append(
-            _build_status_event(
-                stage="thinking",
-                phase="thinking",
-                label="Thinking",
+    if (
+        et == "response.output_item.added"
+        and getattr(event, "item", None)
+        and event.item.type == "reasoning"
+    ):
+        segment_id = f"{getattr(event.item, 'id', 'reasoning')}:{0}"
+        out.extend(
+            state.reasoning_activity.start(
+                segment_id=segment_id,
                 source_event=et,
-                event=event,
+                sequence_number=getattr(event, "sequence_number", None),
             )
         )
         return out
 
     if et in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
-        if not state.reasoning_started:
-            out.append(
-                _build_status_event(
-                    stage="thinking",
-                    phase="thinking",
-                    label="Thinking",
-                    source_event=et,
-                    event=event,
-                )
-            )
-            state.reasoning_started = True
-        state.accumulated_thoughts += event.delta
-        out.append(
-            {
-                "type": "reasoning.summary.delta",
-                "delta": event.delta,
-                "output_index": event.output_index,
-                "summary_index": event.summary_index,
-                "item_id": event.item_id,
-                "sequence_number": event.sequence_number,
-            }
+        segment_id = f"{event.item_id}:{event.summary_index}"
+        events = state.reasoning_activity.append(
+            event.delta,
+            segment_id=segment_id,
+            source_event=et,
+            sequence_number=getattr(event, "sequence_number", None),
         )
+        for payload in events:
+            payload.setdefault("output_index", event.output_index)
+            payload.setdefault("summary_index", event.summary_index)
+            payload.setdefault("item_id", event.item_id)
+        out.extend(events)
         return out
 
     if et in {"response.reasoning_summary_text.done", "response.reasoning_text.done"}:
-        out.append(
-            {
-                "type": "reasoning.summary.done",
-                "text": event.text,
-                "output_index": event.output_index,
-                "summary_index": event.summary_index,
-                "item_id": event.item_id,
-                "sequence_number": event.sequence_number,
-            }
+        segment_id = f"{event.item_id}:{event.summary_index}"
+        events = state.reasoning_activity.complete(
+            segment_id=segment_id,
+            source_event=et,
+            full_text=event.text,
+            sequence_number=getattr(event, "sequence_number", None),
         )
-        out.append(
-            _build_status_event(
-                stage="thinking",
-                phase="thinking",
-                label="Thinking complete",
-                source_event=et,
-                event=event,
-                status="done",
-            )
-        )
+        for payload in events:
+            payload.setdefault("output_index", event.output_index)
+            payload.setdefault("summary_index", event.summary_index)
+            payload.setdefault("item_id", event.item_id)
+        out.extend(events)
         return out
 
     if et == "response.content_part.added":
@@ -773,10 +763,10 @@ async def stream_normalized_openai_response(
                 raise
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
-            if state.accumulated_thoughts and assistant_message_id:
+            if state.reasoning_activity.text and assistant_message_id:
                 message = await session.get(Message, assistant_message_id)
                 if message:
-                    message.reasoning_summary = state.accumulated_thoughts
+                    message.reasoning_summary = state.reasoning_activity.text
                     session.add(message)
                     await session.commit()
             await log_usage(
