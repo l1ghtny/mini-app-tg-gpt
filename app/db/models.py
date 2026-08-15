@@ -861,6 +861,45 @@ class WorkRun(SQLModel, table=True):
     )
 
 
+class WorkRunActivityEvent(SQLModel, table=True):
+    __tablename__ = "work_run_activity_event"
+
+    id: uuid.UUID = Field(default_factory=uuid6.uuid7, primary_key=True)
+    work_run_id: uuid.UUID = Field(foreign_key="work_run.id", index=True)
+    sequence: int
+    event_key: str = Field(max_length=128)
+    kind: str = Field(index=True, max_length=32)
+    status: str = Field(default="completed", max_length=24)
+    phase: Optional[str] = Field(default=None, max_length=32)
+    title: Optional[str] = Field(default=None, max_length=240)
+    detail: Optional[str] = Field(default=None, max_length=1000)
+    event_metadata: dict = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSONB, nullable=False),
+    )
+    started_at: datetime = Field(default_factory=utcnow_naive)
+    completed_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow_naive, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "work_run_id",
+            "sequence",
+            name="uq_work_run_activity_sequence",
+        ),
+        UniqueConstraint(
+            "work_run_id",
+            "event_key",
+            name="uq_work_run_activity_event_key",
+        ),
+        Index(
+            "ix_work_run_activity_run_sequence",
+            "work_run_id",
+            "sequence",
+        ),
+    )
+
+
 class ProviderOperation(SQLModel, table=True):
     __tablename__ = "provider_operation"
 

@@ -27,6 +27,9 @@ class _Result:
     def first(self) -> object | None:
         return self.value
 
+    def all(self) -> list[object]:
+        return [] if self.value is None else [self.value]
+
 
 class _Session:
     def __init__(self, *, existing: object | None = None, ledger: object | None = None):
@@ -158,6 +161,7 @@ async def test_queued_cancellation_refunds_reserved_allowance(
 ) -> None:
     ledger = SimpleNamespace(state=State.reserved)
     run = SimpleNamespace(
+        id=uuid.uuid4(),
         status=WorkRunStatus.QUEUED.value,
         stage="waiting_for_worker",
         cancelled_at=None,
@@ -168,6 +172,8 @@ async def test_queued_cancellation_refunds_reserved_allowance(
     session = _Session(ledger=ledger)
     lifecycle_metric = Mock()
     monkeypatch.setattr(service, "record_work_run_event", lifecycle_metric)
+    monkeypatch.setattr(service, "finish_active_activity_events", AsyncMock())
+    monkeypatch.setattr(service, "record_activity_event", AsyncMock())
 
     result = await service.cancel_run(session, run)  # type: ignore[arg-type]
 
@@ -208,6 +214,7 @@ async def test_failure_preserves_specific_execution_error_code(
 ) -> None:
     ledger = SimpleNamespace(state=State.reserved)
     run = SimpleNamespace(
+        id=uuid.uuid4(),
         status=WorkRunStatus.RUNNING.value,
         cancelled_at=None,
         stage="normalizing_data",
@@ -218,8 +225,15 @@ async def test_failure_preserves_specific_execution_error_code(
         request_ledger_id=uuid.uuid4(),
     )
     publish = AsyncMock()
+    activity_event = SimpleNamespace()
     redis = SimpleNamespace()
     monkeypatch.setattr(service, "_publish", publish)
+    monkeypatch.setattr(service, "finish_active_activity_events", AsyncMock())
+    monkeypatch.setattr(
+        service,
+        "record_activity_event",
+        AsyncMock(return_value=activity_event),
+    )
 
     await service.fail_run(
         session=_Session(ledger=ledger),  # type: ignore[arg-type]
@@ -234,7 +248,12 @@ async def test_failure_preserves_specific_execution_error_code(
     assert run.status == WorkRunStatus.FAILED.value
     assert run.error_code == WorkRunErrorCode.PROVIDER_AMBIGUOUS.value
     assert ledger.state == State.refunded
-    publish.assert_awaited_once_with(redis, run, "work.error")
+    publish.assert_awaited_once_with(
+        redis,
+        run,
+        "work.error",
+        activity_event=activity_event,
+    )
 
 
 @pytest.mark.asyncio

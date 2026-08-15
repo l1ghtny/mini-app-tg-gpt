@@ -526,7 +526,7 @@ async def stream_work_run(
                 "event": event_type,
                 "data": json.dumps(fields, separators=(",", ":")),
             }
-            if event_type in {"work.done", "work.error"}:
+            if event_type in {"work.done", "work.error", "work.cancelled"}:
                 return
 
     return EventSourceResponse(events())

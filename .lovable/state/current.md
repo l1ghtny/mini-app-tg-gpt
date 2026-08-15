@@ -1,5 +1,28 @@
 # Current State
 
+## 2026-08-15 durable Work execution timeline
+
+- Objective: replace the generic Work checklist and aggregate tool counters with
+  a durable, chronological execution trace.
+- Added an additive `work_run_activity_event` table with per-run ordering and
+  idempotent event keys. Existing runs remain valid and continue to use the
+  legacy phase fallback in older/newer frontends.
+- Agent runs now record planning, source preparation, draft/review/revision
+  phases, web and file searches, safe Python-analysis summaries, artifacts,
+  completion, failure, and cancellation without persisting raw model reasoning
+  or code.
+- Work responses return activity history and live `work.activity` events include
+  the changed activity item; cancellation now terminates the private SSE stream.
+- Migration `xg4b5c6d7e8` is additive and its offline PostgreSQL DDL renders from
+  the existing `xf3a4b5c6d7e` head.
+
+### Next steps
+
+1. Publish the coordinated backend/frontend beta commits and verify migration,
+   SSE reconciliation, mobile bottom sheet, desktop trace, and legacy fallback.
+2. Implement the model-initiated question tool as the next Work MVP slice,
+   reusing this timeline for the paused question and resumed execution.
+
 ## 2026-08-15 Work start recovery
 
 - Objective: recover durable Work threads where planning completed but execution

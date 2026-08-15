@@ -187,6 +187,19 @@ class ArtifactResponse(BaseModel):
     download_url: str | None = None
 
 
+class WorkRunActivityEventResponse(BaseModel):
+    id: uuid.UUID
+    sequence: int = Field(ge=1)
+    kind: str = Field(min_length=1, max_length=32)
+    status: Literal["active", "completed", "failed", "cancelled"]
+    phase: str | None = Field(default=None, max_length=32)
+    title: str | None = Field(default=None, max_length=240)
+    detail: str | None = Field(default=None, max_length=1000)
+    metadata: dict = Field(default_factory=dict)
+    started_at: datetime
+    completed_at: datetime | None = None
+
+
 class WorkRunResponse(BaseModel):
     id: uuid.UUID
     kind: WorkRunKind
@@ -212,6 +225,7 @@ class WorkRunResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     artifacts: list[ArtifactResponse] = Field(default_factory=list)
+    activity_events: list[WorkRunActivityEventResponse] = Field(default_factory=list)
 
 
 class WorkRunListResponse(BaseModel):

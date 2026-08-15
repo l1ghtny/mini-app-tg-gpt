@@ -33,6 +33,7 @@ from app.db.models import (
     State,
     UserDocument,
     WorkRun,
+    WorkRunActivityEvent,
     WorkRunPolicy,
     utcnow_naive,
 )
@@ -62,6 +63,12 @@ from app.schemas.work_runs import (
     WorkRunListResponse,
     WorkRunPlanResponse,
     WorkRunResponse,
+)
+from app.services.work_runs.activity import (
+    activity_response,
+    finish_active_activity_events,
+    list_activity_events,
+    record_activity_event,
 )
 from app.services.work_runs.comparison import (
     ComparisonColumnSchema,
@@ -799,13 +806,15 @@ def artifact_response(
 async def run_response(session: AsyncSession, run: WorkRun) -> WorkRunResponse:
     artifacts = await _artifacts(session, run)
     sources_by_artifact = await _artifact_sources(session, artifacts)
-    return _run_response(run, artifacts, sources_by_artifact)
+    activity_events = await list_activity_events(session, run.id)
+    return _run_response(run, artifacts, sources_by_artifact, activity_events)
 
 
 def _run_response(
     run: WorkRun,
     artifacts: list[Artifact],
     sources_by_artifact: dict[uuid.UUID, list[ArtifactSource]] | None = None,
+    activity_events: list[WorkRunActivityEvent] | None = None,
 ) -> WorkRunResponse:
     retry_of_work_run_id = run.input_manifest.get("retry_of_work_run_id")
     return WorkRunResponse(
@@ -840,6 +849,9 @@ def _run_response(
                 (sources_by_artifact or {}).get(artifact.id, []),
             )
             for artifact in artifacts
+        ],
+        activity_events=[
+            activity_response(event) for event in (activity_events or [])
         ],
     )
 
@@ -946,6 +958,14 @@ async def cancel_run(session: AsyncSession, run: WorkRun) -> WorkRun:
             WorkRunErrorCode.CANCEL_TOO_LATE,
             status.HTTP_409_CONFLICT,
         )
+    await finish_active_activity_events(session, run, status="cancelled")
+    await record_activity_event(
+        session,
+        run,
+        event_key="cancelled",
+        kind="cancelled",
+        status="cancelled",
+    )
     session.add(run)
     if ledger:
         session.add(ledger)
@@ -985,10 +1005,23 @@ async def complete_cancellation(
         operation.status = "cancelled"
         operation.completed_at = now
         session.add(operation)
+    await finish_active_activity_events(session, run, status="cancelled")
+    activity_event = await record_activity_event(
+        session,
+        run,
+        event_key="cancelled",
+        kind="cancelled",
+        status="cancelled",
+    )
     await _set_linked_thread_status(session, run.id, "cancelled")
     session.add(run)
     await session.commit()
-    await _publish(redis, run, "work.cancelled")
+    await _publish(
+        redis,
+        run,
+        "work.cancelled",
+        activity_event=activity_event,
+    )
 
 
 async def _cancel_if_requested(
@@ -1187,7 +1220,13 @@ async def _publish_with_deadline(
     )
 
 
-async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
+async def _publish(
+    redis: Redis,
+    run: WorkRun,
+    event_type: str,
+    *,
+    activity_event: WorkRunActivityEvent | None = None,
+) -> None:
     record_work_run_event(run, event_type)
     work_run_id = str(run.id)
     publish_task = asyncio.create_task(
@@ -1202,6 +1241,11 @@ async def _publish(redis: Redis, run: WorkRun, event_type: str) -> None:
                 "stage": run.stage,
                 "progress_percent": run.progress_percent,
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
+                **(
+                    {"activity_event": activity_response(activity_event).model_dump(mode="json")}
+                    if activity_event is not None
+                    else {}
+                ),
             },
         )
     )
@@ -1900,10 +1944,24 @@ async def fail_run(
         operation.error_code = run.error_code
         operation.completed_at = run.completed_at
         session.add(operation)
+    await finish_active_activity_events(session, run, status="failed")
+    activity_event = await record_activity_event(
+        session,
+        run,
+        event_key="failed",
+        kind="failed",
+        status="failed",
+        metadata={"error_code": run.error_code},
+    )
     await _set_linked_thread_status(session, run.id, "failed")
     session.add(run)
     await session.commit()
-    await _publish(redis, run, "work.error")
+    await _publish(
+        redis,
+        run,
+        "work.error",
+        activity_event=activity_event,
+    )
 
 
 async def _set_linked_thread_status(

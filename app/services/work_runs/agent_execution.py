@@ -41,6 +41,10 @@ from app.r2.private_artifacts import (
 from app.r2.private_documents import download_document_source
 from app.schemas.work_runs import ArtifactPreviewResponse
 from app.services.work_runs import service
+from app.services.work_runs.activity import (
+    finish_active_activity_events,
+    record_activity_event,
+)
 from app.services.work_runs.contracts import WorkRunErrorCode, WorkRunStatus
 from app.services.work_runs.evidence import (
     attach_legacy_source_links,
@@ -169,6 +173,80 @@ def _provider_activity(response: Any) -> dict[str, int]:
         "code_interpreter_calls": _code_interpreter_call_count(response),
         "generated_artifacts": len(generated_artifact_references(response)),
     }
+
+
+def _response_value(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _bounded_activity_values(values: Sequence[Any], *, limit: int = 3) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        cleaned = " ".join(value.split())
+        if cleaned and cleaned not in normalized:
+            normalized.append(cleaned[:240])
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
+def _activity_values(value: Any) -> list[Any]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Sequence):
+        return list(value)
+    return []
+
+
+def _provider_activity_events(response: Any) -> list[dict[str, object]]:
+    output = _response_value(response, "output") or []
+    web_queries: list[Any] = []
+    file_queries: list[Any] = []
+    code_calls = 0
+    for item in output:
+        item_type = _response_value(item, "type")
+        if item_type == "web_search_call":
+            action = _response_value(item, "action")
+            query = _response_value(action, "query")
+            queries = _activity_values(_response_value(action, "queries"))
+            web_queries.extend([query, *queries])
+        elif item_type == "file_search_call":
+            file_queries.extend(_activity_values(_response_value(item, "queries")))
+        elif item_type == "code_interpreter_call":
+            code_calls += 1
+
+    events: list[dict[str, object]] = []
+    web_count, file_count = _tool_call_counts(response)
+    if web_count:
+        queries = _bounded_activity_values(web_queries)
+        events.append(
+            {
+                "kind": "web_search",
+                "detail": " · ".join(queries) or None,
+                "metadata": {"count": web_count, "queries": queries},
+            }
+        )
+    if file_count:
+        queries = _bounded_activity_values(file_queries)
+        events.append(
+            {
+                "kind": "file_search",
+                "detail": " · ".join(queries) or None,
+                "metadata": {"count": file_count, "queries": queries},
+            }
+        )
+    if code_calls:
+        events.append(
+            {
+                "kind": "code_interpreter",
+                "metadata": {"count": code_calls, "runtime": "python"},
+            }
+        )
+    return events
 
 
 def _operation_activity_totals(operation: ProviderOperation) -> dict[str, int]:
@@ -996,6 +1074,35 @@ async def process_agentic_run(
     await session.commit()
     await service._publish(redis, run, "work.stage")
 
+    thread, plan, thread_messages = await _thread_context(session, run.id)
+    await record_activity_event(
+        session,
+        run,
+        event_key="plan",
+        kind="planning",
+        status="completed",
+        title=plan.title if plan else None,
+        detail=plan.summary if plan else None,
+        metadata={"step_count": len(plan.steps) if plan else 0},
+    )
+    context_event = await record_activity_event(
+        session,
+        run,
+        event_key="context",
+        kind="source_context",
+        status="active" if run.input_manifest.get("document_ids") else "completed",
+        metadata={
+            "document_count": len(run.input_manifest.get("document_ids", [])),
+        },
+    )
+    await session.commit()
+    await service._publish(
+        redis,
+        run,
+        "work.activity",
+        activity_event=context_event,
+    )
+
     document_ids = [uuid.UUID(value) for value in run.input_manifest.get("document_ids", [])]
     documents = []
     if document_ids:
@@ -1014,9 +1121,28 @@ async def process_agentic_run(
                 "one or more source documents no longer exist",
             )
 
+    context_event = await record_activity_event(
+        session,
+        run,
+        event_key="context",
+        kind="source_context",
+        status="completed",
+        detail=", ".join(document.filename for document in documents) or None,
+        metadata={
+            "document_count": len(documents),
+            "filenames": [document.filename for document in documents],
+        },
+    )
+    await session.commit()
+    await service._publish(
+        redis,
+        run,
+        "work.activity",
+        activity_event=context_event,
+    )
+
     if await service._cancel_if_requested(session=session, redis=redis, run=run):
         return
-    thread, plan, thread_messages = await _thread_context(session, run.id)
     expected_outputs = plan.expected_outputs if plan else []
     artifact_requested = plan_expects_artifacts(expected_outputs)
     code_interpreter_enabled = artifact_requested or any(
@@ -1135,9 +1261,31 @@ async def process_agentic_run(
             },
         }
         session.add(run)
+        activity_events = []
+        call_number = len(operation.usage.get("calls", []))
+        for index, event_payload in enumerate(_provider_activity_events(response), start=1):
+            activity_events.append(
+                await record_activity_event(
+                    session,
+                    run,
+                    event_key=(
+                        f"tool:{phase}:{call_number}:{event_payload['kind']}:{index}"
+                    ),
+                    kind=str(event_payload["kind"]),
+                    status="completed",
+                    phase=phase,
+                    detail=event_payload.get("detail"),
+                    metadata=event_payload.get("metadata"),
+                )
+            )
         await session.commit()
-        if any(provider_activity.values()):
-            await service._publish(redis, run, "work.activity")
+        for activity_event in activity_events:
+            await service._publish(
+                redis,
+                run,
+                "work.activity",
+                activity_event=activity_event,
+            )
         if await service._cancel_if_requested(
             session=session,
             redis=redis,
@@ -1177,9 +1325,24 @@ async def process_agentic_run(
             (phase, attempt),
             run.progress_percent,
         )
+        await finish_active_activity_events(session, run)
+        activity_event = await record_activity_event(
+            session,
+            run,
+            event_key=f"phase:{phase}:{attempt}",
+            kind=phase,
+            status="active",
+            phase=phase,
+            metadata={"attempt": attempt},
+        )
         session.add(run)
         await session.commit()
-        await service._publish(redis, run, "work.activity")
+        await service._publish(
+            redis,
+            run,
+            "work.activity",
+            activity_event=activity_event,
+        )
 
     async def consume_steering() -> str | None:
         return await _consume_pending_steering(
@@ -1283,6 +1446,32 @@ async def process_agentic_run(
     )
     run.completed_at = utcnow_naive()
     run.lease_expires_at = None
+    await finish_active_activity_events(session, run)
+    if generated_artifacts:
+        await record_activity_event(
+            session,
+            run,
+            event_key="artifacts",
+            kind="artifact",
+            status="completed",
+            detail=", ".join(artifact.filename for artifact in generated_artifacts),
+            metadata={
+                "count": len(generated_artifacts),
+                "filenames": [artifact.filename for artifact in generated_artifacts],
+            },
+        )
+    await record_activity_event(
+        session,
+        run,
+        event_key="completed",
+        kind="completed",
+        status="completed",
+        metadata={
+            "source_count": source_count,
+            "artifact_count": len(generated_artifacts),
+            "generation_attempts": validated.generation_count,
+        },
+    )
     ledger = await session.get(RequestLedger, run.request_ledger_id)
     if ledger and ledger.state == State.reserved:
         ledger.state = State.consumed
