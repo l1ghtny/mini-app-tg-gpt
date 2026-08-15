@@ -1,5 +1,36 @@
 # Current State
 
+## 2026-08-15 durable Work clarification
+
+- Added a strict provider-neutral `ask_user` function tool for material
+  ambiguity. The executor proceeds with an explicit assumption when the missing
+  detail is not consequential and may never request credentials or secrets.
+- Questions are persisted in `work_human_input_request`; one pending question is
+  allowed per run and clarification is capped at two rounds in both application
+  and database contracts.
+- A run pauses as `waiting_for_user`, releases its worker lease and SSE
+  connection, remains active for entitlement limits, and resumes the same
+  OpenAI response/call with an idempotent answer.
+- Ordinary Work messages are rejected while a structured answer is pending.
+  Cancellation closes the pending request and keeps the existing allowance
+  refund behavior.
+- Migration `xh5c6d7e8f9` only creates the new table, constraints, and indexes;
+  it does not alter existing Work rows or tables.
+
+### Validation
+
+- 124 focused Work, migration, artifact-delivery, and metrics tests pass.
+- Ruff on changed Python files, compileall, Alembic single-head validation, and
+  diff whitespace checks pass.
+
+### Next steps
+
+1. Apply `xh5c6d7e8f9` through the production migration pipeline before the beta
+   runtime rollout because production and beta share PostgreSQL.
+2. Deploy the coordinated backend and frontend beta commits.
+3. Verify a real question/answer/resume round after beta allowance is available;
+   do not bypass the configured per-user beta quota.
+
 ## 2026-08-15 durable Work execution timeline
 
 - Objective: replace the generic Work checklist and aggregate tool counters with

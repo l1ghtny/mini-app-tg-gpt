@@ -34,6 +34,10 @@ from app.schemas.work_threads import (
     WorkThreadSummaryResponse,
 )
 from app.services.work_runs import service as run_service
+from app.services.work_runs.human_input import (
+    human_input_response,
+    list_human_input_requests,
+)
 from app.services.work_runs.contracts import WorkRunKind, WorkRunStatus
 from app.services.work_runs.normalization import NormalizationUsage
 from app.services.work_threads.planner import PlannerResult, WorkPlanningError, plan_work
@@ -179,6 +183,7 @@ async def thread_response(
         )
     ).all()
     plan = await _latest_plan(session, thread.id)
+    human_input_requests = await list_human_input_requests(session, thread.id)
     links = (
         await session.exec(
             select(WorkThreadRun)
@@ -230,6 +235,9 @@ async def thread_response(
         messages=[_message_response(message) for message in messages],
         plan=plan_response(plan) if plan else None,
         runs=runs,
+        human_input_requests=[
+            human_input_response(request) for request in human_input_requests
+        ],
     )
 
 
@@ -971,6 +979,10 @@ async def send_message(
         session.add(active_run)
         await session.commit()
         return thread, None
+    if thread.status == "waiting_for_user":
+        if duplicate is not None:
+            return thread, None
+        raise HTTPException(status_code=409, detail="work_human_input_required")
     if thread.status in {"planning", "running"}:
         if duplicate is not None:
             return thread, None

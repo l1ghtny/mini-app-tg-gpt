@@ -37,7 +37,12 @@ from app.db.models import (
     WorkRunPolicy,
     utcnow_naive,
 )
-from app.db.work_agent_models import WorkPlan, WorkThread, WorkThreadRun
+from app.db.work_agent_models import (
+    WorkHumanInputRequest,
+    WorkPlan,
+    WorkThread,
+    WorkThreadRun,
+)
 from app.r2.private_artifacts import (
     build_artifact_key,
     build_artifact_preview_key,
@@ -113,6 +118,7 @@ _ACTIVE_STATUSES = (
     WorkRunStatus.RESERVED.value,
     WorkRunStatus.QUEUED.value,
     WorkRunStatus.RUNNING.value,
+    WorkRunStatus.WAITING_FOR_USER.value,
     WorkRunStatus.VALIDATING.value,
     WorkRunStatus.STORING.value,
     WorkRunStatus.CANCELLING.value,
@@ -941,6 +947,7 @@ async def cancel_run(session: AsyncSession, run: WorkRun) -> WorkRun:
         WorkRunStatus.ACCEPTED.value,
         WorkRunStatus.RESERVED.value,
         WorkRunStatus.QUEUED.value,
+        WorkRunStatus.WAITING_FOR_USER.value,
     ):
         run.status = WorkRunStatus.CANCELLED.value
         run.stage = "cancelled"
@@ -966,6 +973,17 @@ async def cancel_run(session: AsyncSession, run: WorkRun) -> WorkRun:
         kind="cancelled",
         status="cancelled",
     )
+    pending_input_requests = (
+        await session.exec(
+            select(WorkHumanInputRequest).where(
+                WorkHumanInputRequest.work_run_id == run.id,
+                WorkHumanInputRequest.status == "pending",
+            )
+        )
+    ).all()
+    for input_request in pending_input_requests:
+        input_request.status = "cancelled"
+        session.add(input_request)
     session.add(run)
     if ledger:
         session.add(ledger)

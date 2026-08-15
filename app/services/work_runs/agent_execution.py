@@ -30,7 +30,13 @@ from app.db.models import (
     WorkRunPolicy,
     utcnow_naive,
 )
-from app.db.work_agent_models import WorkPlan, WorkThread, WorkThreadMessage, WorkThreadRun
+from app.db.work_agent_models import (
+    WorkHumanInputRequest,
+    WorkPlan,
+    WorkThread,
+    WorkThreadMessage,
+    WorkThreadRun,
+)
 from app.r2.private_artifacts import (
     build_artifact_key,
     build_artifact_preview_key,
@@ -59,6 +65,14 @@ from app.services.work_runs.generated_artifacts import (
     generated_artifact_references,
     plan_expects_artifacts,
 )
+from app.services.work_runs.human_input import (
+    ASK_USER_TOOL,
+    MAX_CLARIFICATION_ROUNDS,
+    answered_request_to_resume,
+    clarification_round_count,
+    parse_ask_user_call,
+    pause_for_human_input,
+)
 from app.services.work_runs.normalization import NormalizationUsage, normalization_usage
 from app.services.work_threads.history import bounded_thread_history
 
@@ -67,7 +81,9 @@ AGENT_MODEL = "gpt-5.6-luna"
 MAX_AGENT_ATTEMPTS = 2
 MAX_RESULT_REVIEWS = 2
 MAX_STEERING_RESTARTS = 2
-ESTIMATED_DRAFT_CALLS = MAX_AGENT_ATTEMPTS + MAX_STEERING_RESTARTS
+ESTIMATED_DRAFT_CALLS = (
+    MAX_AGENT_ATTEMPTS + MAX_STEERING_RESTARTS + MAX_CLARIFICATION_ROUNDS
+)
 ESTIMATED_WEB_SEARCH_CALLS = 4 * ESTIMATED_DRAFT_CALLS
 ESTIMATED_FILE_SEARCH_CALLS = 4 * ESTIMATED_DRAFT_CALLS
 FILE_SEARCH_CALL_COST_USD = Decimal("0.002500")
@@ -98,7 +114,9 @@ _EXECUTOR_PROMPT = (
     "every requested deliverable file, and do not cite temporary previews or rendered "
     "images unless the user requested them as deliverables. Create "
     "files only when requested or when the approved expected output requires one. Lead "
-    "with the deliverable."
+    "with the deliverable. Use ask_user only when one missing fact materially changes "
+    "correctness, evidence, cost, or a consequential action; otherwise proceed with a "
+    "clearly labelled reasonable assumption. Never ask for credentials or secrets."
 )
 _REVIEWER_PROMPT = (
     "Review a draft Work result against the user's request, approved expected outputs, "
@@ -148,6 +166,12 @@ class PreparedCodeInterpreter:
 ProviderResponseObserver = Callable[[str, Any], Awaitable[None]]
 ExecutionPhaseObserver = Callable[[str, int], Awaitable[None]]
 SteeringConsumer = Callable[[], Awaitable[str | None]]
+HumanInputHandler = Callable[[Any], Awaitable[bool]]
+ResumeObserver = Callable[[Any], Awaitable[None]]
+
+
+class WorkRunAwaitingUser(Exception):
+    pass
 
 
 def _tool_call_counts(response: Any) -> tuple[int, int]:
@@ -308,7 +332,25 @@ async def _generate_draft(
     request_payload: dict[str, object],
     tools: list[dict[str, object]],
     revision_feedback: str | None,
+    resume_request: WorkHumanInputRequest | None = None,
 ) -> Any:
+    if resume_request is not None:
+        return await _create_provider_response(
+            client,
+            model=AGENT_MODEL,
+            previous_response_id=resume_request.provider_response_id,
+            input=[
+                {
+                    "type": "function_call_output",
+                    "call_id": resume_request.provider_call_id,
+                    "output": resume_request.answer or "",
+                }
+            ],
+            tools=tools,
+            max_output_tokens=6000,
+            reasoning={"effort": "medium"},
+            store=True,
+        )
     developer_text = _EXECUTOR_PROMPT
     if revision_feedback:
         developer_text += (
@@ -430,6 +472,9 @@ async def _generate_validated_result(
     consume_steering: SteeringConsumer | None = None,
     evidence_documents: Sequence[Any] = (),
     provider_file_document_ids: Mapping[str, str] | None = None,
+    resume_request: WorkHumanInputRequest | None = None,
+    observe_resume: ResumeObserver | None = None,
+    handle_human_input: HumanInputHandler | None = None,
 ) -> ValidatedAgentResult:
     revision_feedback: str | None = None
     review_count = 0
@@ -451,9 +496,14 @@ async def _generate_validated_result(
             request_payload=request_payload,
             tools=tools,
             revision_feedback=revision_feedback,
+            resume_request=resume_request if generation_count == 0 else None,
         )
         generation_count += 1
         await observe_response(f"draft_{generation_count}", response)
+        if resume_request is not None and generation_count == 1 and observe_resume:
+            await observe_resume(response)
+        if handle_human_input is not None and await handle_human_input(response):
+            raise WorkRunAwaitingUser
         steering = (
             await consume_steering()
             if (
@@ -606,7 +656,7 @@ async def _reserve_budget(
     )
     estimated_cost += estimated_file_search_cost
     estimated_code_interpreter_cost = (
-        CODE_INTERPRETER_CONTAINER_COST_USD
+        CODE_INTERPRETER_CONTAINER_COST_USD * (MAX_CLARIFICATION_ROUNDS + 1)
         if code_interpreter_enabled
         else Decimal("0")
     )
@@ -1148,23 +1198,37 @@ async def process_agentic_run(
     code_interpreter_enabled = artifact_requested or any(
         not document.openai_vector_store_id for document in documents
     )
-    estimated_cost, estimated_usage = await _reserve_budget(
-        session,
-        run=run,
-        code_interpreter_enabled=code_interpreter_enabled,
-    )
-    operation = ProviderOperation(
-        work_run_id=run.id,
-        operation_key="general-agent-v1",
-        provider="openai",
-        operation_kind="agentic_task",
-        status="running",
-        attempt_count=1,
-        usage={"estimate": estimated_usage, "calls": []},
-        estimated_cost_usd=estimated_cost,
-        started_at=utcnow_naive(),
-    )
-    run.estimated_cost_usd = estimated_cost
+    resume_request = await answered_request_to_resume(session, run.id)
+    operation = (
+        await session.exec(
+            select(ProviderOperation).where(
+                ProviderOperation.work_run_id == run.id,
+                ProviderOperation.operation_key == "general-agent-v1",
+            )
+        )
+    ).first()
+    if operation is None:
+        estimated_cost, estimated_usage = await _reserve_budget(
+            session,
+            run=run,
+            code_interpreter_enabled=code_interpreter_enabled,
+        )
+        operation = ProviderOperation(
+            work_run_id=run.id,
+            operation_key="general-agent-v1",
+            provider="openai",
+            operation_kind="agentic_task",
+            status="running",
+            attempt_count=1,
+            usage={"estimate": estimated_usage, "calls": []},
+            estimated_cost_usd=estimated_cost,
+            started_at=utcnow_naive(),
+        )
+        run.estimated_cost_usd = estimated_cost
+    else:
+        operation.status = "running"
+        operation.attempt_count += 1
+        operation.completed_at = None
     run.stage = "working"
     run.progress_percent = 40
     session.add(operation)
@@ -1182,6 +1246,8 @@ async def process_agentic_run(
     tools: list[dict[str, object]] = [{"type": "web_search"}]
     if vector_store_ids:
         tools.append({"type": "file_search", "vector_store_ids": vector_store_ids})
+    if await clarification_round_count(session, run.id) < 2:
+        tools.append(ASK_USER_TOOL)
     client = AsyncOpenAI()
     container_id: str | None = None
     provider_file_document_ids: Mapping[str, str] = {}
@@ -1196,7 +1262,10 @@ async def process_agentic_run(
             prepared_container.provider_file_document_ids
         )
         tools.append({"type": "code_interpreter", "container": container_id})
-        operation.actual_cost_usd = CODE_INTERPRETER_CONTAINER_COST_USD
+        operation.actual_cost_usd = (
+            Decimal(operation.actual_cost_usd or 0)
+            + CODE_INTERPRETER_CONTAINER_COST_USD
+        )
         run.actual_cost_usd = (
             Decimal(run.actual_cost_usd or 0)
             + CODE_INTERPRETER_CONTAINER_COST_USD
@@ -1351,17 +1420,58 @@ async def process_agentic_run(
             run=run,
         )
 
-    try:
-        validated = await _generate_validated_result(
-            client=client,
-            request_payload=request_payload,
-            tools=tools,
-            observe_response=observe_response,
-            observe_phase=observe_phase,
-            consume_steering=consume_steering,
-            evidence_documents=documents,
-            provider_file_document_ids=provider_file_document_ids,
+    async def observe_resume(_response: Any) -> None:
+        if resume_request is None or resume_request.resumed_at is not None:
+            return
+        resume_request.status = "resumed"
+        resume_request.resumed_at = utcnow_naive()
+        session.add(resume_request)
+        await session.commit()
+
+    async def handle_human_input(response: Any) -> bool:
+        try:
+            call = parse_ask_user_call(response)
+        except ValueError as exc:
+            raise service.WorkRunExecutionError(
+                WorkRunErrorCode.VALIDATION_FAILED,
+                str(exc),
+            ) from exc
+        if call is None:
+            return False
+        if thread is None:
+            raise service.WorkRunExecutionError(
+                WorkRunErrorCode.INTERNAL_ERROR,
+                "human input requires a Work thread",
+            )
+        await finish_active_activity_events(session, run)
+        operation.status = "waiting_for_user"
+        session.add(operation)
+        await pause_for_human_input(
+            session,
+            run=run,
+            thread=thread,
+            call=call,
         )
+        await service._publish(redis, run, "work.input_required")
+        return True
+
+    try:
+        try:
+            validated = await _generate_validated_result(
+                client=client,
+                request_payload=request_payload,
+                tools=tools,
+                observe_response=observe_response,
+                observe_phase=observe_phase,
+                consume_steering=consume_steering,
+                evidence_documents=documents,
+                provider_file_document_ids=provider_file_document_ids,
+                resume_request=resume_request,
+                observe_resume=observe_resume,
+                handle_human_input=handle_human_input,
+            )
+        except WorkRunAwaitingUser:
+            return
         evidence = build_work_evidence(
             validated.response,
             documents=documents,
@@ -1389,7 +1499,7 @@ async def process_agentic_run(
     result = validated.content
     response = validated.response
     operation.status = "succeeded"
-    operation.attempt_count = validated.generation_count
+    operation.attempt_count += max(validated.generation_count - 1, 0)
     operation.provider_response_id = getattr(response, "id", None)
     operation.provider_request_id = service._provider_request_id(response)
     operation.usage = {

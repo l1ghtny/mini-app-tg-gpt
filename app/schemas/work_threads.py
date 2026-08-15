@@ -76,6 +76,20 @@ class SendWorkMessageRequest(BaseModel):
         return values
 
 
+class AnswerWorkHumanInputRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("answer")
+    @classmethod
+    def normalize_answer(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("answer cannot be blank")
+        return value
+
+
 class WorkPlanStepResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -123,6 +137,19 @@ class WorkThreadDocumentResponse(BaseModel):
     status: str
 
 
+class WorkHumanInputRequestResponse(BaseModel):
+    id: uuid.UUID
+    work_run_id: uuid.UUID
+    round: int = Field(ge=1, le=2)
+    status: Literal["pending", "answered", "resumed", "cancelled"]
+    question: str
+    reason: str | None
+    answer: str | None
+    created_at: datetime
+    answered_at: datetime | None
+    resumed_at: datetime | None
+
+
 class WorkThreadSummaryResponse(BaseModel):
     id: uuid.UUID
     title: str
@@ -141,6 +168,9 @@ class WorkThreadResponse(WorkThreadSummaryResponse):
     messages: list[WorkThreadMessageResponse]
     plan: WorkPlanResponse | None
     runs: list[WorkRunResponse]
+    human_input_requests: list[WorkHumanInputRequestResponse] = Field(
+        default_factory=list
+    )
 
 
 class WorkThreadListResponse(BaseModel):

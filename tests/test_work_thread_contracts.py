@@ -125,6 +125,7 @@ async def test_thread_response_exposes_document_names_in_context_order() -> None
                 SimpleNamespace(all=lambda: []),
                 SimpleNamespace(first=lambda: None),
                 SimpleNamespace(all=lambda: []),
+                SimpleNamespace(all=lambda: []),
                 SimpleNamespace(all=lambda: documents),
             ]
         ),

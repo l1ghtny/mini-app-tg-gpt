@@ -15,6 +15,7 @@ class WorkRunStatus(StrEnum):
     RESERVED = "reserved"
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING_FOR_USER = "waiting_for_user"
     VALIDATING = "validating"
     STORING = "storing"
     SUCCEEDED = "succeeded"
@@ -94,6 +95,7 @@ _WORK_RUN_DEFINITIONS = {
             "waiting_for_worker",
             "loading_sources",
             "working",
+            "waiting_for_user",
             "completed",
             "cancelling",
             "cancelled",
@@ -193,9 +195,17 @@ _ALLOWED_STATUS_TRANSITIONS = {
     ),
     WorkRunStatus.RUNNING: frozenset(
         {
+            WorkRunStatus.WAITING_FOR_USER,
             WorkRunStatus.VALIDATING,
             WorkRunStatus.SUCCEEDED,
             WorkRunStatus.CANCELLING,
+            WorkRunStatus.FAILED,
+        }
+    ),
+    WorkRunStatus.WAITING_FOR_USER: frozenset(
+        {
+            WorkRunStatus.QUEUED,
+            WorkRunStatus.CANCELLED,
             WorkRunStatus.FAILED,
         }
     ),

@@ -41,6 +41,7 @@ from app.schemas.work_runs import (
     WorkRunResponse,
 )
 from app.schemas.work_threads import (
+    AnswerWorkHumanInputRequest,
     ApproveWorkPlanRequest,
     CreateWorkFollowUpRequest,
     CreateWorkThreadRequest,
@@ -53,6 +54,7 @@ from app.schemas.work_threads import (
     WorkThreadResponse,
 )
 from app.services.work_runs import service
+from app.services.work_runs import human_input as human_input_service
 from app.services.work_runs.artifact_delivery import (
     ArtifactDisposition,
     InvalidArtifactDeliveryToken,
@@ -73,6 +75,7 @@ _TERMINAL = {
     WorkRunStatus.CANCELLED,
     WorkRunStatus.REFUNDED,
 }
+_STREAM_PAUSED = {WorkRunStatus.WAITING_FOR_USER}
 
 
 def _artifact_delivery_url(
@@ -231,6 +234,38 @@ async def send_work_thread_message(
         thread=thread,
         request=payload,
         client_request_id=idempotency_key,
+    )
+    return await _conversation_turn_response(
+        session=session,
+        redis=redis,
+        thread=thread,
+        run=run,
+    )
+
+
+@work_runs.post(
+    "/work-runs/{run_id}/human-input/{request_id}/answer",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=WorkConversationTurnResponse,
+)
+async def answer_work_human_input(
+    run_id: uuid.UUID,
+    request_id: uuid.UUID,
+    payload: AnswerWorkHumanInputRequest,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=128
+    ),
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+):
+    _, run, thread = await human_input_service.answer_human_input(
+        session,
+        user_id=current_user.id,
+        run_id=run_id,
+        request_id=request_id,
+        answer=payload.answer,
+        idempotency_key=idempotency_key,
     )
     return await _conversation_turn_response(
         session=session,
@@ -515,7 +550,7 @@ async def stream_work_run(
             "event": "snapshot",
             "data": snapshot.model_dump_json(),
         }
-        if snapshot.status in _TERMINAL:
+        if snapshot.status in _TERMINAL or snapshot.status in _STREAM_PAUSED:
             return
         iterator = bus.read_work(str(run_id), last_event_id)
         while not await request.is_disconnected():
@@ -526,7 +561,12 @@ async def stream_work_run(
                 "event": event_type,
                 "data": json.dumps(fields, separators=(",", ":")),
             }
-            if event_type in {"work.done", "work.error", "work.cancelled"}:
+            if event_type in {
+                "work.done",
+                "work.error",
+                "work.cancelled",
+                "work.input_required",
+            }:
                 return
 
     return EventSourceResponse(events())
