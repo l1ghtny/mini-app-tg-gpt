@@ -1029,3 +1029,15 @@ Deploy and canary the browser-ready authentication foundation across the backend
 1. Commit and push the persisted 512 MiB bot-worker limit, then confirm the new default-branch trigger starts exactly one `LightnyReleaseFlow` run and the legacy builds remain idle.
 2. Runtime-verify that triggered run, including both Rollouts, all workers, both CronJobs, and public health endpoints.
 3. Implement beta Phase 1 guardrails before provisioning shared-production-data beta workloads.
+## 2026-08-15 Work activity schema expansion
+
+- Added the empty `work_run_activity_event` table through an additive migration
+  on the production release branch before beta code begins reading or writing it.
+- No existing table, column, index, constraint, or row is changed.
+- This deliberately keeps the beta lane's shared-database guard intact: beta
+  verifies the production schema head and never runs migrations itself.
+
+### Next
+
+1. Complete the production migration release.
+2. Rerun the coordinated beta Work activity timeline release and verify it live.
