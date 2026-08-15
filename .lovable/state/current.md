@@ -1,5 +1,22 @@
 # Current State
 
+## 2026-08-15 shared Work clarification schema
+
+- Added only migration `xh5c6d7e8f9`, which creates the durable Work human-input
+  table after the already deployed activity-timeline head.
+- The migration does not alter or delete existing tables, columns, Work runs,
+  artifacts, conversations, billing rows, or production history.
+- Database constraints cap clarification at two rounds and allow only one
+  pending question per Work run.
+- Runtime behavior remains beta-only; this production commit exists solely so
+  the shared PostgreSQL schema is safe before the beta runtime rolls out.
+
+### Next steps
+
+1. Run the normal production migration pipeline and verify Alembic reaches
+   `xh5c6d7e8f9`.
+2. Only then deploy the coordinated beta backend and frontend runtime commits.
+
 ## 2026-08-11 production R2 stream cleanup
 
 - Centralized R2 response-body and client-context cleanup for normal stream

@@ -26,10 +26,11 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xg4b5c6d7e8"
+    assert scripts.get_current_head() == "xh5c6d7e8f9"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
+    assert scripts.get_revision("xh5c6d7e8f9").down_revision == "xg4b5c6d7e8"
 
 
 def test_agentic_work_migration_is_forward_compatible() -> None:
@@ -69,6 +70,18 @@ def test_work_activity_migration_is_additive() -> None:
     assert migration.down_revision == "xf3a4b5c6d7e"
     assert "create table work_run_activity_event" in sql
     assert "foreign key(work_run_id) references work_run (id) on delete cascade" in sql
+    assert "alter table" not in sql
+    assert "drop table" not in sql
+    assert "drop column" not in sql
+
+
+def test_human_input_migration_is_additive() -> None:
+    migration, sql = _render_upgrade(
+        "migrations.versions.xh5c6d7e8f9_add_work_human_input_requests"
+    )
+
+    assert migration.down_revision == "xg4b5c6d7e8"
+    assert "create table work_human_input_request" in sql
     assert "alter table" not in sql
     assert "drop table" not in sql
     assert "drop column" not in sql
