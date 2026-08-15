@@ -1,5 +1,31 @@
 # Current State
 
+## 2026-08-15 reasoning event Redis transport fix
+
+### Root cause
+
+- The first live OpenAI reasoning test generated normally, but publishing its
+  `reasoning.summary.done` event failed because Redis Streams reject Python
+  boolean field values such as `truncated: false`.
+- `RedisEventBus._normalize_event_value` incorrectly returned booleans unchanged
+  because `bool` is a subclass of `int` in Python.
+
+### Implemented
+
+- Normalize top-level event booleans to Redis-safe integer values at the shared
+  transport boundary. Nested payloads remain compact JSON.
+- Extended the event-bus regression to cover false, true, nested booleans,
+  bytes, collections, and omitted `None` values.
+
+### Next steps
+
+1. Deploy the backend beta fix and retry the exact failed chat.
+
+### Validation
+
+- Event transport and reasoning activity suites: 10 passed.
+- Ruff, compileall, and diff whitespace checks passed.
+
 ## 2026-08-15 shared reasoning activity contract
 
 ### Objective

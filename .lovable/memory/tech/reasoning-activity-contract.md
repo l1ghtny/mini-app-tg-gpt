@@ -31,5 +31,8 @@ stable product copy and must not become the collapsed UI label.
 - Google `step.start.step.summary` can contain text that never arrives as a
   later delta.
 - New deltas after a completed segment must reactivate the frontend activity.
+- Redis Stream field values do not accept Python booleans. Keep event metadata
+  typed in service code, and rely on `RedisEventBus` to encode top-level booleans
+  as `0` or `1` at the transport boundary.
 - Keep stable localized labels in the frontend; expanded detail may contain the
   provider summary in the language requested by the user.

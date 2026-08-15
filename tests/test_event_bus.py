@@ -36,6 +36,9 @@ async def test_publish_normalizes_nested_payloads_and_omits_none():
             "url": "https://cdn.example/image.png",
             "image": {"id": "asset-1", "status": "active"},
             "partials": ["a", "b"],
+            "truncated": False,
+            "complete": True,
+            "metadata": {"visible": True},
             "expires_at": None,
             "raw": b"bytes-value",
         },
@@ -49,8 +52,13 @@ async def test_publish_normalizes_nested_payloads_and_omits_none():
         "url": "https://cdn.example/image.png",
         "image": '{"id":"asset-1","status":"active"}',
         "partials": '["a","b"]',
+        "truncated": 0,
+        "complete": 1,
+        "metadata": '{"visible":true}',
         "raw": "bytes-value",
     }
+    assert type(published["truncated"]) is int
+    assert type(published["complete"]) is int
     assert redis.expire_calls
 
 

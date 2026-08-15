@@ -20,7 +20,9 @@ class RedisEventBus:
 
     @staticmethod
     def _normalize_event_value(value: Any) -> str | int | float:
-        if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (str, int, float)):
             return value
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="replace")
