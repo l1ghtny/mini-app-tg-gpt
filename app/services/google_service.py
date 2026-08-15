@@ -32,6 +32,8 @@ STYLE_GUIDE = (
     "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
     "- Use fenced code blocks for code.\n"
     "- Use standard [text](url) links.\n"
+    "Use the language of the user's latest message for the reply and any visible thought summary, "
+    "unless the user explicitly asks for another language.\n"
     "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
 )
 

@@ -1,5 +1,19 @@
 # Current State
 
+## 2026-08-15 Google visible reasoning language contract
+
+- Google interaction thought summaries remain provider-authored detail, not a
+  product-controlled activity title.
+- The Google system style contract now requires the reply and any visible
+  thought summary to follow the language of the user's latest message unless
+  the user explicitly requests another language.
+- A focused contract test protects this instruction without requiring a live
+  Google request or database connection.
+- Frontend follow-up: use stable localized product copy for the collapsed
+  reasoning control and keep the provider summary inside expanded detail.
+- Next: publish backend and frontend beta commits together, then verify the
+  historical Gemini message and a newly generated cross-language response.
+
 ## 2026-07-31 backend health restart loop stopped
 
 - Root cause: Argo applied the new HTTP health probes to backend image `251`,
