@@ -25,11 +25,13 @@
 
 ### Next steps
 
-1. Apply `xh5c6d7e8f9` through the production migration pipeline before the beta
-   runtime rollout because production and beta share PostgreSQL.
-2. Deploy the coordinated backend and frontend beta commits.
-3. Verify a real question/answer/resume round after beta allowance is available;
+1. Production release `#37` applied `xh5c6d7e8f9`; beta image `beta-118`
+   deployed backend commit `55667df` with all build, schema, deploy, and health
+   jobs successful.
+2. Verify a real question/answer/resume round after beta allowance is available;
    do not bypass the configured per-user beta quota.
+3. Continue the conversation-native roadmap with queued user steering for an
+   already-running Work turn.
 
 ## 2026-08-15 durable Work execution timeline
 
