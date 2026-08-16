@@ -1,5 +1,29 @@
 # Current State
 
+## 2026-08-16 Work multi-document provider guard
+
+- Diagnosed two beta Work failures where three attached documents produced three
+  independent OpenAI vector-store IDs, exceeding the Responses API limit of two
+  stores per file-search tool.
+- Work now keeps file search for one or two stores and routes all attached files
+  through the existing Code Interpreter container when the store count is higher.
+  No source document is silently dropped and the extra container cost is included
+  in the existing pre-run budget reservation.
+- Added regressions for the normal two-store path and the three-document fallback.
+
+### Validation
+
+- 59 focused Work execution, lifecycle, provider-operation, telemetry,
+  clarification, activity, and thread-contract tests pass.
+- Ruff, compileall, and diff whitespace checks pass for the focused slice.
+
+### Next steps
+
+1. Verify one three-document Work task on beta after deployment and confirm that
+   every filename is represented in the result evidence.
+2. Consider consolidating future document indexing into a bounded shared vector
+   store if file-search quality or Code Interpreter cost warrants it.
+
 ## 2026-08-16 Work allowance visibility and Smooth beta capacity
 
 - Added an optional `subscription_tier.monthly_work_runs` entitlement. A null

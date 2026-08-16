@@ -365,6 +365,41 @@ def test_web_search_annotations_become_visible_source_links() -> None:
     )
 
 
+def test_document_tool_plan_keeps_two_vector_stores_on_file_search() -> None:
+    documents = [
+        SimpleNamespace(openai_vector_store_id="vs-2"),
+        SimpleNamespace(openai_vector_store_id="vs-1"),
+    ]
+
+    vector_store_ids, code_interpreter_enabled = (
+        agent_execution._document_tool_plan(
+            documents,
+            artifact_requested=False,
+        )
+    )
+
+    assert vector_store_ids == ["vs-1", "vs-2"]
+    assert code_interpreter_enabled is False
+
+
+def test_document_tool_plan_preserves_three_documents_via_code_interpreter() -> None:
+    documents = [
+        SimpleNamespace(openai_vector_store_id="vs-1"),
+        SimpleNamespace(openai_vector_store_id="vs-2"),
+        SimpleNamespace(openai_vector_store_id="vs-3"),
+    ]
+
+    vector_store_ids, code_interpreter_enabled = (
+        agent_execution._document_tool_plan(
+            documents,
+            artifact_requested=False,
+        )
+    )
+
+    assert vector_store_ids == []
+    assert code_interpreter_enabled is True
+
+
 @pytest.mark.asyncio
 async def test_code_interpreter_stages_a_source_without_provider_file_id(
     monkeypatch: pytest.MonkeyPatch,

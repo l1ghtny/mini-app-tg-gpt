@@ -87,6 +87,7 @@ ESTIMATED_DRAFT_CALLS = (
 ESTIMATED_WEB_SEARCH_CALLS = 4 * ESTIMATED_DRAFT_CALLS
 ESTIMATED_FILE_SEARCH_CALLS = 4 * ESTIMATED_DRAFT_CALLS
 FILE_SEARCH_CALL_COST_USD = Decimal("0.002500")
+MAX_FILE_SEARCH_VECTOR_STORES = 2
 CODE_INTERPRETER_CONTAINER_COST_USD = Decimal("0.030000")
 _EXECUTOR_PROMPT = (
     "Complete the approved Work task. Return the requested deliverable itself, not "
@@ -172,6 +173,32 @@ ResumeObserver = Callable[[Any], Awaitable[None]]
 
 class WorkRunAwaitingUser(Exception):
     pass
+
+
+def _document_tool_plan(
+    documents: Sequence[Any],
+    *,
+    artifact_requested: bool,
+) -> tuple[list[str], bool]:
+    vector_store_ids = sorted(
+        {
+            document.openai_vector_store_id
+            for document in documents
+            if document.openai_vector_store_id
+        }
+    )
+    exceeds_file_search_limit = (
+        len(vector_store_ids) > MAX_FILE_SEARCH_VECTOR_STORES
+    )
+    file_search_vector_store_ids = (
+        [] if exceeds_file_search_limit else vector_store_ids
+    )
+    code_interpreter_enabled = (
+        artifact_requested
+        or exceeds_file_search_limit
+        or any(not document.openai_vector_store_id for document in documents)
+    )
+    return file_search_vector_store_ids, code_interpreter_enabled
 
 
 def _tool_call_counts(response: Any) -> tuple[int, int]:
@@ -1195,8 +1222,9 @@ async def process_agentic_run(
         return
     expected_outputs = plan.expected_outputs if plan else []
     artifact_requested = plan_expects_artifacts(expected_outputs)
-    code_interpreter_enabled = artifact_requested or any(
-        not document.openai_vector_store_id for document in documents
+    file_search_vector_store_ids, code_interpreter_enabled = _document_tool_plan(
+        documents,
+        artifact_requested=artifact_requested,
     )
     resume_request = await answered_request_to_resume(session, run.id)
     operation = (
@@ -1236,16 +1264,14 @@ async def process_agentic_run(
     await session.commit()
     await service._publish(redis, run, "work.stage")
 
-    vector_store_ids = sorted(
-        {
-            document.openai_vector_store_id
-            for document in documents
-            if document.openai_vector_store_id
-        }
-    )
     tools: list[dict[str, object]] = [{"type": "web_search"}]
-    if vector_store_ids:
-        tools.append({"type": "file_search", "vector_store_ids": vector_store_ids})
+    if file_search_vector_store_ids:
+        tools.append(
+            {
+                "type": "file_search",
+                "vector_store_ids": file_search_vector_store_ids,
+            }
+        )
     if await clarification_round_count(session, run.id) < 2:
         tools.append(ASK_USER_TOOL)
     client = AsyncOpenAI()
