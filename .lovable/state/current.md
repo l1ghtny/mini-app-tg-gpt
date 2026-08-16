@@ -1,5 +1,33 @@
 # Current State
 
+## 2026-08-16 Work allowance visibility and Smooth beta capacity
+
+- Added an optional `subscription_tier.monthly_work_runs` entitlement. A null
+  value inherits the existing Work policy, while the private Smooth tier is set
+  to 250 turns per month. Per-run, active-run, and global daily cost guards are
+  unchanged.
+- Work capabilities now report current monthly usage, remaining turns, reset
+  time, active runs, and a machine-readable blocking reason.
+- Authoritative 402/409 errors carry the same usage snapshot and a concise
+  message, so clients can explain a race or stale-capability rejection.
+- The web app shows the allowance on the new-task surface, disables billable
+  start/send/retry actions before submission, and keeps a late backend
+  rejection visible inline.
+- Migration `xi6d7e8f9a0b` is additive and follows the clarification schema head.
+
+### Validation
+
+- 70 focused backend tests and Ruff checks pass after rebasing over the durable
+  activity and clarification slices.
+- 19 focused frontend tests, targeted ESLint, and the production Vite build
+  pass after rebasing over the clarification UI.
+
+### Next steps
+
+1. Exercise the previously blocked question/answer/resume acceptance case on
+   beta using the expanded Smooth allowance.
+2. Measure real Work cost per completed turn before defining public-tier limits.
+
 ## 2026-08-15 durable Work clarification
 
 - Added a strict provider-neutral `ask_user` function tool for material

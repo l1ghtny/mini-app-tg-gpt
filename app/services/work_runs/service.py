@@ -68,7 +68,9 @@ from app.schemas.work_runs import (
     WorkRunListResponse,
     WorkRunPlanResponse,
     WorkRunResponse,
+    WorkRunUsageResponse,
 )
+from app.services.subscription_check.entitlements import get_active_tier
 from app.services.work_runs.activity import (
     activity_response,
     finish_active_activity_events,
@@ -292,6 +294,13 @@ def _month_start() -> datetime:
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc).replace(tzinfo=None)
 
 
+def _next_month_start() -> datetime:
+    now = datetime.now(timezone.utc)
+    if now.month == 12:
+        return datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+    return datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+
+
 def _day_start() -> datetime:
     now = datetime.now(timezone.utc)
     return datetime(now.year, now.month, now.day, tzinfo=timezone.utc).replace(
@@ -303,8 +312,44 @@ def _gate() -> WorkRunDeploymentGate:
     return WorkRunDeploymentGate.from_env()
 
 
-def _work_error(code: WorkRunErrorCode, http_status: int) -> HTTPException:
-    return HTTPException(status_code=http_status, detail={"error_code": code.value})
+_WORK_ERROR_MESSAGES: dict[WorkRunErrorCode, str] = {
+    WorkRunErrorCode.DISABLED: "Work is not available right now.",
+    WorkRunErrorCode.USER_NOT_ALLOWED: "This account does not have access to Work.",
+    WorkRunErrorCode.KIND_NOT_SUPPORTED: "This type of Work task is not available.",
+    WorkRunErrorCode.INVALID_INPUT: "The task input is not valid.",
+    WorkRunErrorCode.DOCUMENTS_NOT_READY: "One or more source files are not ready.",
+    WorkRunErrorCode.ENTITLEMENT_DENIED: "The current subscription does not include this Work task.",
+    WorkRunErrorCode.ACTIVE_LIMIT_REACHED: "Another Work task is already running.",
+    WorkRunErrorCode.MONTHLY_ALLOWANCE_EXHAUSTED: "The monthly Work allowance has been used.",
+    WorkRunErrorCode.PER_RUN_BUDGET_EXCEEDED: "This task exceeds the per-task cost limit.",
+    WorkRunErrorCode.DAILY_BUDGET_EXCEEDED: "The daily Work budget has been used.",
+    WorkRunErrorCode.ENQUEUE_FAILED: "The task could not be queued.",
+    WorkRunErrorCode.PROVIDER_FAILED: "The model provider could not complete the task.",
+    WorkRunErrorCode.PROVIDER_AMBIGUOUS: "The model provider did not confirm the task result.",
+    WorkRunErrorCode.VALIDATION_FAILED: "The result did not pass validation.",
+    WorkRunErrorCode.STORAGE_FAILED: "Work file storage is not available.",
+    WorkRunErrorCode.CANCEL_TOO_LATE: "This task can no longer be cancelled.",
+    WorkRunErrorCode.REVISION_NOT_ALLOWED: "This result cannot be revised.",
+    WorkRunErrorCode.CANCELLED: "The task was cancelled.",
+    WorkRunErrorCode.INTERNAL_ERROR: "Work could not complete the task.",
+    WorkRunErrorCode.RETRY_NOT_ALLOWED: "This task cannot be retried.",
+}
+
+
+def _work_error(
+    code: WorkRunErrorCode,
+    http_status: int,
+    *,
+    usage: WorkRunUsageResponse | None = None,
+) -> HTTPException:
+    detail: dict[str, object] = {
+        "error_code": code.value,
+        "message": _WORK_ERROR_MESSAGES[code],
+        "retryable": False,
+    }
+    if usage is not None:
+        detail["usage"] = usage.model_dump(mode="json")
+    return HTTPException(status_code=http_status, detail=detail)
 
 
 async def _policy(session: AsyncSession, kind: WorkRunKind) -> WorkRunPolicy | None:
@@ -313,6 +358,66 @@ async def _policy(session: AsyncSession, kind: WorkRunKind) -> WorkRunPolicy | N
             select(WorkRunPolicy).where(WorkRunPolicy.kind == kind.value)
         )
     ).first()
+
+
+def _effective_monthly_allowance(
+    policy: WorkRunPolicy,
+    tier_monthly_work_runs: int | None,
+) -> int:
+    if tier_monthly_work_runs is not None and tier_monthly_work_runs > 0:
+        return tier_monthly_work_runs
+    return policy.monthly_allowance_per_user
+
+
+async def _usage_snapshot(
+    session: AsyncSession,
+    user: AppUser,
+    policy: WorkRunPolicy,
+) -> WorkRunUsageResponse:
+    active_count = (
+        await session.exec(
+            select(func.count())
+            .select_from(WorkRun)
+            .where(
+                WorkRun.user_id == user.id,
+                col(WorkRun.status).in_(_ACTIVE_STATUSES),
+            )
+        )
+    ).one()
+    monthly_count = (
+        await session.exec(
+            select(func.count())
+            .select_from(RequestLedger)
+            .where(
+                RequestLedger.user_id == user.id,
+                RequestLedger.feature == "work",
+                col(RequestLedger.state).in_((State.reserved, State.consumed)),
+                RequestLedger.created_at >= _month_start(),
+            )
+        )
+    ).one()
+    tier = await get_active_tier(session, user.id)
+    monthly_allowance = _effective_monthly_allowance(
+        policy,
+        tier.monthly_work_runs if tier is not None else None,
+    )
+    monthly_remaining = max(0, monthly_allowance - monthly_count)
+    if active_count >= policy.max_active_per_user:
+        blocking_reason = WorkRunErrorCode.ACTIVE_LIMIT_REACHED
+    elif monthly_remaining == 0:
+        blocking_reason = WorkRunErrorCode.MONTHLY_ALLOWANCE_EXHAUSTED
+    else:
+        blocking_reason = None
+    return WorkRunUsageResponse(
+        monthly_used=monthly_count,
+        monthly_allowance=monthly_allowance,
+        monthly_remaining=monthly_remaining,
+        monthly_resets_at=_next_month_start(),
+        active_runs=active_count,
+        max_active_runs=policy.max_active_per_user,
+        can_start=blocking_reason is None,
+        blocking_reason=blocking_reason,
+    )
 
 
 def _private_storage_ready() -> bool:
@@ -367,13 +472,12 @@ async def capabilities(
         definition.kind: definition for definition in definitions
     }
     selected = policy_by_kind.get(available[0].value) if available else None
+    usage = await _usage_snapshot(session, user, selected) if selected else None
     return WorkRunCapabilitiesResponse(
         enabled=bool(available),
         available_kinds=available,
         max_active_per_user=selected.max_active_per_user if selected else 0,
-        monthly_allowance_per_user=(
-            selected.monthly_allowance_per_user if selected else 0
-        ),
+        monthly_allowance_per_user=(usage.monthly_allowance if usage else 0),
         unavailable_reason=None if available else WorkRunErrorCode.DISABLED,
         plans=[
             WorkRunPlanResponse(
@@ -385,6 +489,7 @@ async def capabilities(
             )
             for kind in available
         ],
+        usage=usage,
     )
 
 
@@ -424,36 +529,18 @@ async def create_run(
             WorkRunErrorCode.KIND_NOT_SUPPORTED, status.HTTP_404_NOT_FOUND
         )
 
-    active_count = (
-        await session.exec(
-            select(func.count())
-            .select_from(WorkRun)
-            .where(
-                WorkRun.user_id == user.id, col(WorkRun.status).in_(_ACTIVE_STATUSES)
-            )
-        )
-    ).one()
-    if active_count >= policy.max_active_per_user:
+    usage = await _usage_snapshot(session, user, policy)
+    if usage.active_runs >= usage.max_active_runs:
         raise _work_error(
-            WorkRunErrorCode.ACTIVE_LIMIT_REACHED, status.HTTP_409_CONFLICT
+            WorkRunErrorCode.ACTIVE_LIMIT_REACHED,
+            status.HTTP_409_CONFLICT,
+            usage=usage,
         )
-
-    monthly_count = (
-        await session.exec(
-            select(func.count())
-            .select_from(RequestLedger)
-            .where(
-                RequestLedger.user_id == user.id,
-                RequestLedger.feature == "work",
-                col(RequestLedger.state).in_((State.reserved, State.consumed)),
-                RequestLedger.created_at >= _month_start(),
-            )
-        )
-    ).one()
-    if monthly_count >= policy.monthly_allowance_per_user:
+    if usage.monthly_remaining == 0:
         raise _work_error(
             WorkRunErrorCode.MONTHLY_ALLOWANCE_EXHAUSTED,
             status.HTTP_402_PAYMENT_REQUIRED,
+            usage=usage,
         )
 
     definition = get_work_run_definition(request.kind)

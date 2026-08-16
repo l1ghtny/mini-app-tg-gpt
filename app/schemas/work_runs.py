@@ -124,6 +124,17 @@ class WorkRunPlanResponse(BaseModel):
     steps: list[WorkRunPlanStep]
 
 
+class WorkRunUsageResponse(BaseModel):
+    monthly_used: int = Field(ge=0)
+    monthly_allowance: int = Field(ge=0)
+    monthly_remaining: int = Field(ge=0)
+    monthly_resets_at: datetime
+    active_runs: int = Field(ge=0)
+    max_active_runs: int = Field(ge=0)
+    can_start: bool
+    blocking_reason: WorkRunErrorCode | None = None
+
+
 class WorkRunCapabilitiesResponse(BaseModel):
     enabled: bool
     available_kinds: list[WorkRunKind]
@@ -131,6 +142,7 @@ class WorkRunCapabilitiesResponse(BaseModel):
     monthly_allowance_per_user: int
     unavailable_reason: WorkRunErrorCode | None = None
     plans: list[WorkRunPlanResponse] = Field(default_factory=list)
+    usage: WorkRunUsageResponse | None = None
 
 
 class SpreadsheetWorkRunResultSummary(BaseModel):
@@ -144,7 +156,9 @@ class SpreadsheetWorkRunResultSummary(BaseModel):
 
 class WorkRunErrorResponse(BaseModel):
     error_code: WorkRunErrorCode
+    message: str
     retryable: bool = False
+    usage: WorkRunUsageResponse | None = None
 
 
 class ReviseArtifactRequest(BaseModel):

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, UTC
 from enum import Enum
-from typing import Optional, Literal, List
+from typing import Optional, List
 from sqlalchemy import BigInteger, Column, UniqueConstraint, DateTime, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field, Relationship
@@ -39,6 +39,9 @@ class SubscriptionTier(SQLModel, table=True):
     monthly_docs: int = Field(default=0)
     monthly_deepsearch: int = Field(default=0)
     monthly_transcription_minutes: int = Field(default=0)
+    # NULL inherits the Work policy default. Private tiers can opt into a
+    # different allowance without changing the policy for every user.
+    monthly_work_runs: Optional[int] = Field(default=None, nullable=True)
     max_active_docs: int = Field(default=0)
     max_storage_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))
     max_file_size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))

@@ -26,11 +26,12 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xh5c6d7e8f9"
+    assert scripts.get_current_head() == "xi6d7e8f9a0b"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
     assert scripts.get_revision("xh5c6d7e8f9").down_revision == "xg4b5c6d7e8"
+    assert scripts.get_revision("xi6d7e8f9a0b").down_revision == "xh5c6d7e8f9"
 
 
 def test_agentic_work_migration_is_forward_compatible() -> None:
@@ -70,6 +71,17 @@ def test_human_input_migration_is_additive() -> None:
     assert migration.down_revision == "xg4b5c6d7e8"
     assert "create table work_human_input_request" in sql
     assert "drop table" not in sql
+
+
+def test_tier_work_allowance_migration_is_additive() -> None:
+    migration, sql = _render_upgrade(
+        "migrations.versions.xi6d7e8f9a0b_add_tier_work_allowance"
+    )
+
+    assert migration.down_revision == "xh5c6d7e8f9"
+    assert "add column monthly_work_runs" in sql
+    assert "monthly_work_runs = 250" in sql
+    assert "lower(name) = 'smooth tier'" in sql
     assert "drop column" not in sql
 
 

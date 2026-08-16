@@ -113,6 +113,7 @@ def test_capabilities_plan_is_additive_and_defaults_for_old_callers() -> None:
     )
 
     assert capabilities.plans == []
+    assert capabilities.usage is None
 
 
 def test_spreadsheet_result_summary_has_a_versioned_output_contract() -> None:

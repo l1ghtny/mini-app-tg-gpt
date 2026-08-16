@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 
 os.environ.setdefault("R2_BUCKET", "test-public-bucket")
 os.environ.setdefault("R2_ENDPOINT", "https://example.r2.cloudflarestorage.com")
@@ -15,7 +15,7 @@ os.environ.setdefault("R2_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret-key")
 
 from app.db.models import State
-from app.schemas.work_runs import ReviseArtifactRequest
+from app.schemas.work_runs import ReviseArtifactRequest, WorkRunUsageResponse
 from app.services.work_runs import service
 from app.services.work_runs.contracts import WorkRunErrorCode, WorkRunStatus
 
@@ -70,6 +70,38 @@ def _source_run(status: WorkRunStatus = WorkRunStatus.FAILED) -> SimpleNamespace
     )
 
 
+def test_tier_work_allowance_overrides_policy_default() -> None:
+    policy = SimpleNamespace(monthly_allowance_per_user=25)
+
+    assert service._effective_monthly_allowance(policy, None) == 25
+    assert service._effective_monthly_allowance(policy, 250) == 250
+
+
+def test_allowance_error_includes_machine_readable_usage() -> None:
+    usage = WorkRunUsageResponse.model_validate(
+        {
+            "monthly_used": 25,
+            "monthly_allowance": 25,
+            "monthly_remaining": 0,
+            "monthly_resets_at": "2026-09-01T00:00:00Z",
+            "active_runs": 0,
+            "max_active_runs": 1,
+            "can_start": False,
+            "blocking_reason": "work_run_monthly_allowance_exhausted",
+        }
+    )
+
+    error = service._work_error(
+        WorkRunErrorCode.MONTHLY_ALLOWANCE_EXHAUSTED,
+        status.HTTP_402_PAYMENT_REQUIRED,
+        usage=usage,
+    )
+
+    assert error.detail["message"] == "The monthly Work allowance has been used."
+    assert error.detail["usage"]["monthly_used"] == 25
+    assert error.detail["usage"]["monthly_remaining"] == 0
+
+
 @pytest.mark.asyncio
 async def test_retry_clones_validated_manifest_and_records_lineage(
     monkeypatch: pytest.MonkeyPatch,
@@ -120,7 +152,8 @@ async def test_retry_idempotency_key_cannot_be_reused_for_another_run() -> None:
         )
 
     assert error.value.status_code == 409
-    assert error.value.detail == {"error_code": WorkRunErrorCode.INVALID_INPUT.value}
+    assert error.value.detail["error_code"] == WorkRunErrorCode.INVALID_INPUT.value
+    assert error.value.detail["message"]
 
 
 @pytest.mark.asyncio
@@ -134,9 +167,8 @@ async def test_retry_rejects_non_terminal_run() -> None:
         )
 
     assert error.value.status_code == 409
-    assert error.value.detail == {
-        "error_code": WorkRunErrorCode.RETRY_NOT_ALLOWED.value
-    }
+    assert error.value.detail["error_code"] == WorkRunErrorCode.RETRY_NOT_ALLOWED.value
+    assert error.value.detail["message"]
 
 
 @pytest.mark.asyncio
@@ -152,7 +184,8 @@ async def test_cancellation_is_rejected_after_point_of_no_return(
         await service.cancel_run(_Session(), run)  # type: ignore[arg-type]
 
     assert error.value.status_code == 409
-    assert error.value.detail == {"error_code": WorkRunErrorCode.CANCEL_TOO_LATE.value}
+    assert error.value.detail["error_code"] == WorkRunErrorCode.CANCEL_TOO_LATE.value
+    assert error.value.detail["message"]
 
 
 @pytest.mark.asyncio
@@ -315,6 +348,5 @@ async def test_artifact_revision_rejects_non_successful_source_run(
         )
 
     assert error.value.status_code == 409
-    assert error.value.detail == {
-        "error_code": WorkRunErrorCode.REVISION_NOT_ALLOWED.value
-    }
+    assert error.value.detail["error_code"] == WorkRunErrorCode.REVISION_NOT_ALLOWED.value
+    assert error.value.detail["message"]
