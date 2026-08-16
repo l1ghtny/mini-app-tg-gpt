@@ -1,5 +1,27 @@
 # Current State
 
+## 2026-08-16 beta ingress stale-endpoint hotfix
+
+- Root cause: the dedicated AWG ingress controller used
+  `--watch-namespace-selector` while its route access was granted by a
+  namespace-scoped Role. The controller therefore attempted cluster-scoped
+  list/watch calls, received RBAC denials, and retained deleted beta-123 pod
+  endpoints after beta-124 rolled out.
+- Changed the controller to `--watch-namespace=gpt`, matching its intended
+  single-namespace scope and existing least-privilege Role.
+- Added public backend and frontend health checks to the beta deployment script
+  so a rollout fails if the real hostname is returning an ingress error.
+- The live DaemonSet was rolled safely across all four nodes. Public `/`,
+  `/health/ready`, and `/health.json` return HTTP 200, and fresh controller logs
+  contain no list/watch RBAC errors.
+
+### Next steps
+
+1. Keep the controller scoped to `gpt`; if it must serve multiple namespaces,
+   replace the Role with an intentionally reviewed ClusterRole before restoring
+   `--watch-namespace-selector`.
+2. Treat public hostname smoke checks as required proof for future beta deploys.
+
 ## 2026-08-16 Work multi-document provider guard
 
 - Diagnosed two beta Work failures where three attached documents produced three

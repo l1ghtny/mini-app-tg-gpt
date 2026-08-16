@@ -185,7 +185,7 @@ spec:
         - --configmap=$(POD_NAMESPACE)/nginx-ingress-awg-conf
         - --controller-class=k8s.io/ingress-nginx-awg
         - --ingress-class=public
-        - --watch-namespace-selector=kubernetes.io/metadata.name=gpt
+        - --watch-namespace=gpt
         - --election-id=ingress-controller-leader-awg
         - --update-status=false
         env:
