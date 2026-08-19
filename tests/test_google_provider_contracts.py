@@ -42,7 +42,7 @@ def test_resolve_image_settings_aligns_provider_and_rejects_explicit_mismatch():
 
     image_model, image_quality, image_size = _resolve_image_settings(request, conversation, request.model)
 
-    assert image_model == "gemini-3.1-flash-image-preview"
+    assert image_model == "gemini-3.1-flash-image"
     assert image_quality == ""
     assert image_size == "1k"
 
@@ -60,6 +60,18 @@ def test_resolve_image_settings_aligns_provider_and_rejects_explicit_mismatch():
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["error"] == "provider_mismatch"
+
+
+def test_google_message_schema_canonicalizes_retired_image_endpoint():
+    request = NewMessageRequest(
+        client_request_id=str(uuid.uuid4()),
+        role="user",
+        content=[MessageContent(type="text", value="hello")],
+        model="gemini-3.1-flash-lite",
+        image_model="gemini-3.1-flash-image-preview",
+    )
+
+    assert request.image_model == "gemini-3.1-flash-image"
 
 
 def test_openai_model_accepts_boolean_thinking_toggle_for_backward_compat():
@@ -105,4 +117,4 @@ async def test_update_conversation_settings_swaps_image_model_with_text_provider
         )
 
     assert updated.model == "gemini-3.1-flash-lite"
-    assert updated.image_model == "gemini-3.1-flash-image-preview"
+    assert updated.image_model == "gemini-3.1-flash-image"

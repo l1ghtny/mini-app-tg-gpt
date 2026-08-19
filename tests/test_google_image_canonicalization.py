@@ -32,14 +32,14 @@ async def test_google_image_usage_ignores_legacy_quality_aliases():
         session.add(
             TierImageModelLimit(
                 tier_id=tier.id,
-                image_model="gemini-3.1-flash-image-preview",
+                image_model="gemini-3.1-flash-image",
                 monthly_requests=-1,
             )
         )
         session.add(UserSubscription(user_id=user.id, tier_id=tier.id, status=SubscriptionStatus.active))
         session.add(
             ImageQualityPricing(
-                image_model="gemini-3.1-flash-image-preview",
+                image_model="gemini-3.1-flash-image",
                 quality="low",
                 credit_cost=99.0,
                 is_active=True,
@@ -47,8 +47,8 @@ async def test_google_image_usage_ignores_legacy_quality_aliases():
         )
         await session.commit()
 
-        legacy = await get_image_quality_pricing(session, "gemini-3.1-flash-image-preview", "low")
-        canonical = await get_image_quality_pricing(session, "gemini-3.1-flash-image-preview", "1k")
+        legacy = await get_image_quality_pricing(session, "gemini-3.1-flash-image", "low")
+        canonical = await get_image_quality_pricing(session, "gemini-3.1-flash-image", "1k")
         usage = await get_image_usage(session, user)
 
     await engine.dispose()
@@ -58,6 +58,6 @@ async def test_google_image_usage_ignores_legacy_quality_aliases():
     assert canonical.credit_cost == 2.0
 
     model_usage = next(
-        model for model in usage.models if model.model == "gemini-3.1-flash-image-preview"
+        model for model in usage.models if model.model == "gemini-3.1-flash-image"
     )
     assert [resolution.resolution for resolution in model_usage.resolutions] == ["512", "1k", "2k"]

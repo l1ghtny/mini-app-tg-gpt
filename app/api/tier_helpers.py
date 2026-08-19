@@ -16,7 +16,7 @@ from app.schemas.subscriptions import (
     TierMonthlyLimits,
     TierSubscribeResponse,
 )
-from app.services.model_registry import get_image_model_provider
+from app.services.model_registry import get_image_model_provider, is_supported_google_image_size
 from app.services.perplexity_features import build_perplexity_feature_access
 from app.services.subscription_check.realtime_check import check_tier
 
@@ -141,7 +141,10 @@ async def _load_image_pricing(session: AsyncSession) -> dict[str, list[ImageQual
 
     pricing_by_model: dict[str, list[ImageQualityPricing]] = {}
     for row in pricing_rows:
-        if get_image_model_provider(row.image_model) == "google" and row.quality not in {"512", "1k", "2k"}:
+        if (
+            get_image_model_provider(row.image_model) == "google"
+            and not is_supported_google_image_size(row.image_model, row.quality)
+        ):
             continue
         pricing_by_model.setdefault(row.image_model, []).append(row)
     return pricing_by_model

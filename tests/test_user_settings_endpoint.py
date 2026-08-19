@@ -68,14 +68,14 @@ async def test_user_settings_get_and_put():
         assert response.status_code == 200
         payload = response.json()
         assert payload["default_text_model"] == "gemini-3.5-flash"
-        assert payload["default_image_model"] == "gemini-3.1-flash-image-preview"
+        assert payload["default_image_model"] == "gemini-3.1-flash-image"
 
         # 3. Put mismatched models (should raise provider mismatch)
         response = await client.put(
             "/api/v1/user/settings",
             json={
                 "default_text_model": "gpt-5.5",
-                "default_image_model": "gemini-3-pro-image-preview"
+                "default_image_model": "gemini-3-pro-image"
             }
         )
         assert response.status_code == 400

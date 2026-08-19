@@ -1,5 +1,32 @@
 # Current State
 
+## 2026-08-19 stable Google image endpoints
+
+- Replaced the retired Google image preview endpoints with
+  `gemini-3.1-flash-image` and `gemini-3-pro-image` across active backend
+  registries, defaults, provider routing, settings, pricing, and entitlement
+  checks.
+- Kept compatibility aliases for existing clients and added a forward migration
+  that rewrites persisted defaults, conversations, ledgers, tier and usage-pack
+  limits, catalog rows, and pricing rows without reducing unlimited tier limits.
+- Google Flash retains 512/1k/2k choices. Google Pro exposes 1k/2k; legacy Pro
+  512 selections are normalized to 1k because the stable Pro endpoint does not
+  support 512 output.
+
+### Validation
+
+- 13 focused endpoint, provider-contract, pricing, and migration tests pass.
+- Python compilation, Alembic single-head validation, and diff whitespace checks
+  pass. Database-backed integration tests require the external test PostgreSQL
+  service and remain delegated to CI.
+
+### Next steps
+
+1. Verify image generation through both stable Google endpoints after the beta
+   and production deployment pipelines complete.
+2. Evaluate the newly released Google text models separately against the current
+   Gemini text-model mix before changing defaults.
+
 ## 2026-08-15 shared Work clarification schema
 
 - Added only migration `xh5c6d7e8f9`, which creates the durable Work human-input

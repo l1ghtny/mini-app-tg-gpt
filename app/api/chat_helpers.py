@@ -39,6 +39,7 @@ from app.services.background.image_deriver import (
 )
 from app.services.model_registry import (
     GOOGLE_THINKING_MODELS,
+    canonicalize_image_model,
     get_default_image_model_for_provider,
     get_image_model_provider,
     get_text_model_provider,
@@ -122,6 +123,8 @@ def _validate_or_align_image_model(
 ) -> str:
     if image_model is None:
         return get_default_image_model_for_provider(get_text_model_provider(model))
+
+    image_model = canonicalize_image_model(image_model)
 
     if explicit_image_model and not models_share_provider(model, image_model):
         raise HTTPException(
