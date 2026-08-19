@@ -368,7 +368,7 @@ async def test_google_auto_tool_choice_hands_off_image_generation_via_function_c
     assert interactions.calls[1]["input"][0]["call_id"] == "call-1"
 
     assert image_models.generate_content_calls
-    assert image_models.generate_content_calls[0]["model"] == "gemini-3.1-flash-image-preview"
+    assert image_models.generate_content_calls[0]["model"] == "gemini-3.1-flash-image"
     assert image_models.generate_content_calls[0]["contents"] == "cinematic cyberpunk cat poster, neon lighting"
     assert image_models.generate_content_calls[0]["config"]["response_modalities"] == ["IMAGE"]
     assert image_models.generate_content_calls[0]["config"]["image_config"] == {"image_size": "2K"}
@@ -493,7 +493,7 @@ async def test_google_auto_tool_choice_accepts_namespaced_image_function_call(mo
     assert interactions.calls
     assert interactions.calls[1]["input"][0]["call_id"] == "call-1"
     assert image_models.generate_content_calls
-    assert image_models.generate_content_calls[0]["model"] == "gemini-3.1-flash-image-preview"
+    assert image_models.generate_content_calls[0]["model"] == "gemini-3.1-flash-image"
     assert image_models.generate_content_calls[0]["contents"] == "fluffy white cat studio portrait"
     assert any(ev.get("type") == "image.ready" for ev in events)
     assert any(ev.get("type") == "done" for ev in events)
@@ -616,7 +616,7 @@ async def test_google_auto_tool_choice_collects_streamed_function_arguments(monk
 
     assert interactions.calls
     assert image_models.generate_content_calls
-    assert image_models.generate_content_calls[0]["model"] == "gemini-3.1-flash-image-preview"
+    assert image_models.generate_content_calls[0]["model"] == "gemini-3.1-flash-image"
     assert image_models.generate_content_calls[0]["contents"] == "wide cinematic forest with mist"
     assert any(ev.get("type") == "image.ready" for ev in events)
     assert any(ev.get("type") == "done" for ev in events)
@@ -813,7 +813,7 @@ def test_google_aiohttp_socks_aliases_map_to_connector_kwargs(
 
 def test_google_image_models_map_low_thinking_to_minimal():
     config = _generation_config_for_request(
-        model="gemini-3.1-flash-image-preview",
+        model="gemini-3.1-flash-image",
         thinking_enabled=False,
         reasoning_effort=None,
         image_size="1k",
@@ -822,3 +822,24 @@ def test_google_image_models_map_low_thinking_to_minimal():
     assert config["thinking_level"] == "low"
     assert config["thinking_summaries"] == "auto"
     assert config["image_config"] == {"image_size": "1K"}
+
+
+def test_stable_google_image_models_apply_model_specific_512_resolution():
+    flash_config = google_service._build_google_image_generate_content_config(
+        image_model="gemini-3.1-flash-image",
+        image_size="512",
+    )
+    pro_config = google_service._build_google_image_generate_content_config(
+        image_model="gemini-3-pro-image",
+        image_size="512",
+    )
+    pro_interaction_config = _generation_config_for_request(
+        model="gemini-3-pro-image",
+        thinking_enabled=False,
+        reasoning_effort=None,
+        image_size="512",
+    )
+
+    assert flash_config["image_config"] == {"image_size": "512"}
+    assert pro_config["image_config"] == {"image_size": "1K"}
+    assert pro_interaction_config["image_config"] == {"image_size": "1K"}

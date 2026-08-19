@@ -19,8 +19,8 @@ TextModelName = Literal[
 ImageModelName = Literal[
     "gpt-image-1.5",
     "gpt-image-2",
-    "gemini-3.1-flash-image-preview",
-    "gemini-3-pro-image-preview",
+    "gemini-3.1-flash-image",
+    "gemini-3-pro-image",
 ]
 
 ProviderName = Literal["openai", "google", "perplexity"]
@@ -45,8 +45,8 @@ TEXT_MODEL_PROVIDER: dict[str, ProviderName] = {
 IMAGE_MODEL_PROVIDER: dict[str, ImageProviderName] = {
     "gpt-image-1.5": "openai",
     "gpt-image-2": "openai",
-    "gemini-3.1-flash-image-preview": "google",
-    "gemini-3-pro-image-preview": "google",
+    "gemini-3.1-flash-image": "google",
+    "gemini-3-pro-image": "google",
 }
 
 DEFAULT_TEXT_MODEL_BY_PROVIDER: dict[ProviderName, str] = {
@@ -57,7 +57,7 @@ DEFAULT_TEXT_MODEL_BY_PROVIDER: dict[ProviderName, str] = {
 
 DEFAULT_IMAGE_MODEL_BY_PROVIDER: dict[ImageProviderName, str] = {
     "openai": "gpt-image-1.5",
-    "google": "gemini-3.1-flash-image-preview",
+    "google": "gemini-3.1-flash-image",
 }
 
 TEXT_PROVIDER_IMAGE_PROVIDER: dict[ProviderName, ImageProviderName] = {
@@ -67,7 +67,14 @@ TEXT_PROVIDER_IMAGE_PROVIDER: dict[ProviderName, ImageProviderName] = {
 }
 
 LEGACY_IMAGE_MODEL_REPLACEMENTS: dict[str, str] = {
-    "gemini-2.5-flash-image": "gemini-3.1-flash-image-preview",
+    "gemini-2.5-flash-image": "gemini-3.1-flash-image",
+    "gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
+    "gemini-3-pro-image-preview": "gemini-3-pro-image",
+}
+
+GOOGLE_IMAGE_SIZES_BY_MODEL: dict[str, tuple[str, ...]] = {
+    "gemini-3.1-flash-image": ("512", "1k", "2k"),
+    "gemini-3-pro-image": ("1k", "2k"),
 }
 
 LEGACY_TEXT_MODEL_REPLACEMENTS: dict[str, str] = {
@@ -117,6 +124,20 @@ for _bucket_name, _members in TEXT_USAGE_BUCKET_MEMBERS.items():
 
 def canonicalize_image_model(model_name: str) -> str:
     return LEGACY_IMAGE_MODEL_REPLACEMENTS.get(model_name, model_name)
+
+
+def canonicalize_google_image_size(model_name: str, image_size: str) -> str:
+    canonical_model = canonicalize_image_model(model_name)
+    normalized_size = (image_size or "").strip().lower()
+    if canonical_model == "gemini-3-pro-image" and normalized_size == "512":
+        return "1k"
+    return normalized_size
+
+
+def is_supported_google_image_size(model_name: str, image_size: str) -> bool:
+    canonical_model = canonicalize_image_model(model_name)
+    normalized_size = (image_size or "").strip().lower()
+    return normalized_size in GOOGLE_IMAGE_SIZES_BY_MODEL.get(canonical_model, ())
 
 
 def canonicalize_text_model(model_name: str) -> str:

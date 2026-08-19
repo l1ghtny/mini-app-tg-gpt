@@ -18,6 +18,7 @@ from app.services.model_registry import (
     DEFAULT_IMAGE_MODEL_BY_PROVIDER,
     DEFAULT_TEXT_MODEL_BY_PROVIDER,
     get_image_model_provider,
+    is_supported_google_image_size,
 )
 
 
@@ -84,7 +85,10 @@ async def get_models_catalog(session: AsyncSession) -> ModelsCatalogResponse:
 
     qualities_by_model: dict[str, list[ImageQualityPricing]] = {}
     for row in quality_rows:
-        if get_image_model_provider(row.image_model) == "google" and row.quality not in {"512", "1k", "2k"}:
+        if (
+            get_image_model_provider(row.image_model) == "google"
+            and not is_supported_google_image_size(row.image_model, row.quality)
+        ):
             continue
         qualities_by_model.setdefault(row.image_model, []).append(row)
 

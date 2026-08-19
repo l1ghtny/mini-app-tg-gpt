@@ -22,6 +22,7 @@ from app.services.reasoning_activity import (
 from app.services.model_registry import (
     GOOGLE_THINKING_MODELS,
     IMAGE_MODEL_PROVIDER,
+    canonicalize_google_image_size,
     canonicalize_image_model,
 )
 from app.db.database import engine
@@ -49,7 +50,7 @@ _SOCKS_PROXY_SCHEMES = {"socks4", "socks4a", "socks5", "socks5h"}
 _REMOTE_DNS_SOCKS_PROXY_SCHEMES = {"socks4a", "socks5h"}
 _GOOGLE_IMAGE_FUNCTION_NAME = "generate_image"
 _GOOGLE_IMAGE_SIZE_MAP = {
-    "512": "1K",
+    "512": "512",
     "1k": "1K",
     "2k": "2K",
 }
@@ -240,7 +241,8 @@ def _build_google_image_generate_content_config(
     config_kwargs: dict[str, Any] = {
         "response_modalities": ["IMAGE"],
     }
-    mapped_size = _GOOGLE_IMAGE_SIZE_MAP.get((image_size or "").strip().lower())
+    normalized_size = canonicalize_google_image_size(image_model, image_size or "")
+    mapped_size = _GOOGLE_IMAGE_SIZE_MAP.get(normalized_size)
     if mapped_size:
         config_kwargs["image_config"] = {"image_size": mapped_size}
     return config_kwargs
@@ -886,7 +888,7 @@ def _generation_config_for_request(
         config["thinking_level"] = thinking_level
         config["thinking_summaries"] = "auto"
 
-    normalized_size = (image_size or "").strip().lower()
+    normalized_size = canonicalize_google_image_size(model, image_size or "")
     if normalized_size:
         size_map = {"512": "512", "1k": "1K", "2k": "2K"}
         mapped_size = size_map.get(normalized_size)

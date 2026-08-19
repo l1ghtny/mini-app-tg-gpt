@@ -18,11 +18,11 @@ from app.services.model_registry import get_text_model_provider, models_share_pr
 def test_perplexity_models_use_openai_image_fallback():
     assert get_text_model_provider("sonar") == "perplexity"
     assert models_share_provider("sonar", "gpt-image-1.5") is True
-    assert models_share_provider("sonar", "gemini-3.1-flash-image-preview") is False
+    assert models_share_provider("sonar", "gemini-3.1-flash-image") is False
 
     assert _validate_or_align_image_model(
         model="sonar",
-        image_model="gemini-3.1-flash-image-preview",
+        image_model="gemini-3.1-flash-image",
         explicit_image_model=False,
     ) == "gpt-image-1.5"
 

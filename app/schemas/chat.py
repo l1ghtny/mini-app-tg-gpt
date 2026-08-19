@@ -3,7 +3,12 @@ from typing import List, Literal, Optional, Iterable, Union
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.services.model_registry import ImageModelName, TextModelName, canonicalize_text_model
+from app.services.model_registry import (
+    ImageModelName,
+    TextModelName,
+    canonicalize_image_model,
+    canonicalize_text_model,
+)
 
 AllowedModels = TextModelName
 AllowedImageModels = ImageModelName
@@ -106,6 +111,11 @@ class NewMessageRequest(BaseModel):
     def canonicalize_legacy_model(cls, value: object) -> object:
         return canonicalize_text_model(value) if isinstance(value, str) else value
 
+    @field_validator("image_model", mode="before")
+    @classmethod
+    def canonicalize_legacy_image_model(cls, value: object) -> object:
+        return canonicalize_image_model(value) if isinstance(value, str) else value
+
 
 class EditMessageRequest(BaseModel):
     content: str
@@ -126,6 +136,11 @@ class UpdateConversationSettingsRequest(BaseModel):
     def canonicalize_legacy_model(cls, value: object) -> object:
         return canonicalize_text_model(value) if isinstance(value, str) else value
 
+    @field_validator("image_model", mode="before")
+    @classmethod
+    def canonicalize_legacy_image_model(cls, value: object) -> object:
+        return canonicalize_image_model(value) if isinstance(value, str) else value
+
 
 class ConversationInfo(BaseModel):
     name: str
@@ -136,6 +151,11 @@ class ConversationInfo(BaseModel):
     image_quality: ImageQualitySetting
     image_size: ImageSizeSetting
     thinking: bool = True
+
+    @field_validator("image_model", mode="before")
+    @classmethod
+    def canonicalize_legacy_image_model(cls, value: object) -> object:
+        return canonicalize_image_model(value) if isinstance(value, str) else value
 
 
 class MessageCreated(BaseModel):

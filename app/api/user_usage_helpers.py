@@ -25,6 +25,7 @@ from app.services.model_registry import (
     get_image_model_provider,
     get_text_usage_bucket,
     get_text_usage_bucket_display_names,
+    is_supported_google_image_size,
     list_text_usage_bucket_models,
 )
 
@@ -186,7 +187,10 @@ async def get_image_usage(session: AsyncSession, user) -> UserImageUsageResponse
 
     pricing_by_model: dict[str, list[ImageQualityPricing]] = {}
     for row in pricing_rows:
-        if get_image_model_provider(row.image_model) == "google" and row.quality not in {"512", "1k", "2k"}:
+        if (
+            get_image_model_provider(row.image_model) == "google"
+            and not is_supported_google_image_size(row.image_model, row.quality)
+        ):
             continue
         pricing_by_model.setdefault(row.image_model, []).append(row)
 
