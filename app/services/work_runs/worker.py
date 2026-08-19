@@ -14,10 +14,13 @@ from app.db import model_registry as _model_registry  # noqa: F401
 from app.db.database import engine
 from app.db.models import WorkRun, utcnow_naive
 from app.redis.settings import settings as redis_settings
-from app.services.work_runs.contracts import WorkRunStatus
 from app.services.work_runs.agent_execution import process_agentic_run
-from app.services.work_runs.contracts import WorkRunKind
-from app.services.work_runs.service import fail_run, process_spreadsheet_run
+from app.services.work_runs.contracts import WorkRunKind, WorkRunStatus
+from app.services.work_runs.service import (
+    WorkRunExecutionError,
+    fail_run,
+    process_spreadsheet_run,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,22 @@ _CLAIMABLE_STATUSES = (
 
 def worker_id() -> str:
     return os.getenv("WORK_RUN_WORKER_ID") or f"{socket.gethostname()}:{os.getpid()}"
+
+
+def _log_execution_failure(
+    error: Exception,
+    *,
+    run_id: object,
+    executor_id: str,
+) -> None:
+    context = {"work_run_id": str(run_id), "worker_id": executor_id}
+    if isinstance(error, WorkRunExecutionError):
+        logger.warning(
+            "work-run execution rejected",
+            extra={**context, "error_code": error.code.value},
+        )
+        return
+    logger.exception("work-run execution failed", extra=context)
 
 
 async def claim_next_run(session: AsyncSession, *, executor_id: str) -> WorkRun | None:
@@ -73,6 +92,9 @@ async def run_worker(stop_event: asyncio.Event) -> None:
                     except TimeoutError:
                         pass
                     continue
+                # A rollback expires ORM attributes. Keep the scalar identifier so
+                # failure persistence never has to lazy-load from an expired run.
+                run_id = run.id
                 try:
                     if run.kind == WorkRunKind.AGENTIC_TASK.value:
                         await process_agentic_run(
@@ -91,13 +113,14 @@ async def run_worker(stop_event: asyncio.Event) -> None:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.exception(
-                        "work-run execution failed",
-                        extra={"work_run_id": str(run.id), "worker_id": executor_id},
+                    _log_execution_failure(
+                        exc,
+                        run_id=run_id,
+                        executor_id=executor_id,
                     )
                     await session.rollback()
                     try:
-                        failed_run = await session.get(WorkRun, run.id)
+                        failed_run = await session.get(WorkRun, run_id)
                         if failed_run is not None:
                             await fail_run(
                                 session=session,
@@ -109,7 +132,7 @@ async def run_worker(stop_event: asyncio.Event) -> None:
                         logger.exception(
                             "work-run failure could not be persisted",
                             extra={
-                                "work_run_id": str(run.id),
+                                "work_run_id": str(run_id),
                                 "worker_id": executor_id,
                             },
                         )
