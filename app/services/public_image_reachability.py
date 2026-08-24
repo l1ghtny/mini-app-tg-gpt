@@ -28,7 +28,10 @@ async def wait_for_image_url_reachability(
     healthy object while GET still fails for the provider.
     """
     timeout = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    # These URLs point at Lightny-owned public image storage. Reaching them
+    # directly avoids making chat creation depend on the optional outbound
+    # WARP proxy configured through HTTP_PROXY/HTTPS_PROXY.
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
         for attempt in range(max_retries):
             try:
                 async with client.stream("GET", url, headers={"Range": "bytes=0-65535"}) as resp:
