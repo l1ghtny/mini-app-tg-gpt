@@ -64,6 +64,48 @@ spec:
         ports:
         - containerPort: 1080
           protocol: TCP
+        startupProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - >-
+              curl --silent --show-error --location
+              --connect-timeout 3 --max-time 5
+              --socks5-hostname 127.0.0.1:1080
+              https://tg-bot-images.lightny.pro/
+              --output /dev/null
+          periodSeconds: 5
+          timeoutSeconds: 7
+          failureThreshold: 24
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - >-
+              curl --silent --show-error --location
+              --connect-timeout 3 --max-time 5
+              --socks5-hostname 127.0.0.1:1080
+              https://tg-bot-images.lightny.pro/
+              --output /dev/null
+          periodSeconds: 10
+          timeoutSeconds: 7
+          failureThreshold: 2
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - >-
+              curl --silent --show-error --location
+              --connect-timeout 3 --max-time 5
+              --socks5-hostname 127.0.0.1:1080
+              https://tg-bot-images.lightny.pro/
+              --output /dev/null
+          periodSeconds: 30
+          timeoutSeconds: 7
+          failureThreshold: 3
         securityContext:
           capabilities:
             add:
