@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import zipfile
 
 from openpyxl import Workbook
 
@@ -131,6 +132,99 @@ def test_scoring_passes_observable_research_contract() -> None:
 
     assert score.automated_passed is True
     assert score.automated_score == 1
+
+
+def test_scoring_rejects_turkish_for_an_english_case() -> None:
+    suite = load_suite()
+    case = next(case for case in suite.cases if case.id == "docs_product_decision_memo")
+    now = datetime.now(timezone.utc)
+    observation = EvalObservation(
+        suite_version=suite.version,
+        case_id=case.id,
+        environment="test",
+        started_at=now,
+        completed_at=now,
+        runs=[
+            RunObservation(
+                id="run-turkish",
+                status="succeeded",
+                result_text=(
+                    "Bu karar notu için üç öncelik öneriyorum. Her öneri dosya "
+                    "kanıtına dayanıyor ve sonuç olarak ürün ekibi önce güven "
+                    "sorunlarını çözmelidir. Ölçülebilir başarı kriteri de sunulmuştur."
+                ),
+                tool_counts={"file_search": 2},
+                sources=[{"id": "source-1"}, {"id": "source-2"}],
+                citations=[
+                    {"source_id": "source-1"},
+                    {"source_id": "source-2"},
+                    {"source_id": "source-1"},
+                    {"source_id": "source-2"},
+                ],
+            )
+        ],
+    )
+
+    score = score_observation(case, observation)
+
+    language_check = next(
+        check for check in score.checks if check.id == "response_language"
+    )
+    assert language_check.passed is False
+    assert score.automated_passed is False
+
+
+def test_scoring_ignores_non_deliverable_preview_artifacts(tmp_path: Path) -> None:
+    suite = load_suite()
+    case = next(case for case in suite.cases if case.id == "artifact_action_plan_docx")
+    docx_path = tmp_path / "action-plan.docx"
+    with zipfile.ZipFile(docx_path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types />")
+        archive.writestr("word/document.xml", "<document />")
+    now = datetime.now(timezone.utc)
+    observation = EvalObservation(
+        suite_version=suite.version,
+        case_id=case.id,
+        environment="test",
+        started_at=now,
+        completed_at=now,
+        runs=[
+            RunObservation(
+                id="run-docx",
+                status="succeeded",
+                result_text=(
+                    "The editable action plan contains an executive summary, action "
+                    "table, decisions, open questions, and a next-review section. "
+                    "Unknown owners and dates remain explicit gaps in the document."
+                ),
+                tool_counts={"code_interpreter": 1},
+                sources=[{"id": "source-1"}],
+                citations=[{"source_id": "source-1"}],
+                artifacts=[
+                    ArtifactObservation(
+                        id="preview-1",
+                        filename="page-preview.png",
+                        status="ready",
+                        download_error="preview is not a requested deliverable",
+                    ),
+                    ArtifactObservation(
+                        id="docx-1",
+                        filename=docx_path.name,
+                        status="ready",
+                        size_bytes=docx_path.stat().st_size,
+                        content_path=str(docx_path),
+                    ),
+                ],
+            )
+        ],
+    )
+
+    score = score_observation(case, observation)
+
+    assert score.automated_passed is True
+    assert not any(
+        check.id == "artifact_valid_page_preview_png" for check in score.checks
+    )
 
 
 def test_scoring_rejects_missing_downloaded_artifact() -> None:

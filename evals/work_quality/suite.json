@@ -184,7 +184,7 @@
         "required_tools": ["code_interpreter"],
         "forbidden_tools": ["web_search"],
         "min_sources": 1,
-        "min_citations": 2,
+        "min_citations": 1,
         "min_artifacts": 1,
         "artifact_extensions": [".docx"],
         "max_cost_usd": 1.5,

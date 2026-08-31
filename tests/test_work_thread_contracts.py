@@ -201,6 +201,7 @@ async def test_active_steering_is_persisted_for_the_current_run(
     session = SimpleNamespace(
         exec=AsyncMock(
             side_effect=[
+                SimpleNamespace(first=lambda: SimpleNamespace(work_run_id=run_id)),
                 SimpleNamespace(all=lambda: []),
                 SimpleNamespace(first=lambda: SimpleNamespace(work_run_id=run_id)),
             ]
@@ -241,6 +242,63 @@ async def test_active_steering_is_persisted_for_the_current_run(
         "steering_applied": False,
     }
     session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_message_after_cancelled_run_reconciles_stale_running_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thread_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    thread = SimpleNamespace(
+        id=thread_id,
+        status="running",
+        context_manifest={"document_ids": []},
+    )
+    cancelled_run = SimpleNamespace(id=run_id, status="cancelled")
+    plan = SimpleNamespace(id=uuid.uuid4(), version=2, status="proposed")
+    follow_up_run = SimpleNamespace(id=uuid.uuid4(), status="accepted")
+    session = SimpleNamespace(
+        exec=AsyncMock(
+            side_effect=[
+                SimpleNamespace(first=lambda: SimpleNamespace(work_run_id=run_id)),
+                SimpleNamespace(all=lambda: []),
+            ]
+        ),
+        get=AsyncMock(return_value=cancelled_run),
+        add=MagicMock(),
+        commit=AsyncMock(),
+    )
+
+    async def plan_follow_up(*_args, **kwargs):
+        assert kwargs["expected_status"] == "cancelled"
+        thread.status = "ready"
+        return thread
+
+    monkeypatch.setattr(
+        thread_service,
+        "_existing_execution",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(thread_service, "_plan_existing_thread", plan_follow_up)
+    monkeypatch.setattr(thread_service, "_latest_plan", AsyncMock(return_value=plan))
+    approve = AsyncMock(return_value=(plan, follow_up_run))
+    monkeypatch.setattr(thread_service, "approve_plan", approve)
+
+    returned_thread, returned_run = await thread_service.send_message(
+        session=session,  # type: ignore[arg-type]
+        user=SimpleNamespace(id=uuid.uuid4()),
+        thread=thread,  # type: ignore[arg-type]
+        request=SendWorkMessageRequest(
+            content="Change direction and give me a five-item checklist."
+        ),
+        client_request_id="cancelled-follow-up-1",
+    )
+
+    assert returned_thread is thread
+    assert returned_run is follow_up_run
+    assert thread.status == "ready"
+    approve.assert_awaited_once()
 
 
 @pytest.mark.asyncio

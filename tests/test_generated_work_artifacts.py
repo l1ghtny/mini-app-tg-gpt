@@ -119,6 +119,36 @@ def test_generated_artifact_must_match_the_approved_file_format() -> None:
     assert artifact_contract_error(pdf_response, payload) is None
 
 
+def test_source_file_format_does_not_become_a_required_output_format() -> None:
+    payload = {
+        "current_request": (
+            "Analyze the attached sales CSV and create an Excel workbook with totals."
+        ),
+        "approved_plan": {
+            "expected_outputs": [
+                {
+                    "kind": "artifact",
+                    "label": "Sales analysis",
+                    "description": "A calculated workbook based on the source CSV.",
+                    "acceptance_criteria": [
+                        "The final response cites the generated XLSX file."
+                    ],
+                }
+            ]
+        },
+    }
+    xlsx_response = _response(
+        {
+            "type": "container_file_citation",
+            "container_id": "cntr-1",
+            "file_id": "cfile-xlsx",
+            "filename": "sales-analysis.xlsx",
+        }
+    )
+
+    assert artifact_contract_error(xlsx_response, payload) is None
+
+
 def test_planner_contract_can_request_a_general_artifact() -> None:
     plan = PlannedWork.model_validate(
         {

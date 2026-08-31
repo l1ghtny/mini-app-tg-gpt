@@ -15,6 +15,21 @@ from evals.work_quality.contracts import (
 
 _CYRILLIC = re.compile(r"[\u0400-\u04ff]")
 _LATIN = re.compile(r"[A-Za-z]")
+_TURKISH_SPECIFIC = re.compile(r"[çğıöşüÇĞİÖŞÜ]")
+_TURKISH_WORDS = {
+    "ancak",
+    "bir",
+    "bu",
+    "değil",
+    "dosya",
+    "için",
+    "ile",
+    "olarak",
+    "öncelik",
+    "öneri",
+    "sonuç",
+    "ve",
+}
 
 
 def score_observation(
@@ -116,13 +131,26 @@ def score_observation(
     )
 
     artifacts = final_run.artifacts if final_run else []
+    required_extensions = set(case.expectations.artifact_extensions)
+    deliverable_artifacts = (
+        [
+            artifact
+            for artifact in artifacts
+            if Path(artifact.filename).suffix.lower() in required_extensions
+        ]
+        if required_extensions
+        else artifacts
+    )
     _check(
         checks,
         "artifact_count",
-        len(artifacts) >= case.expectations.min_artifacts,
-        f"artifacts={len(artifacts)}; required={case.expectations.min_artifacts}",
+        len(deliverable_artifacts) >= case.expectations.min_artifacts,
+        f"matching artifacts={len(deliverable_artifacts)}; "
+        f"total={len(artifacts)}; required={case.expectations.min_artifacts}",
     )
-    extensions = {Path(artifact.filename).suffix.lower() for artifact in artifacts}
+    extensions = {
+        Path(artifact.filename).suffix.lower() for artifact in deliverable_artifacts
+    }
     for extension in case.expectations.artifact_extensions:
         _check(
             checks,
@@ -130,7 +158,7 @@ def score_observation(
             extension in extensions,
             f"required={extension}; observed={sorted(extensions)}",
         )
-    for artifact in artifacts:
+    for artifact in deliverable_artifacts:
         path = Path(artifact.content_path) if artifact.content_path else None
         if artifact.download_error:
             passed, detail = False, artifact.download_error
@@ -195,7 +223,11 @@ def _matches_language(text: str, language: str) -> bool:
     latin = len(_LATIN.findall(text))
     if language == "ru":
         return cyrillic > 0 and cyrillic >= latin * 0.25
-    return latin > 0 and latin >= cyrillic * 2
+    words = {word.lower() for word in re.findall(r"[^\W\d_]+", text)}
+    looks_turkish = (
+        len(_TURKISH_SPECIFIC.findall(text)) >= 2 or len(words & _TURKISH_WORDS) >= 4
+    )
+    return latin > 0 and latin >= cyrillic * 2 and not looks_turkish
 
 
 def _citations_resolve(sources: list[dict], citations: list[dict]) -> bool:

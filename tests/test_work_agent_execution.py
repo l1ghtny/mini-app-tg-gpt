@@ -171,6 +171,108 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
 
 
 @pytest.mark.asyncio
+async def test_plain_material_question_is_retried_as_structured_human_input() -> None:
+    request_payload = _request_payload()
+    request_payload["current_request"] = (
+        "Prepare a launch announcement for our new product. Ask one concise question "
+        "that obtains the minimum information needed before writing the announcement."
+    )
+    plain_question = _response(
+        "draft-plain-question",
+        "What is the product, target audience, and delivery channel?",
+    )
+    structured_question = SimpleNamespace(
+        id="draft-structured-question",
+        output_text="",
+        output=[
+            SimpleNamespace(
+                type="function_call",
+                name="ask_user",
+                call_id="call-question-1",
+                arguments=json.dumps(
+                    {
+                        "question": "What is the product, audience, and channel?",
+                        "reason": "Those details materially change the announcement.",
+                    }
+                ),
+            )
+        ],
+        usage=plain_question.usage,
+    )
+    create = AsyncMock(side_effect=[plain_question, structured_question])
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    handler = AsyncMock(side_effect=[False, True])
+
+    with pytest.raises(agent_execution.WorkRunAwaitingUser):
+        await agent_execution._generate_validated_result(
+            client=client,  # type: ignore[arg-type]
+            request_payload=request_payload,
+            tools=[agent_execution.ASK_USER_TOOL, {"type": "web_search"}],
+            observe_response=AsyncMock(),
+            handle_human_input=handler,
+        )
+
+    assert create.await_count == 2
+    retry_kwargs = create.await_args_list[1].kwargs
+    assert retry_kwargs["tools"] == [agent_execution.ASK_USER_TOOL]
+    assert retry_kwargs["tool_choice"] == "required"
+    assert "structured ask_user tool" in retry_kwargs["input"][0]["content"][0]["text"]
+    assert handler.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_english_request_retries_a_turkish_draft_before_review() -> None:
+    request_payload = _request_payload()
+    request_payload["current_request"] = (
+        "Read both attached files and write a decision memo for the beta. Recommend "
+        "the three highest-priority product changes and explain the evidence for each."
+    )
+    turkish_draft = _response(
+        "draft-turkish",
+        "Bu karar notu için üç öncelik öneriyorum ve her öneri dosya kanıtına "
+        "dayanıyor. Sonuç olarak ürün ekibi önce güven sorunlarını çözmelidir.",
+    )
+    english_draft = _response(
+        "draft-english",
+        "The decision memo recommends three priorities supported by the attached "
+        "files: evidence links, role-based access, and CSV export. The main risk is "
+        "loss of user trust, and the proposed 30-day criterion is measurable.",
+    )
+    passed_review = _response(
+        "review-english",
+        json.dumps({"passes": True, "issues": [], "revision_instructions": ""}),
+    )
+    create = AsyncMock(side_effect=[turkish_draft, english_draft, passed_review])
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+
+    result = await agent_execution._generate_validated_result(
+        client=client,  # type: ignore[arg-type]
+        request_payload=request_payload,
+        tools=[{"type": "file_search"}],
+        observe_response=AsyncMock(),
+    )
+
+    assert result.content == english_draft.output_text
+    assert result.generation_count == 2
+    assert result.review_count == 1
+    retry_prompt = create.await_args_list[1].kwargs["input"][0]["content"][0]["text"]
+    assert "current English request" in retry_prompt
+
+
+def test_explicit_other_language_request_bypasses_english_auto_detection() -> None:
+    issue = agent_execution._language_contract_error(
+        "Bu karar notu üç ürün önceliğini açıklar ve dosya kanıtlarını özetler.",
+        {
+            "current_request": (
+                "Read the attached files and write the decision memo in Turkish."
+            )
+        },
+    )
+
+    assert issue is None
+
+
+@pytest.mark.asyncio
 async def test_active_steering_discards_the_draft_before_review() -> None:
     first_draft = _response("draft-before-steering", "The original result." * 10)
     redirected_draft = _response(
@@ -235,10 +337,14 @@ async def test_active_steering_after_review_still_replaces_the_result() -> None:
     consume_steering = AsyncMock(
         side_effect=[None, "Focus only on pricing risk.", None, None]
     )
+    request_payload = _request_payload()
+    request_payload["current_request"] = (
+        "Review the current plan and summarize the main operational risk."
+    )
 
     result = await agent_execution._generate_validated_result(
         client=client,  # type: ignore[arg-type]
-        request_payload=_request_payload(),
+        request_payload=request_payload,
         tools=[{"type": "web_search"}],
         observe_response=AsyncMock(),
         consume_steering=consume_steering,
@@ -273,10 +379,14 @@ async def test_agent_returns_the_best_draft_after_one_corrective_retry() -> None
         ]
     )
     client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    request_payload = _request_payload()
+    request_payload["current_request"] = (
+        "Recommend the stronger supplier and state the next practical step."
+    )
 
     result = await agent_execution._generate_validated_result(
         client=client,  # type: ignore[arg-type]
-        request_payload=_request_payload(),
+        request_payload=request_payload,
         tools=[{"type": "web_search"}],
         observe_response=AsyncMock(),
     )

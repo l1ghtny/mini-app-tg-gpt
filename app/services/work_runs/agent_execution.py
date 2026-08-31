@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+import re
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -89,6 +90,43 @@ ESTIMATED_FILE_SEARCH_CALLS = 4 * ESTIMATED_DRAFT_CALLS
 FILE_SEARCH_CALL_COST_USD = Decimal("0.002500")
 MAX_FILE_SEARCH_VECTOR_STORES = 2
 CODE_INTERPRETER_CONTAINER_COST_USD = Decimal("0.030000")
+_CYRILLIC = re.compile(r"[\u0400-\u04ff]")
+_LATIN_WORD = re.compile(r"[A-Za-z]+")
+_TURKISH_SPECIFIC = re.compile(r"[çğıöşüÇĞİÖŞÜ]")
+_ENGLISH_REQUEST_WORDS = {
+    "and",
+    "answer",
+    "attached",
+    "create",
+    "file",
+    "files",
+    "for",
+    "from",
+    "only",
+    "prepare",
+    "product",
+    "recommend",
+    "source",
+    "sources",
+    "the",
+    "using",
+    "with",
+    "write",
+}
+_TURKISH_WORDS = {
+    "ancak",
+    "bir",
+    "bu",
+    "değil",
+    "dosya",
+    "için",
+    "ile",
+    "olarak",
+    "öncelik",
+    "öneri",
+    "sonuç",
+    "ve",
+}
 _EXECUTOR_PROMPT = (
     "Complete the approved Work task. Return the requested deliverable itself, not "
     "a progress report, a description of your process, or a list of work allegedly "
@@ -117,7 +155,9 @@ _EXECUTOR_PROMPT = (
     "files only when requested or when the approved expected output requires one. Lead "
     "with the deliverable. Use ask_user only when one missing fact materially changes "
     "correctness, evidence, cost, or a consequential action; otherwise proceed with a "
-    "clearly labelled reasonable assumption. Never ask for credentials or secrets."
+    "clearly labelled reasonable assumption. When the current request explicitly asks "
+    "for one material question before a later deliverable, call ask_user; never return "
+    "that question as an ordinary final answer. Never ask for credentials or secrets."
 )
 _REVIEWER_PROMPT = (
     "Review a draft Work result against the user's request, approved expected outputs, "
@@ -326,6 +366,139 @@ def _draft_has_user_value(draft: str) -> bool:
     return len(draft) >= 80 or len(draft.split()) >= 15
 
 
+def _ask_user_available(tools: Sequence[Mapping[str, object]]) -> bool:
+    return any(
+        tool.get("type") == "function" and tool.get("name") == "ask_user"
+        for tool in tools
+    )
+
+
+def _request_requires_structured_clarification(
+    request_payload: Mapping[str, object],
+) -> bool:
+    current_request = str(request_payload.get("current_request", "")).lower()
+    asks_question = bool(re.search(r"\bask\b.{0,120}\bquestion\b", current_request))
+    before_deliverable = any(
+        marker in current_request
+        for marker in (
+            "before writing",
+            "before creating",
+            "before preparing",
+            "before continuing",
+            "needed before",
+            "after i answer",
+            "after the answer",
+        )
+    )
+    russian_question = "вопрос" in current_request and any(
+        verb in current_request for verb in ("задай", "спроси", "уточни")
+    )
+    russian_continuation = any(
+        marker in current_request
+        for marker in ("прежде чем", "перед тем как", "после ответа")
+    )
+    return (asks_question and before_deliverable) or (
+        russian_question and russian_continuation
+    )
+
+
+def _draft_is_plain_clarification(draft: str) -> bool:
+    compact = " ".join(draft.split())
+    return (
+        3 <= len(compact) <= 1000
+        and "?" in compact
+        and compact.count("?") <= 3
+        and len(compact.split()) <= 80
+    )
+
+
+def _looks_like_english_request(text: str) -> bool:
+    words = {word.lower() for word in _LATIN_WORD.findall(text)}
+    return len(words & _ENGLISH_REQUEST_WORDS) >= 4
+
+
+def _looks_like_turkish(text: str) -> bool:
+    words = {word.lower() for word in re.findall(r"[^\W\d_]+", text)}
+    return len(_TURKISH_SPECIFIC.findall(text)) >= 2 or len(words & _TURKISH_WORDS) >= 4
+
+
+def _explicit_requested_language(text: str) -> str | None:
+    lowered = text.lower()
+    if re.search(r"\b(?:in|into|using)\s+english\b", lowered) or any(
+        marker in lowered for marker in ("на английском", "английский язык")
+    ):
+        return "en"
+    if re.search(r"\b(?:in|into|using)\s+russian\b", lowered) or any(
+        marker in lowered for marker in ("на русском", "русский язык")
+    ):
+        return "ru"
+    other_languages = (
+        "arabic",
+        "chinese",
+        "czech",
+        "french",
+        "german",
+        "italian",
+        "japanese",
+        "polish",
+        "portuguese",
+        "slovak",
+        "spanish",
+        "turkish",
+        "ukrainian",
+    )
+    if re.search(
+        rf"\b(?:in|into|using)\s+(?:{'|'.join(other_languages)})\b",
+        lowered,
+    ) or any(
+        marker in lowered
+        for marker in (
+            "на немецком",
+            "на испанском",
+            "на итальянском",
+            "на китайском",
+            "на польском",
+            "на португальском",
+            "на словацком",
+            "на турецком",
+            "на украинском",
+            "на французском",
+            "на чешском",
+            "на японском",
+        )
+    ):
+        return "other"
+    return None
+
+
+def _language_contract_error(
+    draft: str,
+    request_payload: Mapping[str, object],
+) -> str | None:
+    current_request = str(request_payload.get("current_request", ""))
+    explicit_language = _explicit_requested_language(current_request)
+    if explicit_language == "other":
+        return None
+    current_cyrillic = len(_CYRILLIC.findall(current_request))
+    current_latin = len(re.findall(r"[A-Za-z]", current_request))
+    draft_cyrillic = len(_CYRILLIC.findall(draft))
+    draft_latin = len(re.findall(r"[A-Za-z]", draft))
+    if explicit_language == "ru" or (
+        explicit_language is None
+        and current_cyrillic > 0
+        and current_cyrillic >= current_latin * 0.25
+    ):
+        if draft_cyrillic == 0 or draft_cyrillic < draft_latin * 0.25:
+            return "The draft language does not match the current Russian request."
+        return None
+    if explicit_language == "en" or (
+        explicit_language is None and _looks_like_english_request(current_request)
+    ):
+        if draft_cyrillic > draft_latin * 0.1 or _looks_like_turkish(draft):
+            return "The draft language does not match the current English request."
+    return None
+
+
 def _parse_result_review(response: Any) -> WorkResultReview:
     output_text = getattr(response, "output_text", None)
     try:
@@ -360,6 +533,7 @@ async def _generate_draft(
     tools: list[dict[str, object]],
     revision_feedback: str | None,
     resume_request: WorkHumanInputRequest | None = None,
+    force_ask_user: bool = False,
 ) -> Any:
     if resume_request is not None:
         return await _create_provider_response(
@@ -385,10 +559,10 @@ async def _generate_draft(
             "replacement, not commentary about the feedback. Validation feedback: "
             + revision_feedback
         )
-    return await _create_provider_response(
-        client,
-        model=AGENT_MODEL,
-        input=[
+    response_tools = [ASK_USER_TOOL] if force_ask_user else tools
+    response_kwargs: dict[str, object] = {
+        "model": AGENT_MODEL,
+        "input": [
             {
                 "role": "developer",
                 "content": [{"type": "input_text", "text": developer_text}],
@@ -403,10 +577,16 @@ async def _generate_draft(
                 ],
             },
         ],
-        tools=tools,
-        max_output_tokens=6000,
-        reasoning={"effort": "medium"},
-        store=True,
+        "tools": response_tools,
+        "max_output_tokens": 6000,
+        "reasoning": {"effort": "medium"},
+        "store": True,
+    }
+    if force_ask_user:
+        response_kwargs["tool_choice"] = "required"
+    return await _create_provider_response(
+        client,
+        **response_kwargs,
     )
 
 
@@ -510,7 +690,9 @@ async def _generate_validated_result(
     last_response: Any | None = None
     last_issues: tuple[str, ...] = ()
     last_artifact_contract_passed = True
+    last_hard_contract_passed = True
     steering_restarts = 0
+    force_ask_user = False
     attempt = 1
     while attempt <= MAX_AGENT_ATTEMPTS:
         if observe_phase is not None:
@@ -524,7 +706,9 @@ async def _generate_validated_result(
             tools=tools,
             revision_feedback=revision_feedback,
             resume_request=resume_request if generation_count == 0 else None,
+            force_ask_user=force_ask_user,
         )
+        force_ask_user = False
         generation_count += 1
         await observe_response(f"draft_{generation_count}", response)
         if resume_request is not None and generation_count == 1 and observe_resume:
@@ -553,6 +737,27 @@ async def _generate_validated_result(
             draft = _attach_source_links(draft, response)
             last_draft = draft
             last_response = response
+            if (
+                _ask_user_available(tools)
+                and _request_requires_structured_clarification(request_payload)
+                and _draft_is_plain_clarification(draft)
+            ):
+                last_hard_contract_passed = False
+                last_issues = (
+                    "The material question must use the structured ask_user tool.",
+                )
+                revision_feedback = last_issues[0]
+                force_ask_user = True
+                attempt += 1
+                continue
+            language_error = _language_contract_error(draft, request_payload)
+            if language_error:
+                last_hard_contract_passed = False
+                last_issues = (language_error,)
+                revision_feedback = language_error
+                attempt += 1
+                continue
+            last_hard_contract_passed = True
             contract_error = artifact_contract_error(response, request_payload)
             if contract_error:
                 last_artifact_contract_passed = False
@@ -624,6 +829,7 @@ async def _generate_validated_result(
         last_draft
         and last_response is not None
         and _draft_has_user_value(last_draft)
+        and last_hard_contract_passed
     ):
         return ValidatedAgentResult(
             content=last_draft,
