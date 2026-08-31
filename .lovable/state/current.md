@@ -20,9 +20,22 @@
 - Work schemas and Work runtime behavior were not changed.
 - Validation passes: Python compilation and 29 focused activity, stream,
   OpenAI, Google, Perplexity, and
-  migration tests. No live provider call or database migration was run locally.
-- Next: deploy the additive backend migration/runtime first, then verify real
-  send/stream/resume across providers on beta.
+  migration tests. No live provider call was used for deployment validation.
+- The additive `xk8e9f0a1b2c` migration was applied to the shared database from
+  the immutable `beta-135` backend image and verified against every Alembic head.
+- TeamCity LightnyBetaFlow run `#136` deployed backend, worker, and frontend
+  images tagged `beta-136` from backend revision `3f96fc3`. All three workloads
+  are ready, the deployed backend sees `xk8e9f0a1b2c (head)`, and both public
+  beta health endpoints return HTTP 200 with database and Redis healthy.
+- A fresh beta search exposed a Redis-to-SSE shape bug: nested `activity` values
+  were JSON-encoded for Redis Streams but not restored on read, so the frontend
+  discarded every live `activity.upsert` while database history worked after a
+  reload. Stream reads now restore only the known `activity` and
+  `activity_event` object fields, without interpreting JSON-looking answer text.
+- Focused backend event-bus/activity tests and frontend SSE/store/component
+  tests pass for the restored live object contract.
+- Next: deploy the event-bus fix to beta and verify that concrete source domains
+  appear before the answer finishes, then remain identical after reload/resume.
 
 ## 2026-08-31 Work MVP beta-eval blocker fixes
 

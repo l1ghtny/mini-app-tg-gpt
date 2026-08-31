@@ -7,6 +7,8 @@ from .settings import settings
 
 
 class RedisEventBus:
+    _JSON_EVENT_FIELDS = frozenset({"activity", "activity_event"})
+
     def __init__(self, redis: Redis):
         self.r = redis
 
@@ -41,6 +43,23 @@ class RedisEventBus:
             normalized[str(key)] = cls._normalize_event_value(value)
         return normalized
 
+    @classmethod
+    def _restore_event(cls, event: dict[str, Any]) -> dict[str, Any]:
+        restored = dict(event)
+        for key in cls._JSON_EVENT_FIELDS:
+            value = restored.get(key)
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            if not isinstance(value, str):
+                continue
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(decoded, (dict, list)):
+                restored[key] = decoded
+        return restored
+
     async def publish(self, mid: str, event: dict) -> str:
         """Append an event to the stream; returns Redis stream entry ID."""
         key = self.key_for_message(mid)
@@ -71,7 +90,7 @@ class RedisEventBus:
             _, messages = items[0]
             for msg_id, fields in messages:
                 cursor = msg_id
-                yield msg_id, fields
+                yield msg_id, self._restore_event(fields)
 
     async def exists(self, mid: str) -> bool:
         return await self.r.exists(self.key_for_message(mid)) > 0
@@ -101,4 +120,4 @@ class RedisEventBus:
             _, messages = items[0]
             for message_id, fields in messages:
                 cursor = message_id
-                yield message_id, fields
+                yield message_id, self._restore_event(fields)

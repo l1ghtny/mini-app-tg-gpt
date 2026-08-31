@@ -23,6 +23,15 @@ class FakeRedis:
         self.expire_calls.append((key, ttl))
 
 
+class FakeReadRedis:
+    def __init__(self, event):
+        self.event = event
+
+    async def xread(self, streams, block=None, count=None):
+        key = next(iter(streams))
+        return [(key, [("1-0", self.event)])]
+
+
 @pytest.mark.asyncio
 async def test_publish_normalizes_nested_payloads_and_omits_none():
     redis = FakeRedis()
@@ -73,3 +82,25 @@ async def test_mark_done_uses_publish_safe_payload():
         "type": "error",
         "error": "unknown",
     }
+
+
+@pytest.mark.asyncio
+async def test_read_restores_nested_activity_without_decoding_text():
+    bus = RedisEventBus(
+        FakeReadRedis(
+            {
+                "type": "activity.upsert",
+                "activity": '{"event_key":"web-search-1","detail":{"sources":[{"url":"https://example.com"}]}}',
+                "text": '{"keep":"as text"}',
+            }
+        )
+    )
+
+    event_id, event = await anext(bus.read("mid-789"))
+
+    assert event_id == "1-0"
+    assert event["activity"] == {
+        "event_key": "web-search-1",
+        "detail": {"sources": [{"url": "https://example.com"}]},
+    }
+    assert event["text"] == '{"keep":"as text"}'
