@@ -12,8 +12,10 @@ from evals.work_quality.live import WorkEvalClient
 from evals.work_quality.reporting import build_report, markdown_report
 from evals.work_quality.suite import (
     DEFAULT_SUITE_PATH,
+    WORK_EVAL_PROFILES,
     dump_json,
     load_suite,
+    select_cases,
     validate_suite_files,
 )
 
@@ -66,7 +68,13 @@ def _parser() -> argparse.ArgumentParser:
         "--session-cookie-name",
         default="lightny_beta_session",
     )
-    run.add_argument("--case", action="append", dest="case_ids")
+    selection = run.add_mutually_exclusive_group()
+    selection.add_argument("--case", action="append", dest="case_ids")
+    selection.add_argument(
+        "--profile",
+        choices=sorted(WORK_EVAL_PROFILES),
+        help="Run a named product acceptance profile.",
+    )
     run.add_argument(
         "--output-dir",
         type=Path,
@@ -129,11 +137,7 @@ def _run(args: argparse.Namespace) -> int:
             f"{args.token_env} is not set and no credential file was provided; "
             "supply a short-lived bearer token or web session cookie"
         )
-    selected = set(args.case_ids or [])
-    unknown = selected - {case.id for case in suite.cases}
-    if unknown:
-        raise ValueError(f"unknown case ids: {sorted(unknown)}")
-    cases = [case for case in suite.cases if not selected or case.id in selected]
+    cases = select_cases(suite, case_ids=args.case_ids, profile=args.profile)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     client = WorkEvalClient(
         base_url=args.base_url,

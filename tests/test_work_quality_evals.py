@@ -19,6 +19,7 @@ from evals.work_quality.scoring import score_observation
 from evals.work_quality.suite import (
     DEFAULT_SUITE_PATH,
     load_suite,
+    select_cases,
     validate_suite_files,
 )
 
@@ -53,6 +54,49 @@ def test_work_quality_suite_covers_positive_and_negative_clarification() -> None
     forbidden = cases["clarify_not_needed"]
     assert forbidden.expectations.clarification == "forbidden"
     assert forbidden.interactions == []
+
+
+def test_mvp_core_profile_covers_the_product_acceptance_boundary() -> None:
+    suite = load_suite()
+
+    cases = select_cases(suite, profile="mvp-core")
+
+    assert [case.id for case in cases] == [
+        "web_openai_agent_evals",
+        "docs_product_decision_memo",
+        "sheet_sales_analysis",
+        "artifact_action_plan_docx",
+        "clarify_material_audience",
+        "recovery_cancel_then_redirect",
+    ]
+    assert {case.category for case in cases} == {
+        "artifact",
+        "clarification",
+        "documents",
+        "recovery",
+        "spreadsheet",
+        "web_research",
+    }
+    assert any(case.expectations.clarification == "required" for case in cases)
+    assert {
+        extension
+        for case in cases
+        for extension in case.expectations.artifact_extensions
+    } == {
+        ".docx",
+        ".xlsx",
+    }
+
+
+def test_case_selection_rejects_unknown_case_ids() -> None:
+    suite = load_suite()
+
+    try:
+        select_cases(suite, case_ids=["not_a_real_case"])
+    except ValueError as exc:
+        assert "unknown case ids" in str(exc)
+    else:
+        raise AssertionError("unknown case ids should be rejected")
 
 
 def test_scoring_passes_observable_research_contract() -> None:

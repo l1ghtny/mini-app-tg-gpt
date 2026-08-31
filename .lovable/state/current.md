@@ -1,5 +1,38 @@
 # Current State
 
+## 2026-08-31 Work MVP recovery and evaluation direction
+
+- Preserved the entire former dirty tree in commit `191f99e` on
+  `recovery/dirty-2026-08-31` before changing the active checkout.
+- Rebuilt the active `codex/ui` branch from current `origin/beta` and ported only the
+  versioned Work quality suite as commit `27d7b75`. Local evaluation results and
+  database backups remain on disk and are ignored; they were not deleted or committed.
+- Saved beta evidence covers 7 of 15 cases: 100% system success, 85.7% automated pass,
+  100% citation integrity, no artifact observations, and no human reviews. The one
+  automated failure is the citation-count contract for
+  `docs_meeting_action_register`.
+- Defined Work v1 as conversation-native sourced research, document synthesis,
+  editable XLSX/DOCX delivery, material clarification, and safe recovery. New model
+  providers and broader agent features are deferred until this boundary is validated.
+- Added the balanced `mvp-core` live profile and the concise completion plan at
+  `docs/product-strategy/14-work-mvp-completion-plan.md`.
+
+### Validation
+
+- The 15-case suite and all synthetic fixtures validate offline.
+- Focused eval tests, Ruff, Python compilation, and diff whitespace checks pass.
+
+### Next steps
+
+1. Run `python -m evals.work_quality run --profile mvp-core` on beta using a
+   short-lived test credential.
+2. Complete human review for all six outputs.
+3. Fix the first reproducible product blocker, add a regression, and rerun the profile.
+4. Start a monitored 5–10 user pilot only after the MVP gates pass.
+
+The live profile was not started because no beta evaluation credential is available in
+the current environment. Offline validation is complete.
+
 ## 2026-08-19 stable Google image endpoints
 
 - Replaced the retired Google image preview endpoints with

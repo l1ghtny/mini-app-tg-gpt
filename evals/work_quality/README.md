@@ -53,11 +53,9 @@ environment; never pass it as a command argument or save it in a file.
 ```bash
 export LIGHTNY_EVAL_BEARER_TOKEN="..."
 
-# Start with three complementary cases before spending allowance on the full suite.
+# Run the balanced Work MVP acceptance profile before spending allowance on all cases.
 poetry run python -m evals.work_quality run \
-  --case web_openai_agent_evals \
-  --case docs_product_decision_memo \
-  --case clarify_not_needed
+  --profile mvp-core
 
 # Run all 15 cases only after the smoke set is healthy.
 poetry run python -m evals.work_quality run
@@ -69,6 +67,10 @@ cookie instead, which can be supplied with
 `--session-cookie-file /tmp/lightny-work-eval.session`. Credential files must
 contain only the value, be readable only by the current user, and be deleted
 immediately after the evaluation.
+
+The `mvp-core` profile covers sourced research, document synthesis, XLSX and DOCX
+delivery, material clarification, and cancellation/recovery. A text-only smoke run
+is not sufficient evidence for Work MVP readiness.
 
 The runner is deliberately sequential to respect the per-user active-run limit. It
 uploads only a case's synthetic files, waits for ingestion, executes the scenario,
