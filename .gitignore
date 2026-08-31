@@ -7,3 +7,4 @@ __pycache__/
 *.py[cod]
 *-current-values.sql
 /.ai/
+/.eval-results/

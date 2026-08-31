@@ -1,0 +1,4 @@
+supplier,item,unit_price_usd,min_order,delivery_days,payment_terms
+Northstar,Widget A,12.40,100,7,Net 30
+Northstar,Widget B,8.10,200,10,Net 30
+Northstar,Widget C,4.75,500,12,Prepaid
