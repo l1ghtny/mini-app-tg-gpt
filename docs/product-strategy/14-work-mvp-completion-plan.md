@@ -30,6 +30,31 @@ The earlier deterministic-job plan is therefore superseded. Structured compariso
 workbooks remain an important acceptance case, but they are one deliverable inside
 conversation-native Work rather than a separate workflow product.
 
+## Long-term orchestration direction
+
+Temporal is the target for any future dedicated durable-workflow layer. Do not adopt
+DBOS or add DBOS-specific schemas, workers, deployment topology, or application
+contracts. The historical DBOS proposal in the recovery checkpoint is superseded.
+
+This is not an MVP migration task. Keep the current Work execution path while the
+quality gate and pilot establish that the product deserves additional operational
+complexity. Revisit a Temporal migration when demonstrated load, recovery behavior,
+workflow evolution, or operator burden makes the current executor the limiting
+factor.
+
+When that migration is justified:
+
+- preserve PostgreSQL as the product source of truth for users, entitlements, runs,
+  evidence, artifacts, and accounting;
+- use stable Work IDs and idempotency keys across the API and Temporal boundary;
+- isolate provider calls and other costly side effects in retry-aware activities;
+- migrate incrementally, keeping existing Work API, SSE, artifact, and billing
+  contracts compatible;
+- prove cancellation, clarification waits, retries, worker restarts, version changes,
+  and duplicate-delivery safety before production cutover;
+- define Temporal hosting, backup, observability, upgrade, and failure-recovery
+  ownership before implementation begins.
+
 ## Evidence snapshot
 
 The saved beta observations cover 7 of 15 synthetic cases:
@@ -118,6 +143,10 @@ margin. Improve its onboarding, examples, and output quality before expanding Wo
 - video, music, voice, and broader media generation;
 - public unlimited Work quotas;
 - large acquisition spend before the pilot demonstrates repeat use.
+
+Temporal adoption is also deferred until the current MVP passes its product gate. It
+is the approved long-term orchestration direction, not work required for the first
+pilot.
 
 ## Immediate next move
 

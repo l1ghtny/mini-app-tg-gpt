@@ -16,6 +16,9 @@
   providers and broader agent features are deferred until this boundary is validated.
 - Added the balanced `mvp-core` live profile and the concise completion plan at
   `docs/product-strategy/14-work-mvp-completion-plan.md`.
+- Confirmed Temporal as the only long-term dedicated workflow-orchestration target.
+  DBOS is not planned; its historical recovery-branch proposal is superseded. A
+  Temporal migration remains deferred until the Work MVP and pilot justify it.
 
 ### Validation
 
