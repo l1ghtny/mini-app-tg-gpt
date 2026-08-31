@@ -49,7 +49,7 @@ async def test_openai_thinking_true_enables_reasoning_effort(monkeypatch):
         events.append(ev)
 
     assert any(e.get("type") == "done" for e in events)
-    assert captured.get("reasoning_summary") == "detailed"
+    assert captured.get("reasoning_summary") is None
     assert captured.get("reasoning_effort") == "medium"
 
 
@@ -108,7 +108,7 @@ def test_openai_usage_tracker_splits_reasoning_from_total_output():
 
 
 @pytest.mark.asyncio
-async def test_openai_reasoning_text_events_are_mapped(monkeypatch):
+async def test_openai_reasoning_text_events_are_not_exposed(monkeypatch):
     class _FakeStream:
         def __init__(self):
             output_tokens_details = SimpleNamespace(reasoning_tokens=7)
@@ -178,6 +178,65 @@ async def test_openai_reasoning_text_events_are_mapped(monkeypatch):
     ):
         events.append(ev)
 
-    assert any(e.get("type") == "reasoning.summary.delta" for e in events)
-    assert any(e.get("type") == "reasoning.summary.done" for e in events)
+    assert not any(e.get("type") == "reasoning.summary.delta" for e in events)
+    assert not any(e.get("type") == "reasoning.summary.done" for e in events)
     assert any(e.get("type") == "done" for e in events)
+
+
+def test_openai_web_search_requests_sources_and_maps_public_activity():
+    kwargs = openai_service._build_responses_create_kwargs(
+        model="gpt-5.6-terra",
+        input_data=[],
+        tools=[{"type": "web_search"}],
+        stream=True,
+    )
+    assert kwargs["include"] == ["web_search_call.action.sources"]
+
+    item = SimpleNamespace(
+        id="ws_123",
+        action=SimpleNamespace(
+            type="open_page",
+            url="https://example.com/report",
+            sources=[SimpleNamespace(url="https://example.com/report", title="Report")],
+        ),
+    )
+    event = openai_service._web_search_activity_event(item)
+
+    assert event == {
+        "type": "web_search.activity",
+        "provider": "openai",
+        "status": "completed",
+        "action": "open_page",
+        "item_id": "ws_123",
+        "url": "https://example.com/report",
+        "sources": [{"url": "https://example.com/report", "title": "Report"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_web_search_item_is_visible_while_page_is_opened():
+    item = SimpleNamespace(
+        id="ws_live",
+        type="web_search_call",
+        action=SimpleNamespace(
+            type="open_page",
+            url="https://example.com/live",
+            sources=[],
+        ),
+    )
+    mapped = await openai_service._map_openai_event(
+        event=SimpleNamespace(type="response.output_item.added", item=item),
+        state=openai_service.StreamState(),
+        usage=openai_service.UsageTracker(),
+    )
+
+    assert mapped == [
+        {
+            "type": "web_search.activity",
+            "provider": "openai",
+            "status": "active",
+            "action": "open_page",
+            "item_id": "ws_live",
+            "url": "https://example.com/live",
+        }
+    ]

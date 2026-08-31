@@ -448,6 +448,18 @@ async def _stream_normalized_perplexity_agent_response(
         tool_invocations = _agent_tool_invocations(usage, len(tools))
 
         text, sources = _extract_agent_text_and_sources(response)
+        if sources:
+            yield {
+                "type": "web_search.activity",
+                "provider": "perplexity",
+                "status": "completed",
+                "action": "open_page" if tool_stage == "fetch_url" else "search",
+                "item_id": f"perplexity-{tool_stage}",
+                "sources": [
+                    {"title": title, "url": url} if title else {"url": url}
+                    for title, url in sources
+                ],
+            }
         final_text = text + _format_sources(sources)
         if final_text:
             yield {"type": "part.start", "index": 0, "content_type": "text"}
@@ -652,6 +664,14 @@ async def stream_normalized_perplexity_response(
             yield {"type": "text.delta", "index": 0, "text": delta_text}
 
         if citations:
+            yield {
+                "type": "web_search.activity",
+                "provider": "perplexity",
+                "status": "completed",
+                "action": "search",
+                "item_id": "perplexity-sonar-search",
+                "sources": [{"url": url} for url in citations],
+            }
             if not text_started:
                 yield {"type": "part.start", "index": 0, "content_type": "text"}
                 text_started = True

@@ -1,5 +1,27 @@
 # Current State
 
+## 2026-08-31 durable chat reply activity
+
+- Added an additive `message_activity_event` table owned by assistant messages.
+  Stable event keys allow live SSE updates and persisted history to represent
+  the same public activity timeline after Redis expiry or page reload.
+- Chat generation now persists and publishes safe turn, tool, web-search,
+  source, writing, completion, and failure activity. Activity persistence is
+  fail-open during a staggered rollout so it cannot make answer generation fail.
+- OpenAI web search requests action sources and exposes search/open/find actions;
+  Google and Perplexity expose their collected public source URLs through the
+  same provider-neutral event. Existing status events remain for compatibility.
+- OpenAI reasoning effort remains supported, but visible reasoning summaries are
+  no longer requested by default or emitted to the chat stream. Historical
+  `reasoning_summary` storage remains schema-compatible.
+- Work schemas and Work runtime behavior were not changed.
+- Validation passes: Python compilation and 29 focused activity, stream,
+  OpenAI, Google, Perplexity, and
+  migration tests. No live provider call or database migration was run locally.
+- Next: review and commit both isolated worktrees, deploy the additive backend
+  migration/runtime first, verify real send/stream/resume across providers, then
+  merge the production branches into beta.
+
 ## 2026-08-19 stable Google image endpoints
 
 - Replaced the retired Google image preview endpoints with

@@ -22,7 +22,6 @@ from app.services.model_registry import (
 )
 from app.db.database import engine
 from sqlmodel.ext.asyncio.session import AsyncSession
-from app.db.models import Message
 
 logger = logging.getLogger(__name__)
 runtime_logger = logging.getLogger("uvicorn")
@@ -248,8 +247,6 @@ async def _log_google_success_usage(
     conversation_id: Optional[uuid.UUID],
     request_id: str,
     model_name: str,
-    assistant_message_id: Optional[uuid.UUID],
-    accumulated_thoughts: str,
     input_tokens: int,
     output_tokens: int,
     reasoning_tokens: int,
@@ -257,12 +254,6 @@ async def _log_google_success_usage(
     images_generated: int,
 ) -> None:
     async with AsyncSession(engine, expire_on_commit=False) as db_session:
-        if accumulated_thoughts and assistant_message_id:
-            message = await db_session.get(Message, assistant_message_id)
-            if message:
-                message.reasoning_summary = accumulated_thoughts
-                db_session.add(message)
-                await db_session.commit()
         await log_usage(
             db_session,
             user_id=user_id,
@@ -348,7 +339,6 @@ async def _stream_google_response_with_function_handoff(
     user_id: Optional[uuid.UUID],
     conversation_id: Optional[uuid.UUID],
     request_id: str,
-    assistant_message_id: Optional[uuid.UUID],
     previous_interaction_id: Optional[str],
     thinking_enabled: bool | None,
     reasoning_effort: str | None,
@@ -370,7 +360,6 @@ async def _stream_google_response_with_function_handoff(
         reasoning_effort=reasoning_effort,
     )
 
-    accumulated_thoughts = ""
     total_input_tokens = 0
     total_output_tokens = 0
     total_reasoning_tokens = 0
@@ -527,20 +516,8 @@ async def _stream_google_response_with_function_handoff(
                             }
                             thinking_started = True
 
-                        thought_text = ""
-                        if delta.content and hasattr(delta.content, "text"):
-                            thought_text = delta.content.text or ""
-                        elif isinstance(delta.content, str):
-                            thought_text = delta.content
-
-                        accumulated_thoughts += thought_text
-                        yield {
-                            "type": "reasoning.summary.delta",
-                            "delta": thought_text,
-                            "output_index": 0,
-                            "summary_index": 0,
-                            "item_id": "google-thought-0",
-                        }
+                        # Thought summaries are provider reasoning, not public
+                        # activity. Keep only the explicit thinking status.
 
                     elif delta.type == "text_annotation_delta":
                         if delta.annotations:
@@ -575,13 +552,6 @@ async def _stream_google_response_with_function_handoff(
                     st = step_types.get(event.index)
                     if st == "thought":
                         yield {
-                            "type": "reasoning.summary.done",
-                            "text": accumulated_thoughts,
-                            "output_index": 0,
-                            "summary_index": 0,
-                            "item_id": "google-thought-0",
-                        }
-                        yield {
                             "type": "status",
                             "stage": "thinking",
                             "phase": "thinking",
@@ -591,6 +561,14 @@ async def _stream_google_response_with_function_handoff(
                         }
                     elif st == "model_output":
                         if citations:
+                            yield {
+                                "type": "web_search.activity",
+                                "provider": "google",
+                                "status": "completed",
+                                "action": "search",
+                                "item_id": "google-web-search",
+                                "sources": citations,
+                            }
                             sources_text = "\n\n**Sources:**\n" + "\n".join(
                                 f"[{i + 1}] [{c['title']}]({c['url']})"
                                 for i, c in enumerate(citations)
@@ -644,8 +622,6 @@ async def _stream_google_response_with_function_handoff(
                 conversation_id=conversation_id,
                 request_id=request_id,
                 model_name=model,
-                assistant_message_id=assistant_message_id,
-                accumulated_thoughts=accumulated_thoughts,
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
                 reasoning_tokens=total_reasoning_tokens,
@@ -1115,7 +1091,6 @@ async def stream_normalized_google_response(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 request_id=corr_id,
-                assistant_message_id=assistant_message_id,
                 previous_interaction_id=previous_interaction_id,
                 thinking_enabled=thinking_enabled,
                 reasoning_effort=reasoning_effort,
@@ -1167,7 +1142,6 @@ async def stream_normalized_google_response(
         text_part_started = {}
         image_part_started = {}
         image_buffers = {}
-        accumulated_thoughts = ""
         step_types = {}
         citations = []
 
@@ -1230,20 +1204,8 @@ async def stream_normalized_google_response(
                         }
                         thinking_started = True
 
-                    thought_text = ""
-                    if delta.content and hasattr(delta.content, "text"):
-                        thought_text = delta.content.text or ""
-                    elif isinstance(delta.content, str):
-                        thought_text = delta.content
-
-                    accumulated_thoughts += thought_text
-                    yield {
-                        "type": "reasoning.summary.delta",
-                        "delta": thought_text,
-                        "output_index": 0,
-                        "summary_index": 0,
-                        "item_id": "google-thought-0",
-                    }
+                    # Thought summaries are provider reasoning, not public
+                    # activity. Keep only the explicit thinking status.
 
                 elif delta.type == "image":
                     if event.index not in image_part_started:
@@ -1267,13 +1229,6 @@ async def stream_normalized_google_response(
 
                 if st == "thought":
                     yield {
-                        "type": "reasoning.summary.done",
-                        "text": accumulated_thoughts,
-                        "output_index": 0,
-                        "summary_index": 0,
-                        "item_id": "google-thought-0",
-                    }
-                    yield {
                         "type": "status",
                         "stage": "thinking",
                         "phase": "thinking",
@@ -1284,6 +1239,14 @@ async def stream_normalized_google_response(
 
                 elif st == "model_output":
                     if citations:
+                        yield {
+                            "type": "web_search.activity",
+                            "provider": "google",
+                            "status": "completed",
+                            "action": "search",
+                            "item_id": "google-web-search",
+                            "sources": citations,
+                        }
                         sources_text = "\n\n**Sources:**\n" + "\n".join(
                             f"[{i+1}] [{c['title']}]({c['url']})"
                             for i, c in enumerate(citations)
@@ -1329,12 +1292,6 @@ async def stream_normalized_google_response(
                 reasoning_tokens = usage_meta.total_thought_tokens if usage_meta else 0
 
                 async with AsyncSession(engine, expire_on_commit=False) as db_session:
-                    if accumulated_thoughts and assistant_message_id:
-                        message = await db_session.get(Message, assistant_message_id)
-                        if message:
-                            message.reasoning_summary = accumulated_thoughts
-                            db_session.add(message)
-                            await db_session.commit()
                     await log_usage(
                         db_session,
                         user_id=user_id,

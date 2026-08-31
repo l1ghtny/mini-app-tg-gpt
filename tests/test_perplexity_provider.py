@@ -217,6 +217,11 @@ async def test_perplexity_stream_maps_chat_completion_chunks_and_search_mode(mon
     assert captured_kwargs["extra_body"]["web_search_options"]["search_context_size"] == "high"
     assert any(event.get("type") == "response.meta" and event.get("provider") == "perplexity" for event in events)
     assert any(event.get("type") == "part.start" for event in events)
+    assert any(
+        event.get("type") == "web_search.activity"
+        and event.get("sources") == [{"url": "https://example.com/source"}]
+        for event in events
+    )
     assert [event["text"] for event in events if event.get("type") == "text.delta"] == [
         "Hello",
         " world",
@@ -288,6 +293,14 @@ async def test_perplexity_fetch_url_uses_agent_api(monkeypatch):
     assert captured_payload["model"] == "perplexity/sonar"
     assert captured_payload["tools"] == [{"type": "fetch_url", "max_urls": 3}]
     text_events = [event["text"] for event in events if event.get("type") == "text.delta"]
+    assert any(
+        event.get("type") == "web_search.activity"
+        and event.get("action") == "open_page"
+        and event.get("sources") == [
+            {"title": "Example post", "url": "https://example.com/post"}
+        ]
+        for event in events
+    )
     assert text_events == ["Fetched summary.\n\n**Sources:**\n[1] Example post - https://example.com/post"]
     assert any(event.get("stage") == "fetch_url.completed" for event in events)
     assert any(event.get("type") == "done" for event in events)
