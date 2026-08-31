@@ -404,6 +404,69 @@ class Message(SQLModel, table=True):
         back_populates="message",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
+    activity_events: List["MessageActivityEvent"] = Relationship(
+        back_populates="message",
+        sa_relationship_kwargs={
+            "cascade": "all, delete-orphan",
+            "order_by": "MessageActivityEvent.sequence",
+        },
+    )
+
+
+class MessageActivityEvent(SQLModel, table=True):
+    __tablename__ = "message_activity_event"
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "sequence",
+            name="uq_message_activity_sequence",
+        ),
+        UniqueConstraint(
+            "message_id",
+            "event_key",
+            name="uq_message_activity_event_key",
+        ),
+        Index(
+            "ix_message_activity_message_sequence",
+            "message_id",
+            "sequence",
+        ),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    message_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("message.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    sequence: int = Field(sa_column=Column(Integer, nullable=False))
+    event_key: str = Field(max_length=128)
+    kind: str = Field(max_length=48)
+    status: str = Field(max_length=24)
+    detail: dict = Field(
+        default_factory=dict,
+        sa_column=Column(
+            JSONB,
+            nullable=False,
+            server_default=text("'{}'::jsonb"),
+        ),
+    )
+    started_at: datetime = Field(
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, nullable=False),
+    )
+    completed_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=True),
+    )
+    created_at: datetime = Field(
+        default_factory=utcnow_naive,
+        sa_column=Column(DateTime, nullable=False, index=True),
+    )
+
+    message: Message = Relationship(back_populates="activity_events")
 
 
 class MessageContent(SQLModel, table=True):

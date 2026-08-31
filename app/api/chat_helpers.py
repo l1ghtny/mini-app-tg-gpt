@@ -645,7 +645,10 @@ async def handle_get_conversation_messages(
     query = (
         select(Conversation)
         .where(Conversation.id == conversation_id)
-        .options(selectinload(Conversation.messages).selectinload(models.Message.content))
+        .options(
+            selectinload(Conversation.messages).selectinload(models.Message.content),
+            selectinload(Conversation.messages).selectinload(models.Message.activity_events),
+        )
     )
     conversation = (await session.exec(query)).first()
 
@@ -655,6 +658,7 @@ async def handle_get_conversation_messages(
     conversation.messages.sort(key=lambda m: (m.created_at is None, m.created_at))
     linked_assets = False
     for message in conversation.messages:
+        message.activity_events.sort(key=lambda event: event.sequence)
         for content in message.content:
             if content.type != "image_url":
                 continue

@@ -43,7 +43,7 @@ class FakeAsyncSessionCtx:
 
 
 @pytest.mark.asyncio
-async def test_generate_and_publish_emits_rich_status_and_reasoning_events(monkeypatch):
+async def test_generate_and_publish_emits_public_activity_without_reasoning(monkeypatch):
     async def fake_stream(*a, **kw):
         yield {
             "type": "status",
@@ -85,9 +85,22 @@ async def test_generate_and_publish_emits_rich_status_and_reasoning_events(monke
     async def fake_finalize_request(*_a, **_kw):
         return None
 
+    async def fake_initial_activity(*_a, **_kw):
+        return [{"type": "activity.upsert", "activity": {"event_key": "turn"}}]
+
+    async def fake_stream_activity(*_a, event, **_kw):
+        if event.get("type") != "status":
+            return []
+        return [{
+            "type": "activity.upsert",
+            "activity": {"event_key": event.get("phase", "turn")},
+        }]
+
     monkeypatch.setattr(helpers, "stream_normalized_ai_response", fake_stream, raising=True)
     monkeypatch.setattr(helpers, "AsyncSession", FakeAsyncSessionCtx)
     monkeypatch.setattr(helpers, "finalize_request", fake_finalize_request, raising=True)
+    monkeypatch.setattr(helpers, "record_initial_activity", fake_initial_activity, raising=True)
+    monkeypatch.setattr(helpers, "record_stream_activity", fake_stream_activity, raising=True)
 
     bus = FakeBus()
     await helpers.generate_and_publish(
@@ -106,5 +119,6 @@ async def test_generate_and_publish_emits_rich_status_and_reasoning_events(monke
     published = [ev for _mid, ev in bus.events]
     assert any(ev.get("type") == "status" and ev.get("phase") == "response.created" for ev in published)
     assert any(ev.get("type") == "status" and ev.get("phase") == "thinking" for ev in published)
-    assert any(ev.get("type") == "reasoning.summary.delta" for ev in published)
-    assert any(ev.get("type") == "reasoning.summary.done" for ev in published)
+    assert any(ev.get("type") == "activity.upsert" for ev in published)
+    assert not any(ev.get("type") == "reasoning.summary.delta" for ev in published)
+    assert not any(ev.get("type") == "reasoning.summary.done" for ev in published)

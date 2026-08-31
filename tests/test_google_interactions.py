@@ -63,6 +63,19 @@ class MockStream:
             MockEvent("step.stop", index=0),
             MockEvent("step.start", index=1, step=MockStep("model_output")),
             MockEvent("step.delta", index=1, delta=MockDelta("text", text="Hello world")),
+            MockEvent(
+                "step.delta",
+                index=1,
+                delta=MockDelta(
+                    "text_annotation_delta",
+                    annotations=[
+                        pytypes.SimpleNamespace(
+                            url="https://example.com/google-source",
+                            title="Google source",
+                        )
+                    ],
+                ),
+            ),
             MockEvent("step.stop", index=1),
             MockEvent("interaction.completed", interaction=MockInteraction("mock_intr_1", MockUsage(12, 24, 6)))
         ]
@@ -177,9 +190,7 @@ async def test_google_interactions_stream_normalization(monkeypatch):
     # Check that events were properly yielded and translated
     assert any(ev.get("type") == "response.meta" and ev.get("interaction_id") == "mock_intr_1" for ev in events)
     assert any(ev.get("type") == "status" and ev.get("stage") == "thinking" and ev.get("status") == "active" for ev in events)
-    assert any(ev.get("type") == "reasoning.summary.delta" and ev.get("delta") == "Reviewing... " for ev in events)
-    assert any(ev.get("type") == "reasoning.summary.delta" and ev.get("delta") == "Thinking..." for ev in events)
-    assert any(ev.get("type") == "reasoning.summary.done" and ev.get("text") == "Reviewing... Thinking..." for ev in events)
+    assert not any(ev.get("type", "").startswith("reasoning.summary") for ev in events)
     assert any(ev.get("type") == "text.delta" and ev.get("text") == "Hello world" for ev in events)
     assert any(ev.get("type") == "status" and ev.get("stage") == "completed" for ev in events)
     assert any(ev.get("type") == "done" for ev in events)
@@ -236,14 +247,11 @@ async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
     assert interactions.calls[0]["model"] == "gemini-3.1-flash-lite"
     assert "response_modalities" not in interactions.calls[0]
     assert any(
-        event.get("type") == "reasoning.summary.delta"
-        and event.get("delta") == "Reviewing... "
-        for event in events
-    )
-    assert any(
-        event.get("type") == "reasoning.summary.done"
-        and event.get("text") == "Reviewing... Thinking..."
-        for event in events
+        ev.get("type") == "web_search.activity"
+        and ev.get("sources") == [
+            {"title": "Google source", "url": "https://example.com/google-source"}
+        ]
+        for ev in events
     )
     assert any(ev.get("type") == "done" for ev in events)
 

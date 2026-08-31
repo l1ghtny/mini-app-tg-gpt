@@ -14,14 +14,9 @@ def _resolve_openai_reasoning_summary(
     requested_summary: Optional[str],
     thinking_enabled: bool | None,
 ) -> Optional[str]:
-    # Legacy behavior: when no explicit toggle is provided, keep requesting
-    # concise summaries so existing OpenAI UX remains unchanged.
-    if thinking_enabled is None:
-        return requested_summary
-    if not thinking_enabled:
-        return None
-    # thinking_enabled is True
-    return requested_summary or "extended"
+    # Reasoning effort remains configurable, but private reasoning is never
+    # requested as user-visible summary text unless an internal caller opts in.
+    return requested_summary
 
 
 def _resolve_openai_reasoning_effort(
@@ -47,7 +42,7 @@ async def stream_normalized_ai_response(
     conversation_id: Optional[uuid.UUID] = None,
     request_id: Optional[str] = None,
     assistant_message_id: Optional[uuid.UUID] = None,
-    reasoning_summary: Optional[str] = "detailed",
+    reasoning_summary: Optional[str] = None,
     previous_response_id: Optional[str] = None,
     previous_interaction_id: Optional[str] = None,
     fallback_messages: Optional[list[dict[str, Any]]] = None,

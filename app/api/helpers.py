@@ -27,6 +27,7 @@ from app.services.image_assets import (
 from app.redis.event_bus import RedisEventBus
 from app.redis.settings import settings
 from app.services.ai_service import stream_normalized_ai_response
+from app.services.chat_activity import record_initial_activity, record_stream_activity
 from app.db.database import engine
 from app.services.conversation_search import queue_assistant_index_refresh
 from app.services.model_registry import get_image_model_provider
@@ -82,6 +83,11 @@ async def generate_and_publish(
 
         try:
             await bus.publish(assistant_message_id_str, {"type": "start"})
+            await _publish_initial_activity(
+                session=session,
+                bus=bus,
+                assistant_message_id=assistant_message_id,
+            )
 
             async for ev in stream_normalized_ai_response(
                     history_for_openai,
@@ -100,7 +106,21 @@ async def generate_and_publish(
                     reasoning_effort=reasoning_effort,
                     search_mode=search_mode,
             ):
-                if ev.get("type") not in {"image.partial", "image.ready", "response.meta"}:
+                await _record_and_publish_activity(
+                    session=session,
+                    bus=bus,
+                    assistant_message_id=assistant_message_id,
+                    event=ev,
+                    lifecycle=lifecycle,
+                )
+
+                if ev.get("type") not in {
+                    "image.partial",
+                    "image.ready",
+                    "response.meta",
+                    "reasoning.summary.delta",
+                    "reasoning.summary.done",
+                }:
                     await bus.publish(assistant_message_id_str, ev)
 
                 await _handle_stream_event(
@@ -136,6 +156,13 @@ async def generate_and_publish(
             }
             if lifecycle.get("last_error_code"):
                 error_event["code"] = lifecycle["last_error_code"]
+            await _record_and_publish_activity(
+                session=session,
+                bus=bus,
+                assistant_message_id=assistant_message_id,
+                event=error_event,
+                lifecycle=lifecycle,
+            )
             await bus.publish(assistant_message_id_str, error_event)
             await bus.mark_done(
                 assistant_message_id_str,
@@ -158,6 +185,55 @@ async def generate_and_publish(
                 conversation_id=conversation_id,
                 assistant_message_id=assistant_message_id_str,
             )
+
+
+async def _publish_initial_activity(
+    *,
+    session: AsyncSession,
+    bus: RedisEventBus,
+    assistant_message_id: uuid.UUID,
+) -> None:
+    try:
+        updates = await record_initial_activity(
+            session,
+            message_id=assistant_message_id,
+        )
+    except Exception:
+        await session.rollback()
+        logger.exception(
+            "Could not persist initial message activity assistant_message_id=%s",
+            str(assistant_message_id),
+        )
+        return
+    for update in updates:
+        await bus.publish(str(assistant_message_id), update)
+
+
+async def _record_and_publish_activity(
+    *,
+    session: AsyncSession,
+    bus: RedisEventBus,
+    assistant_message_id: uuid.UUID,
+    event: dict[str, Any],
+    lifecycle: dict[str, Any],
+) -> None:
+    try:
+        updates = await record_stream_activity(
+            session,
+            message_id=assistant_message_id,
+            event=event,
+            lifecycle=lifecycle,
+        )
+    except Exception:
+        await session.rollback()
+        logger.exception(
+            "Could not persist message activity assistant_message_id=%s event_type=%s",
+            str(assistant_message_id),
+            event.get("type"),
+        )
+        return
+    for update in updates:
+        await bus.publish(str(assistant_message_id), update)
 
 
 

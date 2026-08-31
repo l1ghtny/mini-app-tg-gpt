@@ -25,10 +25,6 @@ from app.core.metrics import track_event, track_internal_event
 from app.db.database import engine
 from app.redis.settings import settings
 from app.services.background.save_openai_usage import log_usage
-from app.services.reasoning_activity import (
-    ReasoningActivity,
-    VISIBLE_REASONING_LANGUAGE_INSTRUCTION,
-)
 
 STYLE_GUIDE = (
     "Format replies in Markdown:\n"
@@ -36,7 +32,6 @@ STYLE_GUIDE = (
     "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
     "- Use fenced code blocks for code.\n"
     "- Use standard [text](url) links.\n"
-    f"{VISIBLE_REASONING_LANGUAGE_INSTRUCTION}\n"
     "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
 )
 
@@ -166,6 +161,12 @@ def _build_responses_create_kwargs(
 
     if tools is not None:
         kwargs["tools"] = tools
+        if any(
+            str(tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", "")).lower()
+            in {"web_search", "web_search_preview"}
+            for tool in tools
+        ):
+            kwargs["include"] = ["web_search_call.action.sources"]
     if tool_choice is not None:
         kwargs["tool_choice"] = tool_choice
     if instructions is not None:
@@ -291,9 +292,7 @@ class StreamState:
     last_flush: Dict[int, float] = field(default_factory=dict)
     seen_text_part_started: Dict[int, bool] = field(default_factory=dict)
     seen_image_part_started: Dict[int, bool] = field(default_factory=dict)
-    reasoning_activity: ReasoningActivity = field(
-        default_factory=lambda: ReasoningActivity(provider="openai")
-    )
+    reasoning_started: bool = False
 
 
 def _build_status_event(
@@ -308,6 +307,7 @@ def _build_status_event(
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "type": "status",
+        "provider": "openai",
         "stage": stage,  # backwards compatible field
         "phase": phase,
         "status": status,
@@ -318,6 +318,53 @@ def _build_status_event(
     }
     if index is not None:
         payload["index"] = index
+    activity_id = getattr(event, "item_id", None) or getattr(event, "call_id", None)
+    if activity_id:
+        payload["activity_id"] = str(activity_id)
+    return payload
+
+
+def _object_value(value: Any, key: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _web_search_activity_event(item: Any) -> Dict[str, Any]:
+    action = _object_value(item, "action")
+    action_type = str(_object_value(action, "type") or "search")
+    payload: Dict[str, Any] = {
+        "type": "web_search.activity",
+        "provider": "openai",
+        "status": "completed",
+        "action": action_type,
+        "item_id": str(_object_value(item, "id") or "openai-web-search"),
+    }
+    query = _object_value(action, "query")
+    queries = _object_value(action, "queries")
+    if isinstance(query, str) and query:
+        payload["query"] = query
+    elif isinstance(queries, list):
+        cleaned = [str(value).strip() for value in queries if str(value).strip()]
+        if cleaned:
+            payload["query"] = " · ".join(cleaned[:4])
+    for key in ("url", "pattern"):
+        value = _object_value(action, key)
+        if isinstance(value, str) and value:
+            payload[key] = value
+
+    sources = []
+    for source in _object_value(action, "sources") or []:
+        url = _object_value(source, "url")
+        if not isinstance(url, str) or not url:
+            continue
+        entry = {"url": url}
+        title = _object_value(source, "title") or _object_value(source, "name")
+        if isinstance(title, str) and title:
+            entry["title"] = title
+        sources.append(entry)
+    if sources:
+        payload["sources"] = sources
     return payload
 
 
@@ -393,44 +440,61 @@ async def _map_openai_event(
         and getattr(event, "item", None)
         and event.item.type == "reasoning"
     ):
-        segment_id = f"{getattr(event.item, 'id', 'reasoning')}:{0}"
-        out.extend(
-            state.reasoning_activity.start(
-                segment_id=segment_id,
+        state.reasoning_started = True
+        out.append(
+            _build_status_event(
+                stage="thinking",
+                phase="thinking",
+                label="Thinking",
                 source_event=et,
-                sequence_number=getattr(event, "sequence_number", None),
+                event=event,
             )
         )
         return out
 
+    if (
+        et == "response.output_item.added"
+        and getattr(event, "item", None)
+        and event.item.type == "web_search_call"
+    ):
+        activity = _web_search_activity_event(event.item)
+        activity["status"] = "active"
+        out.append(activity)
+        return out
+
     if et in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
-        segment_id = f"{event.item_id}:{event.summary_index}"
-        events = state.reasoning_activity.append(
-            event.delta,
-            segment_id=segment_id,
-            source_event=et,
-            sequence_number=getattr(event, "sequence_number", None),
-        )
-        for payload in events:
-            payload.setdefault("output_index", event.output_index)
-            payload.setdefault("summary_index", event.summary_index)
-            payload.setdefault("item_id", event.item_id)
-        out.extend(events)
+        if not state.reasoning_started:
+            out.append(
+                _build_status_event(
+                    stage="thinking",
+                    phase="thinking",
+                    label="Thinking",
+                    source_event=et,
+                    event=event,
+                )
+            )
+            state.reasoning_started = True
         return out
 
     if et in {"response.reasoning_summary_text.done", "response.reasoning_text.done"}:
-        segment_id = f"{event.item_id}:{event.summary_index}"
-        events = state.reasoning_activity.complete(
-            segment_id=segment_id,
-            source_event=et,
-            full_text=event.text,
-            sequence_number=getattr(event, "sequence_number", None),
+        out.append(
+            _build_status_event(
+                stage="thinking",
+                phase="thinking",
+                label="Thinking complete",
+                source_event=et,
+                event=event,
+                status="done",
+            )
         )
-        for payload in events:
-            payload.setdefault("output_index", event.output_index)
-            payload.setdefault("summary_index", event.summary_index)
-            payload.setdefault("item_id", event.item_id)
-        out.extend(events)
+        return out
+
+    if (
+        et == "response.output_item.done"
+        and getattr(event, "item", None)
+        and event.item.type == "web_search_call"
+    ):
+        out.append(_web_search_activity_event(event.item))
         return out
 
     if et == "response.content_part.added":
@@ -619,7 +683,7 @@ async def stream_normalized_openai_response(
     conversation_id: Optional[uuid.UUID] = None,
     request_id: Optional[str] = None,
     assistant_message_id: Optional[uuid.UUID] = None,
-    reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = "auto",
+    reasoning_summary: Optional[Literal["auto", "concise", "detailed"]] = None,
     reasoning_effort: Optional[Literal["none", "low", "medium", "high", "xhigh", "max"]] = None,
     previous_response_id: Optional[str] = None,
     fallback_messages: Optional[List["Message"]] = None,
@@ -694,6 +758,14 @@ async def stream_normalized_openai_response(
                         upstream_request_id,
                         exc,
                     )
+                    yield {
+                        "type": "status",
+                        "stage": "provider.retrying",
+                        "phase": "provider.retrying",
+                        "status": "active",
+                        "source_event": "openai.retry",
+                        "retry_attempt": attempt + 1,
+                    }
                     await asyncio.sleep(delay)
                     continue
 
@@ -732,6 +804,14 @@ async def stream_normalized_openai_response(
                         upstream_request_id,
                         exc,
                     )
+                    yield {
+                        "type": "status",
+                        "stage": "provider.retrying",
+                        "phase": "provider.retrying",
+                        "status": "active",
+                        "source_event": "openai.retry",
+                        "retry_attempt": attempt + 1,
+                    }
                     await asyncio.sleep(delay)
 
                     create_kwargs = _build_responses_create_kwargs(
@@ -763,12 +843,6 @@ async def stream_normalized_openai_response(
                 raise
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
-            if state.reasoning_activity.text and assistant_message_id:
-                message = await session.get(Message, assistant_message_id)
-                if message:
-                    message.reasoning_summary = state.reasoning_activity.text
-                    session.add(message)
-                    await session.commit()
             await log_usage(
                 session,
                 user_id=user_id,
