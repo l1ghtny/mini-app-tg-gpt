@@ -1,0 +1,3 @@
+SERVICE AGREEMENT EXCERPT
+
+The vendor may retain submitted content for up to 90 days after account termination. Subprocessors may be added with 14 days notice. Service availability is targeted at 99.5 percent per calendar month. The exclusive remedy for missing the availability target is a service credit capped at 10 percent of that month's fee. The agreement contains no stated breach-notification deadline and no customer audit right.

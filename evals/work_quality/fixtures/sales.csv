@@ -1,0 +1,10 @@
+month,region,product,units,revenue_usd
+2026-05,North,Core,18,3600
+2026-05,South,Core,12,2400
+2026-05,North,Plus,6,2400
+2026-06,North,Core,20,4000
+2026-06,South,Core,15,3000
+2026-06,North,Plus,8,3200
+2026-07,North,Core,17,3400
+2026-07,South,Core,19,3800
+2026-07,North,Plus,10,4000

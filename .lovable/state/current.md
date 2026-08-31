@@ -18,9 +18,137 @@
 - Validation passes: Python compilation and 29 focused activity, stream,
   OpenAI, Google, Perplexity, and
   migration tests. No live provider call or database migration was run locally.
-- Next: review and commit both isolated worktrees, deploy the additive backend
-  migration/runtime first, verify real send/stream/resume across providers, then
-  merge the production branches into beta.
+- Next: deploy the additive backend migration/runtime first, then verify real
+  send/stream/resume across providers on beta.
+
+## 2026-08-31 Work MVP beta-eval blocker fixes
+
+- Implemented the four blockers demonstrated by the `mvp-core` beta run on branch
+  `codex/work-mvp-eval-fixes`.
+- Follow-up messages now reconcile a stale `running` or `waiting_for_user` thread
+  from its latest terminal run before deciding whether the thread is still active.
+  This removes the observed `work_message_active_run` conflict after cancellation.
+- Requests that explicitly require a material question before the deliverable now
+  retry a plain-text question through the structured `ask_user` tool. English and
+  Russian output-language mismatches are also rejected before reviewer fallback;
+  explicitly requested third languages remain allowed.
+- Generated-file validation now derives one primary output format from each approved
+  artifact, rather than treating a source-file mention in the current request as an
+  additional required deliverable. This fixes the source-CSV plus output-XLSX case.
+- Work quality scoring now validates only artifacts matching the requested deliverable
+  extensions, so page-preview PNGs do not invalidate a valid DOCX. The English scorer
+  also rejects probable Turkish output, and the action-plan fixture requires the one
+  source citation its prompt actually supplies.
+- Rescoring the saved beta observations now gives the valid DOCX a full automated pass
+  and correctly fails the Turkish memo on `response_language`. The remaining saved
+  failures still represent the old deployed runtime and require a post-deploy rerun.
+
+### Validation
+
+- 60 focused cancellation, clarification, language, artifact-contract, and scorer
+  tests pass.
+- 135 Work and generated-artifact tests pass.
+- Ruff, Python compilation, and diff whitespace checks pass on the cleaned diff.
+
+### Next steps
+
+1. Commit the complete fix set and fast-forward the remote beta branch only after the
+   final Git/CI preflight remains green.
+2. Verify the beta deployment revision and public health endpoints.
+3. Use a new short-lived beta session to rerun the four affected cases, then the full
+   `mvp-core` profile and human gate before inviting pilot users.
+
+## 2026-08-31 Work MVP mvp-core beta evaluation
+
+- Ran all six `mvp-core` cases against `https://beta.app.lightny.ru` with a
+  short-lived browser session cookie. The cookie was supplied through a mode-600
+  temporary file, was never printed or persisted in results, and was deleted after
+  the run.
+- Completed human review for every core case. The redaction-safe observations,
+  worksheet, downloaded synthetic artifacts, and report remain locally under
+  ignored `.eval-results/work/`.
+- Final gates: 33.3% automated case pass, 66.7% system success, 33.3% valid
+  artifacts, 100% citation integrity, and 33.3% useful without correction. The MVP
+  therefore does not pass the invited-pilot boundary.
+- `web_openai_agent_evals` passed automation and human review. The two concrete
+  recommendations were concise and cited official OpenAI sources.
+- `docs_product_decision_memo` passed automation and was accurate and complete,
+  but answered an English task in Turkish, so human review marked it as requiring
+  correction.
+- `sheet_sales_analysis` failed with `work_run_validation_failed`: the generated
+  file did not match the approved deliverable, and no XLSX or inline result was
+  delivered. Work run: `2c9aee4a-daf0-458e-bec3-4e29966ecb4b`.
+- `artifact_action_plan_docx` produced an accurate, editable DOCX that rendered
+  cleanly across two pages and passed human review without repair. Automation still
+  failed because two generated page-preview PNG artifacts were graded as invalid
+  requested deliverables and the case missed its citation-count contract; this is a
+  scorer/artifact-classification false negative around an otherwise valid DOCX.
+- `clarify_material_audience` completed as a normal assistant answer containing a
+  plain-text question instead of persisting a structured human-input request. The
+  evaluator timed out waiting for `waiting_for_user`; no answer was accepted and no
+  launch announcement was produced. Work run:
+  `b6f4f30e-263f-4990-981f-ec216ed1d35f`.
+- `recovery_cancel_then_redirect` cancelled the first run, but the redirected
+  follow-up failed with HTTP 409 `work_message_active_run`; no checklist result was
+  produced. Cancelled run: `2ce6be7d-3908-46d9-bc3a-0cc59a031624`.
+
+### Validation
+
+- All 15 versioned cases and synthetic fixtures validate offline.
+- The generated DOCX was rendered with the bundled document runtime and every page
+  was visually inspected for clipping, overlap, table layout, and readability.
+- The tracked worktree remained unchanged except for this state update; evaluation
+  outputs are ignored by Git.
+
+### Next steps
+
+1. Diagnose the two system/recovery failures first: cancellation leaving the thread
+   blocked by `work_message_active_run`, then material clarification bypassing the
+   structured `ask_user`/`waiting_for_user` path.
+2. Diagnose the XLSX deliverable-validation failure using run
+   `2c9aee4a-daf0-458e-bec3-4e29966ecb4b`, add a regression, and prove a structurally
+   valid downloaded workbook.
+3. Fix the eval scorer so preview PNGs do not invalidate a requested DOCX, and add a
+   language regression for an English task with no explicit output-language
+   override.
+4. Re-run each failed case, then the full `mvp-core` profile and human review. Do not
+   start the invited pilot until every release gate passes.
+
+## 2026-08-31 Work MVP recovery and evaluation direction
+
+- Preserved the entire former dirty tree in commit `191f99e` on
+  `recovery/dirty-2026-08-31` before changing the active checkout.
+- Rebuilt the active `codex/ui` branch from current `origin/beta` and ported only the
+  versioned Work quality suite as commit `27d7b75`. Local evaluation results and
+  database backups remain on disk and are ignored; they were not deleted or committed.
+- Saved beta evidence covers 7 of 15 cases: 100% system success, 85.7% automated pass,
+  100% citation integrity, no artifact observations, and no human reviews. The one
+  automated failure is the citation-count contract for
+  `docs_meeting_action_register`.
+- Defined Work v1 as conversation-native sourced research, document synthesis,
+  editable XLSX/DOCX delivery, material clarification, and safe recovery. New model
+  providers and broader agent features are deferred until this boundary is validated.
+- Added the balanced `mvp-core` live profile and the concise completion plan at
+  `docs/product-strategy/14-work-mvp-completion-plan.md`.
+- Confirmed Temporal as the only long-term dedicated workflow-orchestration target.
+  DBOS is not planned; its historical recovery-branch proposal is superseded. A
+  Temporal migration remains deferred until the Work MVP and pilot justify it.
+
+### Validation
+
+- The 15-case suite and all synthetic fixtures validate offline.
+- Focused eval tests, Ruff, Python compilation, and diff whitespace checks pass.
+
+### Next steps
+
+1. Run `python -m evals.work_quality run --profile mvp-core` on beta using a
+   short-lived test credential.
+2. Complete human review for all six outputs.
+3. Fix the first reproducible product blocker, add a regression, and rerun the profile.
+4. Start a monitored 5–10 user pilot only after the MVP gates pass.
+
+The live profile was not started because no beta evaluation credential is available in
+the current environment. Offline validation is complete.
 
 ## 2026-08-19 stable Google image endpoints
 

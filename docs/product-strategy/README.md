@@ -36,10 +36,14 @@ The strongest wedge is **research-to-result continuity**:
 10. [App-to-SEO capability audit](./10-app-to-seo-capability-audit.md)
 11. [Usage personas and unit economics](./11-usage-personas-and-unit-economics.md)
 12. [Concluding promise, viability, and customer value](./12-concluding-promise-viability-and-value.md)
+13. [Real-user pilot readiness audit](./13-real-user-pilot-readiness-audit.md)
+14. [Work MVP completion plan](./14-work-mvp-completion-plan.md)
 
 ## How to use this pack
 
 - Treat `08-execution-roadmap.md` as the operating backlog.
+- Use `14-work-mvp-completion-plan.md` as the acceptance gate for Work; its
+  evaluation evidence takes precedence over speculative Work expansion.
 - Review `06-trust-legal-and-launch-readiness.md` before making public claims or taking payments on the web.
 - Use `05-seo-and-content-strategy.md` when creating new SEO routes; avoid publishing generic pages merely to increase page count.
 - Revisit the competitor facts and prices quarterly because they change quickly.

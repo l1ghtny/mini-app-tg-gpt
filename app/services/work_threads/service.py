@@ -140,6 +140,38 @@ async def _latest_plan(session: AsyncSession, thread_id: uuid.UUID) -> WorkPlan 
     ).first()
 
 
+async def _reconcile_terminal_thread_status(
+    session: AsyncSession,
+    thread: WorkThread,
+) -> None:
+    if thread.status not in {"running", "waiting_for_user"}:
+        return
+    latest_link = (
+        await session.exec(
+            select(WorkThreadRun)
+            .where(WorkThreadRun.thread_id == thread.id)
+            .order_by(col(WorkThreadRun.ordinal).desc())
+            .limit(1)
+        )
+    ).first()
+    latest_run = (
+        await session.get(WorkRun, latest_link.work_run_id)
+        if latest_link is not None
+        else None
+    )
+    terminal_thread_status = {
+        WorkRunStatus.SUCCEEDED.value: "completed",
+        WorkRunStatus.FAILED.value: "failed",
+        WorkRunStatus.CANCELLED.value: "cancelled",
+        WorkRunStatus.REFUNDED.value: "failed",
+    }.get(latest_run.status if latest_run is not None else None)
+    if terminal_thread_status is None:
+        return
+    thread.status = terminal_thread_status
+    session.add(thread)
+    await session.commit()
+
+
 async def owned_thread(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -915,6 +947,8 @@ async def send_message(
     )
     if existing is not None:
         return existing
+
+    await _reconcile_terminal_thread_status(session, thread)
 
     messages = (
         await session.exec(

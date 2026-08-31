@@ -1,0 +1,292 @@
+{
+  "version": 1,
+  "name": "Lightny Work MVP quality bench",
+  "description": "Fifteen synthetic, product-level cases covering research, document work, spreadsheets, artifact creation, clarification, revisions, and recovery. No customer data is included.",
+  "cases": [
+    {
+      "id": "web_openai_agent_evals",
+      "category": "web_research",
+      "title": "Current OpenAI guidance for evaluating agents",
+      "goal": "Using only current official OpenAI documentation, identify two practical recommendations for evaluating AI agents. Cite the exact sources beside the relevant claims and keep the answer under 250 words.",
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["web_search"],
+        "min_sources": 2,
+        "min_citations": 2,
+        "max_cost_usd": 1,
+        "max_duration_seconds": 600
+      },
+      "human_rubric": ["Recommendations are concrete", "Claims are supported by official sources", "Answer respects the word limit", "No process narration replaces the deliverable"],
+      "tags": ["research", "citations", "official-sources"]
+    },
+    {
+      "id": "web_eu_ai_act_obligations",
+      "category": "web_research",
+      "title": "EU AI Act current implementation summary",
+      "goal": "Using current official EU sources only, prepare a concise briefing for a small SaaS company on the next two material EU AI Act dates after 16 August 2026 and what each date changes. Cite every date and obligation. Clearly separate facts from practical suggestions.",
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["web_search"],
+        "min_sources": 2,
+        "min_citations": 3,
+        "max_cost_usd": 1,
+        "max_duration_seconds": 600
+      },
+      "human_rubric": ["Dates and obligations are current", "Official sources support material claims", "Facts and suggestions are separated", "Briefing is useful to a small company"],
+      "tags": ["research", "current-information", "high-accuracy"]
+    },
+    {
+      "id": "web_vendor_landscape",
+      "category": "web_research",
+      "title": "Evidence-linked feedback tools landscape",
+      "goal": "Research three currently available products that help product teams turn customer feedback into prioritized work. Use each vendor's official product documentation or website, compare evidence linking, collaboration, and export capabilities in a compact table, then identify one underserved angle. Cite every product claim.",
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["web_search"],
+        "min_sources": 3,
+        "min_citations": 6,
+        "max_cost_usd": 1.25,
+        "max_duration_seconds": 600
+      },
+      "human_rubric": ["Exactly three relevant products are compared", "Comparison dimensions are consistent", "Claims have vendor citations", "Underserved angle follows from the evidence"],
+      "tags": ["research", "comparison", "table"]
+    },
+    {
+      "id": "docs_product_decision_memo",
+      "category": "documents",
+      "title": "Product beta decision memo from two files",
+      "goal": "Read both attached files and write a decision memo for the Atlas beta. Recommend the three highest-priority product changes, explain the evidence for each, name the main risk, and propose one measurable 30-day success criterion. Use only the files and cite the exact filename beside factual claims.",
+      "attachments": [{"path": "fixtures/product-brief.md"}, {"path": "fixtures/customer-interviews.md"}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["file_search"],
+        "forbidden_tools": ["web_search"],
+        "min_sources": 2,
+        "min_citations": 4,
+        "max_cost_usd": 1,
+        "max_duration_seconds": 600
+      },
+      "human_rubric": ["Three priorities follow from the files", "File-derived claims are traceable", "Risk is material", "Success criterion is measurable"],
+      "tags": ["documents", "synthesis", "decision"]
+    },
+    {
+      "id": "docs_contract_risk_review",
+      "category": "documents",
+      "title": "Contract and policy gap review",
+      "goal": "Compare the attached vendor contract excerpt with the internal data-handling policy. Produce a table of conflicts or gaps with severity, supporting text, and a negotiation request. Do not use the web and do not provide legal conclusions; label the output as an operational review.",
+      "attachments": [{"path": "fixtures/vendor-contract.txt"}, {"path": "fixtures/security-policy.md"}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["file_search"],
+        "forbidden_tools": ["web_search"],
+        "min_sources": 2,
+        "min_citations": 4,
+        "max_cost_usd": 1,
+        "max_duration_seconds": 600
+      },
+      "human_rubric": ["Material gaps are found", "Severity is proportionate", "Negotiation requests are actionable", "Scope disclaimer is clear"],
+      "tags": ["documents", "comparison", "risk"]
+    },
+    {
+      "id": "docs_meeting_action_register",
+      "category": "documents",
+      "title": "Meeting action and decision register",
+      "goal": "Turn the attached meeting notes into an action register with owner, due date, status, dependency, and source evidence. Do not invent missing owners or dates: mark them as unresolved. Add a separate decisions and open-questions section. Use no web sources.",
+      "attachments": [{"path": "fixtures/meeting-notes.md"}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["file_search"],
+        "forbidden_tools": ["web_search"],
+        "min_sources": 1,
+        "min_citations": 3,
+        "max_cost_usd": 0.8,
+        "max_duration_seconds": 600
+      },
+      "human_rubric": ["All explicit actions are captured", "Missing facts are not invented", "Decisions and open questions are distinct", "Register is easy to scan"],
+      "tags": ["documents", "extraction", "no-hallucination"]
+    },
+    {
+      "id": "sheet_sales_analysis",
+      "category": "spreadsheet",
+      "title": "Sales analysis workbook",
+      "goal": "Analyze the attached sales CSV and create an Excel workbook with the source data, monthly revenue totals, region totals, and a clear chart of monthly revenue. In the response, summarize the strongest trend and cite the source filename. Do not use the web.",
+      "attachments": [{"path": "fixtures/sales.csv"}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "forbidden_tools": ["web_search"],
+        "min_sources": 1,
+        "min_citations": 1,
+        "min_artifacts": 1,
+        "artifact_extensions": [".xlsx"],
+        "max_cost_usd": 1.25,
+        "max_duration_seconds": 900
+      },
+      "human_rubric": ["Calculations match the CSV", "Workbook structure is readable", "Chart communicates the trend", "Inline summary is accurate"],
+      "tags": ["spreadsheet", "calculation", "artifact"]
+    },
+    {
+      "id": "sheet_supplier_comparison",
+      "category": "spreadsheet",
+      "title": "Supplier comparison workbook",
+      "goal": "Compare both attached supplier CSV files and create a polished Excel workbook. Include a normalized comparison table, highlight the lower unit price and faster delivery for each item, preserve payment terms and minimum orders, and add a short recommendation that states any trade-offs. Use only the files and cite the relevant filename beside factual claims.",
+      "attachments": [{"path": "fixtures/supplier-a.csv"}, {"path": "fixtures/supplier-b.csv"}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "forbidden_tools": ["web_search"],
+        "min_sources": 2,
+        "min_citations": 4,
+        "min_artifacts": 1,
+        "artifact_extensions": [".xlsx"],
+        "max_cost_usd": 1.5,
+        "max_duration_seconds": 900
+      },
+      "human_rubric": ["All rows and terms are preserved", "Highlights are correct", "Workbook is human-readable", "Recommendation acknowledges trade-offs"],
+      "tags": ["spreadsheet", "comparison", "artifact"]
+    },
+    {
+      "id": "artifact_launch_pdf",
+      "category": "artifact",
+      "title": "Polished one-page beta launch PDF",
+      "goal": "Using the attached launch brief, create a polished one-page PDF invitation for the Atlas private beta. Preserve every required fact and footer, make the primary action visually clear, avoid unsupported claims, and include a concise inline summary. Do not use the web.",
+      "attachments": [{"path": "fixtures/launch-brief.md"}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["code_interpreter"],
+        "forbidden_tools": ["web_search"],
+        "min_sources": 1,
+        "min_citations": 1,
+        "min_artifacts": 1,
+        "artifact_extensions": [".pdf"],
+        "max_cost_usd": 1.5,
+        "max_duration_seconds": 900
+      },
+      "human_rubric": ["PDF is genuinely one page", "Visual hierarchy is professional", "Required footer and action are present", "Copy does not overclaim"],
+      "tags": ["artifact", "pdf", "design"]
+    },
+    {
+      "id": "artifact_action_plan_docx",
+      "category": "artifact",
+      "title": "Editable action-plan document",
+      "goal": "Create an editable DOCX action plan from the attached meeting notes. Include an executive summary, action table, decisions, open questions, and a next-review section. Preserve unresolved owners or dates as explicit gaps. Also summarize the result inline. Do not use the web.",
+      "attachments": [{"path": "fixtures/meeting-notes.md"}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["code_interpreter"],
+        "forbidden_tools": ["web_search"],
+        "min_sources": 1,
+        "min_citations": 1,
+        "min_artifacts": 1,
+        "artifact_extensions": [".docx"],
+        "max_cost_usd": 1.5,
+        "max_duration_seconds": 900
+      },
+      "human_rubric": ["DOCX is editable and structured", "Source facts are accurate", "Unknowns remain explicit", "Document is usable without repair"],
+      "tags": ["artifact", "docx", "documents"]
+    },
+    {
+      "id": "clarify_material_audience",
+      "category": "clarification",
+      "title": "Ask one material product-launch question",
+      "goal": "Prepare a launch announcement for our new product. The final wording must be appropriate to the audience and channel, but neither the product nor the audience/channel is provided. Ask one concise question that obtains the minimum information needed before writing the announcement.",
+      "interactions": [{"action": "answer", "wait_for": "waiting_for_user", "content": "It is Atlas, a private beta for operations leads at existing design-partner companies, sent by email. The call to action is to book onboarding."}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "required",
+        "min_successful_runs": 1,
+        "max_cost_usd": 1.25,
+        "max_duration_seconds": 900
+      },
+      "human_rubric": ["Question was genuinely necessary", "Only one focused question was asked", "Answer was incorporated", "Final announcement is usable"],
+      "tags": ["ask-user", "clarification", "resume"]
+    },
+    {
+      "id": "clarify_not_needed",
+      "category": "clarification",
+      "title": "Proceed without needless clarification",
+      "goal": "Write a 120-word email invitation for Atlas, a private beta for operations leads at existing design-partner companies. Use a calm, practical tone. The call to action is to book a 30-minute onboarding call. Include the footer 'Private beta. Features and limits may change.' Do not ask follow-up questions and do not use the web.",
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "forbidden_tools": ["web_search"],
+        "max_cost_usd": 0.8,
+        "max_duration_seconds": 600
+      },
+      "human_rubric": ["No clarification was requested", "All supplied constraints are followed", "Copy is close to 120 words", "Email is usable"],
+      "tags": ["ask-user", "negative-control"]
+    },
+    {
+      "id": "revision_concise_memo",
+      "category": "revision",
+      "title": "Revise a completed result in conversation",
+      "goal": "Using the attached product brief, write a decision memo recommending whether Atlas should enter private beta. Include evidence, risks, and a recommendation. Do not use the web.",
+      "attachments": [{"path": "fixtures/product-brief.md"}],
+      "interactions": [{"action": "message", "wait_for": "terminal", "content": "Revise the memo for a busy founder: keep it under 140 words, preserve the key evidence and risk, and end with a single explicit decision."}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["file_search"],
+        "forbidden_tools": ["web_search"],
+        "min_successful_runs": 2,
+        "min_sources": 1,
+        "min_citations": 1,
+        "max_cost_usd": 1.5,
+        "max_duration_seconds": 900
+      },
+      "human_rubric": ["Revision follows the new length", "Key evidence survives", "Decision is explicit", "No unrelated content was added"],
+      "tags": ["follow-up", "revision", "context"]
+    },
+    {
+      "id": "revision_result_to_docx",
+      "category": "revision",
+      "title": "Turn a prior result into a file",
+      "goal": "Using the attached meeting notes, produce a concise action register with owners, dates, and unresolved gaps. Do not use the web.",
+      "attachments": [{"path": "fixtures/meeting-notes.md"}],
+      "interactions": [{"action": "message", "wait_for": "terminal", "content": "Now turn that action register into a polished editable DOCX with an executive summary and an open-questions section. Keep the same facts and also summarize the file inline."}],
+      "expectations": {
+        "response_language": "en",
+        "clarification": "forbidden",
+        "required_tools": ["file_search", "code_interpreter"],
+        "forbidden_tools": ["web_search"],
+        "min_successful_runs": 2,
+        "min_sources": 1,
+        "min_citations": 1,
+        "min_artifacts": 1,
+        "artifact_extensions": [".docx"],
+        "max_cost_usd": 2,
+        "max_duration_seconds": 1200
+      },
+      "human_rubric": ["Second turn preserves prior facts", "DOCX matches the requested structure", "File is structurally valid", "Inline summary is useful"],
+      "tags": ["follow-up", "artifact", "context"]
+    },
+    {
+      "id": "recovery_cancel_then_redirect",
+      "category": "recovery",
+      "title": "Cancel active research and continue safely",
+      "goal": "Research current official guidance for evaluating AI agents and prepare a detailed report with citations.",
+      "interactions": [
+        {"action": "cancel", "wait_for": "running", "delay_seconds": 0.2},
+        {"action": "message", "wait_for": "terminal", "content": "Change direction: do not browse or create files. Give me a five-item forward-looking checklist for planning an internal evaluation, based only on general knowledge."}
+      ],
+      "expectations": {
+        "terminal_statuses": ["succeeded"],
+        "response_language": "en",
+        "clarification": "forbidden",
+        "min_successful_runs": 1,
+        "max_cost_usd": 1.5,
+        "max_duration_seconds": 900
+      },
+      "human_rubric": ["First run is cancelled rather than completed", "New direction succeeds", "Final result is a real five-item checklist", "No stale research claim leaks into the result"],
+      "tags": ["cancellation", "recovery", "redirect"]
+    }
+  ]
+}

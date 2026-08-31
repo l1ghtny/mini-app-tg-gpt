@@ -1,0 +1,4 @@
+supplier,item,unit_price_usd,min_order,delivery_days,payment_terms
+Blue River,Widget A,11.95,250,14,Net 15
+Blue River,Widget B,8.55,100,6,Net 15
+Blue River,Widget C,4.60,500,9,Prepaid

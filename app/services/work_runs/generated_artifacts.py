@@ -238,16 +238,6 @@ def artifact_contract_error(
     if not references:
         return "The approved deliverable requires a generated file, but none was cited."
 
-    contract_text = " ".join(
-        str(value)
-        for output in artifact_outputs
-        for value in (
-            output.get("label", ""),
-            output.get("description", ""),
-            *(output.get("acceptance_criteria", []) or []),
-        )
-    )
-    contract_text += " " + str(request_payload.get("current_request", ""))
     requested_groups: list[tuple[str, set[str]]] = []
     format_patterns = (
         (r"\bpdf\b", "PDF", {".pdf"}),
@@ -259,9 +249,30 @@ def artifact_contract_error(
         (r"\bpng\b", "PNG", {".png"}),
         (r"\b(?:jpe?g)\b", "JPEG", {".jpg", ".jpeg"}),
     )
-    for pattern, label, extensions in format_patterns:
-        if re.search(pattern, contract_text, flags=re.IGNORECASE):
-            requested_groups.append((label, extensions))
+    for output in artifact_outputs:
+        label_text = str(output.get("label", ""))
+        label_groups = [
+            (label, extensions)
+            for pattern, label, extensions in format_patterns
+            if re.search(pattern, label_text, flags=re.IGNORECASE)
+        ]
+        if label_groups:
+            requested_groups.append(label_groups[0])
+            continue
+        output_text = " ".join(
+            str(value)
+            for value in (
+                output.get("description", ""),
+                *(output.get("acceptance_criteria", []) or []),
+            )
+        )
+        output_groups = [
+            (label, extensions)
+            for pattern, label, extensions in format_patterns
+            if re.search(pattern, output_text, flags=re.IGNORECASE)
+        ]
+        if output_groups:
+            requested_groups.append(output_groups[0])
     produced_extensions = {
         Path(reference.filename).suffix.lower() for reference in references
     }
