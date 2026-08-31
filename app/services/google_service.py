@@ -521,11 +521,22 @@ async def _stream_google_response_with_function_handoff(
 
                     elif delta.type == "text_annotation_delta":
                         if delta.annotations:
+                            citations_changed = False
                             for ann in delta.annotations:
                                 url = getattr(ann, "url", None)
                                 title = getattr(ann, "title", None) or getattr(ann, "uri", url) or "Source"
                                 if url and not any(c["url"] == url for c in citations):
                                     citations.append({"title": title, "url": url})
+                                    citations_changed = True
+                            if citations_changed:
+                                yield {
+                                    "type": "web_search.activity",
+                                    "provider": "google",
+                                    "status": "active",
+                                    "action": "search",
+                                    "item_id": "google-web-search",
+                                    "sources": [dict(source) for source in citations],
+                                }
                     elif (
                         delta.type == "arguments_delta"
                         and pending_function_call is not None
@@ -567,7 +578,7 @@ async def _stream_google_response_with_function_handoff(
                                 "status": "completed",
                                 "action": "search",
                                 "item_id": "google-web-search",
-                                "sources": citations,
+                                "sources": [dict(source) for source in citations],
                             }
                             sources_text = "\n\n**Sources:**\n" + "\n".join(
                                 f"[{i + 1}] [{c['title']}]({c['url']})"
@@ -1217,12 +1228,23 @@ async def stream_normalized_google_response(
 
                 elif delta.type == "text_annotation_delta":
                     if delta.annotations:
+                        citations_changed = False
                         for ann in delta.annotations:
                             url = getattr(ann, "url", None)
                             title = getattr(ann, "title", None) or getattr(ann, "uri", url) or "Source"
                             if url:
                                 if not any(c["url"] == url for c in citations):
                                     citations.append({"title": title, "url": url})
+                                    citations_changed = True
+                        if citations_changed:
+                            yield {
+                                "type": "web_search.activity",
+                                "provider": "google",
+                                "status": "active",
+                                "action": "search",
+                                "item_id": "google-web-search",
+                                "sources": citations,
+                            }
 
             elif et == "step.stop":
                 st = step_types.get(event.index)

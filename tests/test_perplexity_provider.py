@@ -217,8 +217,22 @@ async def test_perplexity_stream_maps_chat_completion_chunks_and_search_mode(mon
     assert captured_kwargs["extra_body"]["web_search_options"]["search_context_size"] == "high"
     assert any(event.get("type") == "response.meta" and event.get("provider") == "perplexity" for event in events)
     assert any(event.get("type") == "part.start" for event in events)
+    search_activity = [
+        event
+        for event in events
+        if event.get("type") == "web_search.activity"
+    ]
+    assert search_activity[0] == {
+        "type": "web_search.activity",
+        "provider": "perplexity",
+        "status": "active",
+        "action": "search",
+        "item_id": "perplexity-sonar-search",
+        "sources": [{"url": "https://example.com/source"}],
+    }
     assert any(
         event.get("type") == "web_search.activity"
+        and event.get("status") == "completed"
         and event.get("sources") == [{"url": "https://example.com/source"}]
         for event in events
     )

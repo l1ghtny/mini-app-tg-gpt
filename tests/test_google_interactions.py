@@ -246,6 +246,9 @@ async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
     assert interactions.calls
     assert interactions.calls[0]["model"] == "gemini-3.1-flash-lite"
     assert "response_modalities" not in interactions.calls[0]
+    search_activity = [ev for ev in events if ev.get("type") == "web_search.activity"]
+    assert search_activity[0].get("status") == "active"
+    assert search_activity[-1].get("status") == "completed"
     assert any(
         ev.get("type") == "web_search.activity"
         and ev.get("sources") == [

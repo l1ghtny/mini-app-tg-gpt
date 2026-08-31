@@ -645,9 +645,21 @@ async def stream_normalized_perplexity_response(
                 yield {"type": "response.meta", "provider": "perplexity", "response_id": chunk_id}
                 response_meta_sent = True
 
+            citations_changed = False
             for url in getattr(chunk, "citations", None) or []:
                 if isinstance(url, str) and url and url not in citations:
                     citations.append(url)
+                    citations_changed = True
+
+            if citations_changed:
+                yield {
+                    "type": "web_search.activity",
+                    "provider": "perplexity",
+                    "status": "active",
+                    "action": "search",
+                    "item_id": "perplexity-sonar-search",
+                    "sources": [{"url": url} for url in citations],
+                }
 
             usage = getattr(chunk, "usage", None)
             if usage:

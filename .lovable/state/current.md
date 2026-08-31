@@ -11,6 +11,9 @@
 - OpenAI web search requests action sources and exposes search/open/find actions;
   Google and Perplexity expose their collected public source URLs through the
   same provider-neutral event. Existing status events remain for compatibility.
+- Google and Perplexity now upsert their growing citation list while text is
+  streaming, as soon as each provider exposes a new URL; the completed event
+  remains authoritative after generation finishes.
 - OpenAI reasoning effort remains supported, but visible reasoning summaries are
   no longer requested by default or emitted to the chat stream. Historical
   `reasoning_summary` storage remains schema-compatible.
