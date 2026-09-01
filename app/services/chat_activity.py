@@ -256,11 +256,17 @@ async def record_stream_activity(
         else:
             if "retry" in stage:
                 public_stage = "retrying"
+            elif stage == "commentary":
+                public_stage = "commentary"
             elif "think" in stage:
                 public_stage = "thinking"
             else:
                 public_stage = "working"
             detail = {"stage": public_stage}
+            if public_stage == "commentary":
+                label = event.get("label")
+                if isinstance(label, str) and label.strip():
+                    detail["label"] = " ".join(label.split())[:160]
             provider = _provider_from_event(event)
             if provider:
                 detail["provider"] = provider

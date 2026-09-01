@@ -240,3 +240,112 @@ async def test_openai_web_search_item_is_visible_while_page_is_opened():
             "url": "https://example.com/live",
         }
     ]
+
+
+def test_openai_commentary_prompt_is_enabled_only_for_phase_capable_models():
+    modern = openai_service._instructions_for_openai("gpt-5.6-sol", "Be helpful. ")
+    legacy = openai_service._instructions_for_openai("gpt-5.2", "Be helpful. ")
+
+    assert "phase `commentary`" in modern
+    assert "phase `final_answer`" in modern
+    assert "phase `commentary`" not in legacy
+
+
+@pytest.mark.asyncio
+async def test_openai_commentary_is_activity_not_answer_text():
+    state = openai_service.StreamState()
+    usage = openai_service.UsageTracker()
+    item = SimpleNamespace(id="msg_progress", type="message", phase="commentary")
+
+    added = await openai_service._map_openai_event(
+        event=SimpleNamespace(
+            type="response.output_item.added",
+            item=item,
+            output_index=0,
+        ),
+        state=state,
+        usage=usage,
+    )
+    delta = await openai_service._map_openai_event(
+        event=SimpleNamespace(
+            type="response.output_text.delta",
+            item_id="msg_progress",
+            output_index=0,
+            content_index=0,
+            delta="Assessing the setup",
+        ),
+        state=state,
+        usage=usage,
+    )
+    done = await openai_service._map_openai_event(
+        event=SimpleNamespace(
+            type="response.output_text.done",
+            item_id="msg_progress",
+            output_index=0,
+            content_index=0,
+            text="Assessing the setup",
+            sequence_number=4,
+        ),
+        state=state,
+        usage=usage,
+    )
+
+    assert added == []
+    assert delta == []
+    assert len(done) == 1
+    assert done[0]["type"] == "status"
+    assert done[0]["stage"] == "commentary"
+    assert done[0]["label"] == "Assessing the setup"
+    assert not any(event.get("type") == "text.delta" for event in [*added, *delta, *done])
+
+
+@pytest.mark.asyncio
+async def test_openai_final_answer_still_streams_after_commentary():
+    state = openai_service.StreamState()
+    usage = openai_service.UsageTracker()
+
+    await openai_service._map_openai_event(
+        event=SimpleNamespace(
+            type="response.output_item.added",
+            item=SimpleNamespace(id="msg_progress", type="message", phase="commentary"),
+            output_index=0,
+        ),
+        state=state,
+        usage=usage,
+    )
+    await openai_service._map_openai_event(
+        event=SimpleNamespace(
+            type="response.output_item.added",
+            item=SimpleNamespace(id="msg_final", type="message", phase="final_answer"),
+            output_index=1,
+        ),
+        state=state,
+        usage=usage,
+    )
+    delta = await openai_service._map_openai_event(
+        event=SimpleNamespace(
+            type="response.output_text.delta",
+            item_id="msg_final",
+            output_index=1,
+            content_index=0,
+            delta="The setup is strong.",
+        ),
+        state=state,
+        usage=usage,
+    )
+    done = await openai_service._map_openai_event(
+        event=SimpleNamespace(
+            type="response.output_text.done",
+            item_id="msg_final",
+            output_index=1,
+            content_index=0,
+            text="The setup is strong.",
+        ),
+        state=state,
+        usage=usage,
+    )
+
+    combined = [*delta, *done]
+    assert combined[0] == {"type": "part.start", "index": 0, "content_type": "text"}
+    assert {"type": "text.delta", "index": 0, "text": "The setup is strong."} in combined
+    assert {"type": "text.done", "index": 0} in combined

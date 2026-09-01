@@ -1,5 +1,27 @@
 # Current State
 
+## 2026-09-01 OpenAI commentary activity
+
+- OpenAI GPT-5.4, GPT-5.5, and GPT-5.6 chat requests now ask the model for short,
+  user-visible `commentary` phase updates during multi-step, tool-heavy, or
+  meaningfully analytical work. Simple requests may skip them.
+- The Responses stream mapper tracks assistant-item phase by item ID/output index.
+  Commentary text becomes a bounded public activity label and is never appended to
+  the assistant answer or persisted as reasoning. `final_answer` text keeps the
+  existing streaming and persistence path.
+- Commentary updates the single transient `turn` activity. Concrete tool activity
+  remains in the detailed timeline, while the frontend prefers commentary as the
+  collapsed live headline except during reconnect/retry. Completed chat UI continues
+  to omit the turn row while preserving source URLs.
+- The behavior is OpenAI-only. Google and Perplexity provider contracts and model
+  catalog entries were not changed.
+- Focused backend tests, Ruff, Python compilation, TypeScript, 130 frontend tests,
+  and the frontend production build pass. Local GPT-5.6 Sol acceptance captured
+  multiple commentary updates alongside web-search activity and durable sources.
+- Product review is complete and release was explicitly accepted. Next: deploy the
+  paired backend/frontend changes to beta and production through TeamCity, then verify
+  deployed revisions and public health independently.
+
 ## 2026-08-31 durable chat reply activity
 
 - Added an additive `message_activity_event` table owned by assistant messages.
