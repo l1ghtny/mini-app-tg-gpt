@@ -1,5 +1,26 @@
 # Current State
 
+## 2026-09-01 feedback-batch What's New announcement
+
+- Objective: publish one bilingual What's New item covering the complete release 46
+  feedback batch without creating multiple notifications for the same release.
+- Release 46 is already live and verified: durable drafts, Favorites, failed-upload
+  retry, stale-page recovery, larger previews, and the Telegram-safe viewer action.
+- Added idempotent data migration `xm0a1b2c3d4e` after `xl9f0a1b2c3d`. It upserts
+  one active, all-plan, bilingual feature entry and its downgrade deletes only that
+  exact item.
+- Validation passes: Alembic reports one head, the focused migration suite passes
+  all 10 tests, offline PostgreSQL SQL contains the exact bilingual values, Ruff and
+  Python compilation pass, and `git diff --check` is clean.
+- A disposable local PostgreSQL runtime is unavailable; no write was attempted
+  against production for testing.
+
+### Next steps
+
+1. Obtain immediate production approval before pushing the migration commit.
+2. Monitor the normal production pipeline, then verify Alembic head and the exact
+   localized `whats_new_item` row read-only in production.
+
 ## 2026-09-01 OpenAI commentary activity
 
 - OpenAI GPT-5.4, GPT-5.5, and GPT-5.6 chat requests now ask the model for short,
