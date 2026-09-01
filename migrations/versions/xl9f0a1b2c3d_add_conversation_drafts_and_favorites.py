@@ -18,6 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Fail quickly instead of allowing an AccessExclusiveLock request to queue
+    # production writes behind an unrelated long-running transaction.
+    op.execute("SET LOCAL lock_timeout = '5s'")
+    op.execute("SET LOCAL statement_timeout = '30s'")
     op.add_column(
         "conversation",
         sa.Column(

@@ -1481,14 +1481,16 @@ Ship server-backed chat drafts and Favorites together with the matching frontend
 - Added owned draft and favorite update endpoints; accepted user messages clear the saved draft in the same persistence flow.
 - Added migration `xl9f0a1b2c3d` and extended shared-head/additive migration coverage.
 - Added focused behavior tests; 10 backend tests, Ruff, Python compilation, and `git diff --check` pass.
+- The first approved migration attempt encountered a pre-existing idle production transaction before its first DDL statement; the migration backend was cancelled, PostgreSQL rolled the transaction back, and production readiness/schema remained unchanged.
+- The migration now sets local 5-second lock and 30-second statement timeouts before requesting DDL locks, preventing a retry from queuing production writes indefinitely. Focused tests, Ruff, and offline PostgreSQL SQL rendering pass.
 
 ### Risks / blockers
 
-- TeamCity authentication on this workstation is expired and must be refreshed before beta deployment.
-- The migration is additive, but production rollout still requires a verified backup/rollback path and an immediate approval checkpoint.
+- Beta deployment remains gated until a new backend image containing the bounded-lock migration is built and the migration completes.
+- Final interaction proof still requires the deployed beta Mini App.
 
 ### Next steps
 
-1. Commit and push the backend and matching frontend beta branches.
-2. Deploy through `LightnyBetaFlow`, verify the migration and live draft/favorite behavior, then promote only after beta acceptance.
-3. Obtain immediate production approval and deploy the same verified revisions through `LightnyReleaseFlow`.
+1. Push the bounded-lock migration follow-up to beta and wait for the new backend image.
+2. Retry the migration using that immutable image, verify production health, then deploy and validate beta.
+3. Obtain immediate production release approval before pushing the prepared production branches.

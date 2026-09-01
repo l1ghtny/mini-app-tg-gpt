@@ -106,6 +106,9 @@ def test_conversation_drafts_and_favorites_migration_is_additive() -> None:
     )
 
     assert migration.down_revision == "xk8e9f0a1b2c"
+    assert "set local lock_timeout = '5s'" in sql
+    assert "set local statement_timeout = '30s'" in sql
+    assert sql.index("set local lock_timeout") < sql.index("add column is_favorite")
     assert "add column is_favorite" in sql
     assert "add column favorited_at" in sql
     assert "add column draft_text" in sql
