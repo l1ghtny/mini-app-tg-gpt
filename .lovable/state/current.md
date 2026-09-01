@@ -1468,3 +1468,27 @@ Deploy and canary the browser-ready authentication foundation across the backend
 1. Commit and push the persisted 512 MiB bot-worker limit, then confirm the new default-branch trigger starts exactly one `LightnyReleaseFlow` run and the legacy builds remain idle.
 2. Runtime-verify that triggered run, including both Rollouts, all workers, both CronJobs, and public health endpoints.
 3. Implement beta Phase 1 guardrails before provisioning shared-production-data beta workloads.
+
+## 2026-09-01 feedback batch: durable chat state
+
+### Current objective
+
+Ship server-backed chat drafts and Favorites together with the matching frontend recovery and Telegram layout fixes, then validate in beta before production.
+
+### Completed
+
+- Added additive Conversation fields for draft text/timestamps and favorite state/timestamps.
+- Added owned draft and favorite update endpoints; accepted user messages clear the saved draft in the same persistence flow.
+- Added migration `xl9f0a1b2c3d` and extended shared-head/additive migration coverage.
+- Added focused behavior tests; 10 backend tests, Ruff, Python compilation, and `git diff --check` pass.
+
+### Risks / blockers
+
+- TeamCity authentication on this workstation is expired and must be refreshed before beta deployment.
+- The migration is additive, but production rollout still requires a verified backup/rollback path and an immediate approval checkpoint.
+
+### Next steps
+
+1. Commit and push the backend and matching frontend beta branches.
+2. Deploy through `LightnyBetaFlow`, verify the migration and live draft/favorite behavior, then promote only after beta acceptance.
+3. Obtain immediate production approval and deploy the same verified revisions through `LightnyReleaseFlow`.

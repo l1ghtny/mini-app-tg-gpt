@@ -6,6 +6,7 @@ from typing import List, Optional
 from sqlalchemy import (
     ARRAY,
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Numeric,
+    Text,
     text,
     UniqueConstraint,
 )
@@ -344,6 +346,10 @@ class ChatFolder(SQLModel, table=True):
 
 
 class Conversation(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_conversation_user_favorite", "user_id", "is_favorite"),
+    )
+
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     title: str = Field(index=True, default="New Chat")
     user_id: uuid.UUID = Field(foreign_key="app_user.id")
@@ -355,6 +361,16 @@ class Conversation(SQLModel, table=True):
     image_quality: str = Field(default="low")  # low, medium, high
     image_size: str = Field(default="1k")  # 512, 1k, 2k
     thinking: bool = Field(default=True)
+    is_favorite: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default=text("false")),
+    )
+    favorited_at: Optional[datetime] = Field(default=None, nullable=True)
+    draft_text: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+    )
+    draft_updated_at: Optional[datetime] = Field(default=None, nullable=True)
     history_summary: Optional[str] = Field(default=None, nullable=True)
     history_summary_up_to_message_id: Optional[uuid.UUID] = Field(
         default=None, nullable=True
