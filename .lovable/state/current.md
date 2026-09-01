@@ -62,6 +62,41 @@
 - Next: confirm the visible source chips during the next real user search and
   compare them with the persisted list after completion/reload.
 
+## 2026-09-01 Work MVP beta-132 regression follow-up
+
+- Reran the four previously affected `mvp-core` cases against deployed beta-132.
+  The decision memo succeeded in English with both source files and resolving
+  citations. The sales case succeeded with a downloaded, structurally valid XLSX.
+  Cancellation followed by a redirected message also completed without the former
+  active-run conflict.
+- The clarification flow now reached `waiting_for_user`, persisted one structured
+  question, accepted the synthetic answer, and resumed the same run. The resumed
+  announcement then failed validation because its reviewer and corrective retry did
+  not receive the already answered clarification context.
+- The redirected recovery checklist succeeded at the system level but was written in
+  Spanish for an English request. The prior English scorer and runtime guard detected
+  Turkish but not this broader Latin-script mismatch.
+- Added answered clarification context to resumed review and corrective generation,
+  with explicit instruction not to restart an already answered question. Expanded the
+  deterministic English guard and evaluator to reject longer Latin-script output that
+  lacks basic English function words, while preserving explicit third-language
+  requests.
+- Rescoring the saved beta-132 observations now correctly marks the Spanish recovery
+  output as a language failure instead of a pass.
+
+### Validation
+
+- 39 focused resume, clarification, language, and evaluator tests pass.
+- 138 Work and generated-artifact tests pass.
+- Ruff, Python compilation, and diff whitespace checks pass.
+
+### Next steps
+
+1. Commit and deploy the resume/language follow-up to beta.
+2. Rerun structured clarification and cancel/recovery first.
+3. If both regressions pass, run the full six-case `mvp-core` profile and complete
+   human review before making a pilot decision.
+
 ## 2026-08-31 Work MVP beta-eval blocker fixes
 
 - Implemented the four blockers demonstrated by the `mvp-core` beta run on branch

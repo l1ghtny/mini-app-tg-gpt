@@ -15,6 +15,7 @@ from evals.work_quality.contracts import (
 
 _CYRILLIC = re.compile(r"[\u0400-\u04ff]")
 _LATIN = re.compile(r"[A-Za-z]")
+_LATIN_WORD = re.compile(r"[A-Za-z]+")
 _TURKISH_SPECIFIC = re.compile(r"[çğıöşüÇĞİÖŞÜ]")
 _TURKISH_WORDS = {
     "ancak",
@@ -29,6 +30,43 @@ _TURKISH_WORDS = {
     "öneri",
     "sonuç",
     "ve",
+}
+_ENGLISH_CONTENT_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "before",
+    "by",
+    "can",
+    "each",
+    "for",
+    "from",
+    "has",
+    "have",
+    "how",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "should",
+    "that",
+    "the",
+    "their",
+    "this",
+    "to",
+    "when",
+    "which",
+    "who",
+    "will",
+    "with",
+    "without",
+    "your",
 }
 
 
@@ -223,11 +261,19 @@ def _matches_language(text: str, language: str) -> bool:
     latin = len(_LATIN.findall(text))
     if language == "ru":
         return cyrillic > 0 and cyrillic >= latin * 0.25
+    latin_words = [word.lower() for word in _LATIN_WORD.findall(text)]
     words = {word.lower() for word in re.findall(r"[^\W\d_]+", text)}
     looks_turkish = (
         len(_TURKISH_SPECIFIC.findall(text)) >= 2 or len(words & _TURKISH_WORDS) >= 4
     )
-    return latin > 0 and latin >= cyrillic * 2 and not looks_turkish
+    english_markers = sum(word in _ENGLISH_CONTENT_WORDS for word in latin_words)
+    looks_non_english_latin = len(latin_words) >= 15 and english_markers < 3
+    return (
+        latin > 0
+        and latin >= cyrillic * 2
+        and not looks_turkish
+        and not looks_non_english_latin
+    )
 
 
 def _citations_resolve(sources: list[dict], citations: list[dict]) -> bool:

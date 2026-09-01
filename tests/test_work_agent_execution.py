@@ -220,18 +220,31 @@ async def test_plain_material_question_is_retried_as_structured_human_input() ->
     assert handler.await_count == 2
 
 
+@pytest.mark.parametrize(
+    "foreign_text",
+    [
+        (
+            "Bu karar notu için üç öncelik öneriyorum ve her öneri dosya kanıtına "
+            "dayanıyor. Sonuç olarak ürün ekibi önce güven sorunlarını çözmelidir."
+        ),
+        (
+            "Definir el propósito de la evaluación y establecer criterios medibles. "
+            "Preparar escenarios representativos, asignar responsables y documentar "
+            "cómo se analizarán los resultados y las limitaciones del proceso."
+        ),
+    ],
+    ids=["turkish", "spanish"],
+)
 @pytest.mark.asyncio
-async def test_english_request_retries_a_turkish_draft_before_review() -> None:
+async def test_english_request_retries_a_foreign_draft_before_review(
+    foreign_text: str,
+) -> None:
     request_payload = _request_payload()
     request_payload["current_request"] = (
         "Read both attached files and write a decision memo for the beta. Recommend "
         "the three highest-priority product changes and explain the evidence for each."
     )
-    turkish_draft = _response(
-        "draft-turkish",
-        "Bu karar notu için üç öncelik öneriyorum ve her öneri dosya kanıtına "
-        "dayanıyor. Sonuç olarak ürün ekibi önce güven sorunlarını çözmelidir.",
-    )
+    foreign_draft = _response("draft-foreign", foreign_text)
     english_draft = _response(
         "draft-english",
         "The decision memo recommends three priorities supported by the attached "
@@ -242,7 +255,7 @@ async def test_english_request_retries_a_turkish_draft_before_review() -> None:
         "review-english",
         json.dumps({"passes": True, "issues": [], "revision_instructions": ""}),
     )
-    create = AsyncMock(side_effect=[turkish_draft, english_draft, passed_review])
+    create = AsyncMock(side_effect=[foreign_draft, english_draft, passed_review])
     client = SimpleNamespace(responses=SimpleNamespace(create=create))
 
     result = await agent_execution._generate_validated_result(

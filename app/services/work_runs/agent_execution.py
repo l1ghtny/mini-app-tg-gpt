@@ -113,6 +113,43 @@ _ENGLISH_REQUEST_WORDS = {
     "with",
     "write",
 }
+_ENGLISH_CONTENT_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "before",
+    "by",
+    "can",
+    "each",
+    "for",
+    "from",
+    "has",
+    "have",
+    "how",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "should",
+    "that",
+    "the",
+    "their",
+    "this",
+    "to",
+    "when",
+    "which",
+    "who",
+    "will",
+    "with",
+    "without",
+    "your",
+}
 _TURKISH_WORDS = {
     "ancak",
     "bir",
@@ -157,7 +194,9 @@ _EXECUTOR_PROMPT = (
     "correctness, evidence, cost, or a consequential action; otherwise proceed with a "
     "clearly labelled reasonable assumption. When the current request explicitly asks "
     "for one material question before a later deliverable, call ask_user; never return "
-    "that question as an ordinary final answer. Never ask for credentials or secrets."
+    "that question as an ordinary final answer. When answered_clarification is present, "
+    "the user already answered that question; use the answer to complete the deliverable "
+    "and do not restart the clarification. Never ask for credentials or secrets."
 )
 _REVIEWER_PROMPT = (
     "Review a draft Work result against the user's request, approved expected outputs, "
@@ -173,7 +212,8 @@ _REVIEWER_PROMPT = (
     "source references. When an approved expected output has kind artifact, fail the "
     "draft unless the response cites at least one generated file. Fail a draft whose "
     "language does not match current_request unless current_request explicitly asks "
-    "for another language."
+    "for another language. When answered_clarification is present, review the completed "
+    "deliverable using that answer rather than requiring the question to be asked again."
 )
 
 
@@ -376,6 +416,8 @@ def _ask_user_available(tools: Sequence[Mapping[str, object]]) -> bool:
 def _request_requires_structured_clarification(
     request_payload: Mapping[str, object],
 ) -> bool:
+    if request_payload.get("answered_clarification"):
+        return False
     current_request = str(request_payload.get("current_request", "")).lower()
     asks_question = bool(re.search(r"\bask\b.{0,120}\bquestion\b", current_request))
     before_deliverable = any(
@@ -420,6 +462,14 @@ def _looks_like_english_request(text: str) -> bool:
 def _looks_like_turkish(text: str) -> bool:
     words = {word.lower() for word in re.findall(r"[^\W\d_]+", text)}
     return len(_TURKISH_SPECIFIC.findall(text)) >= 2 or len(words & _TURKISH_WORDS) >= 4
+
+
+def _looks_like_non_english_latin(text: str) -> bool:
+    words = [word.lower() for word in _LATIN_WORD.findall(text)]
+    if len(words) < 15:
+        return False
+    english_markers = sum(word in _ENGLISH_CONTENT_WORDS for word in words)
+    return english_markers < 3
 
 
 def _explicit_requested_language(text: str) -> str | None:
@@ -494,7 +544,11 @@ def _language_contract_error(
     if explicit_language == "en" or (
         explicit_language is None and _looks_like_english_request(current_request)
     ):
-        if draft_cyrillic > draft_latin * 0.1 or _looks_like_turkish(draft):
+        if (
+            draft_cyrillic > draft_latin * 0.1
+            or _looks_like_turkish(draft)
+            or _looks_like_non_english_latin(draft)
+        ):
             return "The draft language does not match the current English request."
     return None
 
@@ -627,6 +681,9 @@ async def _review_draft(
                                 "output_language": request_payload.get(
                                     "output_language"
                                 ),
+                                "answered_clarification": request_payload.get(
+                                    "answered_clarification"
+                                ),
                                 "available_evidence": {
                                     "searchable_source_files": request_payload.get(
                                         "searchable_source_files"
@@ -683,6 +740,14 @@ async def _generate_validated_result(
     observe_resume: ResumeObserver | None = None,
     handle_human_input: HumanInputHandler | None = None,
 ) -> ValidatedAgentResult:
+    if resume_request is not None:
+        request_payload = {
+            **request_payload,
+            "answered_clarification": {
+                "question": resume_request.question,
+                "answer": resume_request.answer or "",
+            },
+        }
     revision_feedback: str | None = None
     review_count = 0
     generation_count = 0

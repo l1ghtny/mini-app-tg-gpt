@@ -16,7 +16,7 @@ from evals.work_quality.contracts import (
     RunObservation,
 )
 from evals.work_quality.reporting import build_report, markdown_report
-from evals.work_quality.scoring import score_observation
+from evals.work_quality.scoring import _matches_language, score_observation
 from evals.work_quality.suite import (
     DEFAULT_SUITE_PATH,
     load_suite,
@@ -172,6 +172,15 @@ def test_scoring_rejects_turkish_for_an_english_case() -> None:
     )
     assert language_check.passed is False
     assert score.automated_passed is False
+
+
+def test_scoring_rejects_spanish_for_an_english_case() -> None:
+    assert not _matches_language(
+        "Definir el propósito de la evaluación, seleccionar criterios medibles y "
+        "preparar escenarios representativos. Asignar responsables, documentar los "
+        "resultados y comunicar claramente las limitaciones del proceso.",
+        "en",
+    )
 
 
 def test_scoring_ignores_non_deliverable_preview_artifacts(tmp_path: Path) -> None:

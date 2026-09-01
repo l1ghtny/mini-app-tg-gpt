@@ -136,6 +136,95 @@ async def test_validated_generation_pauses_before_reviewing_a_question() -> None
     assert client.responses.create.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_resumed_clarification_is_available_to_review_and_retry() -> None:
+    request = WorkHumanInputRequest(
+        id=uuid.uuid4(),
+        thread_id=uuid.uuid4(),
+        work_run_id=uuid.uuid4(),
+        round=1,
+        status="answered",
+        question="What is the product, audience, and channel?",
+        reason="Those details materially change the announcement.",
+        answer=(
+            "Atlas is a private beta for operations leads at design partners, sent "
+            "by email with a call to action to book onboarding."
+        ),
+        provider="openai",
+        provider_response_id="resp_ask_1",
+        provider_call_id="call_ask_1",
+        created_at=datetime(2026, 9, 1, 12, 0, 0),
+    )
+    resumed_draft = SimpleNamespace(
+        id="draft-resumed",
+        output_text=(
+            "Subject: Atlas private beta\n\nOperations leads can now book onboarding "
+            "for the Atlas private beta. Ready to choose a time?"
+        ),
+        output=[],
+    )
+    failed_review = SimpleNamespace(
+        id="review-failed",
+        output_text=json.dumps(
+            {
+                "passes": False,
+                "issues": ["Make the call to action more direct."],
+                "revision_instructions": "End with a direct booking call to action.",
+            }
+        ),
+        output=[],
+    )
+    corrected_draft = SimpleNamespace(
+        id="draft-corrected",
+        output_text=(
+            "Subject: Book onboarding for the Atlas private beta\n\nAtlas is now "
+            "available to operations leads at our design partners. Book your "
+            "onboarding session to get started."
+        ),
+        output=[],
+    )
+    passed_review = SimpleNamespace(
+        id="review-passed",
+        output_text=json.dumps(
+            {"passes": True, "issues": [], "revision_instructions": ""}
+        ),
+        output=[],
+    )
+    create = AsyncMock(
+        side_effect=[resumed_draft, failed_review, corrected_draft, passed_review]
+    )
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+
+    result = await agent_execution._generate_validated_result(
+        client=client,  # type: ignore[arg-type]
+        request_payload={
+            "current_request": (
+                "Prepare a launch announcement. Ask one concise material question "
+                "before writing the announcement."
+            ),
+            "approved_plan": {"expected_outputs": []},
+        },
+        tools=[ASK_USER_TOOL],
+        observe_response=AsyncMock(),
+        resume_request=request,
+        handle_human_input=AsyncMock(return_value=False),
+    )
+
+    assert result.content == corrected_draft.output_text
+    first_review_payload = json.loads(
+        create.await_args_list[1].kwargs["input"][1]["content"][0]["text"]
+    )
+    retry_payload = json.loads(
+        create.await_args_list[2].kwargs["input"][1]["content"][0]["text"]
+    )
+    for payload in (first_review_payload, retry_payload):
+        assert payload["answered_clarification"] == {
+            "question": request.question,
+            "answer": request.answer,
+        }
+    assert "previous_response_id" not in create.await_args_list[2].kwargs
+
+
 def test_waiting_run_can_resume_or_stop_but_not_finish_directly() -> None:
     assert can_transition_work_run(
         WorkRunStatus.RUNNING,
