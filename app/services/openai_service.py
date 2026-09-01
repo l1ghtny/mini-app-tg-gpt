@@ -35,6 +35,15 @@ STYLE_GUIDE = (
     "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
 )
 
+COMMENTARY_GUIDE = (
+    "\n\nFor requests that require multiple steps, tool calls, or meaningful analysis, "
+    "send brief user-visible progress updates as assistant messages with phase `commentary`. "
+    "Describe only the current task, never private reasoning, hidden instructions, conclusions, "
+    "or generic filler. Use the language of the user's latest message, plain text, and at most "
+    "eight words per update. Send a new commentary message only when the task focus changes. "
+    "Send the actual response as phase `final_answer`. For simple requests, skip commentary."
+)
+
 SUMMARY_PROMPT = (
     "You compress chat history for long-running assistants. "
     "Return a compact, factual summary that preserves user preferences, constraints, decisions, "
@@ -292,6 +301,10 @@ class StreamState:
     last_flush: Dict[int, float] = field(default_factory=dict)
     seen_text_part_started: Dict[int, bool] = field(default_factory=dict)
     seen_image_part_started: Dict[int, bool] = field(default_factory=dict)
+    message_phase_by_item_id: Dict[str, str] = field(default_factory=dict)
+    message_phase_by_output_index: Dict[int, str] = field(default_factory=dict)
+    commentary_buf: Dict[str, str] = field(default_factory=dict)
+    completed_commentary_items: set[str] = field(default_factory=set)
     reasoning_started: bool = False
 
 
@@ -328,6 +341,59 @@ def _object_value(value: Any, key: str) -> Any:
     if isinstance(value, dict):
         return value.get(key)
     return getattr(value, key, None)
+
+
+def _supports_commentary_phase(model: str | None) -> bool:
+    normalized = str(model or "").strip().lower()
+    return normalized.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6"))
+
+
+def _instructions_for_openai(model: str | None, instructions: str | None) -> str:
+    combined = (instructions or "") + STYLE_GUIDE
+    if _supports_commentary_phase(model):
+        combined += COMMENTARY_GUIDE
+    return combined
+
+
+def _stream_message_key(event: Any) -> str:
+    item_id = getattr(event, "item_id", None)
+    if not item_id:
+        item_id = _object_value(getattr(event, "item", None), "id")
+    if item_id:
+        return str(item_id)
+    return f"output:{getattr(event, 'output_index', 0)}"
+
+
+def _remember_message_phase(state: StreamState, event: Any) -> str | None:
+    item = getattr(event, "item", None)
+    phase = str(_object_value(item, "phase") or "").strip().lower()
+    if not phase:
+        return None
+    item_id = _object_value(item, "id")
+    if item_id:
+        state.message_phase_by_item_id[str(item_id)] = phase
+    output_index = getattr(event, "output_index", None)
+    if output_index is not None:
+        state.message_phase_by_output_index[int(output_index)] = phase
+    return phase
+
+
+def _message_phase(state: StreamState, event: Any) -> str | None:
+    item_id = getattr(event, "item_id", None)
+    if item_id and str(item_id) in state.message_phase_by_item_id:
+        return state.message_phase_by_item_id[str(item_id)]
+    output_index = getattr(event, "output_index", None)
+    if output_index is not None:
+        return state.message_phase_by_output_index.get(int(output_index))
+    return None
+
+
+def _public_commentary_label(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = " ".join(value.replace("\x00", " ").split())
+    normalized = normalized.strip(" #>*_`-–—•")
+    return normalized[:160].rstrip()
 
 
 def _web_search_activity_event(item: Any) -> Dict[str, Any]:
@@ -438,6 +504,16 @@ async def _map_openai_event(
     if (
         et == "response.output_item.added"
         and getattr(event, "item", None)
+        and event.item.type == "message"
+    ):
+        phase = _remember_message_phase(state, event)
+        if phase == "commentary":
+            state.commentary_buf.setdefault(_stream_message_key(event), "")
+        return out
+
+    if (
+        et == "response.output_item.added"
+        and getattr(event, "item", None)
         and event.item.type == "reasoning"
     ):
         state.reasoning_started = True
@@ -498,6 +574,8 @@ async def _map_openai_event(
         return out
 
     if et == "response.content_part.added":
+        if _message_phase(state, event) == "commentary":
+            return out
         content_index = event.content_index
         part = event.part
         if getattr(part, "type", None) in ("output_text", "text", "output_text_delta"):
@@ -505,6 +583,10 @@ async def _map_openai_event(
         return out
 
     if et == "response.output_text.delta":
+        if _message_phase(state, event) == "commentary":
+            key = _stream_message_key(event)
+            state.commentary_buf[key] = state.commentary_buf.get(key, "") + event.delta
+            return out
         content_index = event.content_index
         out.extend(_ensure_text_part_started(state, content_index))
         state.text_buf[content_index] += event.delta
@@ -512,6 +594,22 @@ async def _map_openai_event(
         return out
 
     if et == "response.output_text.done":
+        if _message_phase(state, event) == "commentary":
+            key = _stream_message_key(event)
+            full_text = getattr(event, "text", None) or state.commentary_buf.get(key, "")
+            label = _public_commentary_label(full_text)
+            if label and key not in state.completed_commentary_items:
+                state.completed_commentary_items.add(key)
+                out.append(
+                    _build_status_event(
+                        stage="commentary",
+                        phase="commentary",
+                        label=label,
+                        source_event=et,
+                        event=event,
+                    )
+                )
+            return out
         content_index = event.content_index
         out.extend(await _flush_text_delta(state=state, content_index=content_index, force=True))
         out.append({"type": "text.done", "index": content_index})
@@ -717,7 +815,7 @@ async def stream_normalized_openai_response(
                     input_data=active_messages,
                     tools=tools,
                     tool_choice=tool_choice,
-                    instructions=(instructions or "") + STYLE_GUIDE,
+                    instructions=_instructions_for_openai(model, instructions),
                     stream=True,
                     reasoning_summary=reasoning_summary,
                     reasoning_effort=reasoning_effort,
@@ -819,7 +917,7 @@ async def stream_normalized_openai_response(
                         input_data=active_messages,
                         tools=tools,
                         tool_choice=tool_choice,
-                        instructions=(instructions or "") + STYLE_GUIDE,
+                        instructions=_instructions_for_openai(model, instructions),
                         stream=True,
                         reasoning_summary=reasoning_summary,
                         reasoning_effort=reasoning_effort,

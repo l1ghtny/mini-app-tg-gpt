@@ -11,6 +11,11 @@ stream shapes. Google may include the first summary on `step.start`, and either
 provider may omit summary text entirely. Provider-authored headings are not
 stable product copy and must not become the collapsed UI label.
 
+OpenAI GPT-5.4 and newer also expose assistant message `phase`. A
+`phase=commentary` message is intentionally user-visible progress, while
+`phase=final_answer` is answer content. This is a separate contract from reasoning
+summaries and may drive the transient collapsed label.
+
 ## Decision
 
 - Use `ReasoningActivity` for OpenAI and every Google interaction path.
@@ -25,6 +30,12 @@ stable product copy and must not become the collapsed UI label.
   summary text.
 - Treat summaries as provider-authored detail, not raw chain-of-thought or
   product-controlled status copy.
+- For phase-capable OpenAI models, prompt for short commentary only on multi-step,
+  tool-heavy, or meaningfully analytical requests. Route commentary into the
+  transient chat `turn` activity and never append it to the answer body.
+- Keep commentary OpenAI-specific unless another provider offers an equivalent
+  explicitly user-visible message phase. Do not reinterpret thought summaries as
+  commentary.
 
 ## Gotchas
 
@@ -36,3 +47,9 @@ stable product copy and must not become the collapsed UI label.
   as `0` or `1` at the transport boundary.
 - Keep stable localized labels in the frontend; expanded detail may contain the
   provider summary in the language requested by the user.
+- Commentary labels are model-authored public copy, so bound and whitespace-normalize
+  them before persistence. Hide the turn label after completion while retaining
+  concrete tool and source history.
+- During streaming, prefer the latest commentary label as the collapsed headline and
+  keep concrete tools in the expanded timeline. Reconnect/retry states are the only
+  higher-priority headline because they explain an actual wait or transport problem.

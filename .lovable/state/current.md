@@ -1,5 +1,26 @@
 # Current State
 
+## 2026-09-01 OpenAI commentary activity
+
+- OpenAI GPT-5.4, GPT-5.5, and GPT-5.6 chat requests now ask the model for short,
+  user-visible `commentary` phase updates during multi-step, tool-heavy, or
+  meaningfully analytical work. Simple requests may skip them.
+- The Responses stream mapper tracks assistant-item phase by item ID/output index.
+  Commentary text becomes a bounded public activity label and is never appended to
+  the assistant answer or persisted as reasoning. `final_answer` text keeps the
+  existing streaming and persistence path.
+- Commentary updates the single transient `turn` activity. Concrete tool activity
+  remains in the detailed timeline, while the frontend now prefers commentary as the
+  collapsed live headline except during reconnect/retry. Completed chat UI continues
+  to omit the turn row.
+- The behavior is OpenAI-only. Google and Perplexity provider contracts and model
+  catalog entries were not changed.
+- Validation passes: 15 focused backend tests, Ruff, Python compilation, and diff
+  whitespace checks. A local end-to-end GPT-5.6 Sol request captured and displayed
+  multiple commentary updates alongside web-search activity and durable sources.
+- Next: keep the isolated local preview available for product review, then commit and
+  deploy the paired backend/frontend beta changes only after explicit acceptance.
+
 ## 2026-08-31 durable chat reply activity
 
 - Added an additive `message_activity_event` table owned by assistant messages.
@@ -34,8 +55,12 @@
   `activity_event` object fields, without interpreting JSON-looking answer text.
 - Focused backend event-bus/activity tests and frontend SSE/store/component
   tests pass for the restored live object contract.
-- Next: deploy the event-bus fix to beta and verify that concrete source domains
-  appear before the answer finishes, then remain identical after reload/resume.
+- Commit `bac6d24` deployed through successful TeamCity LightnyBetaFlow run
+  `#137`; backend, worker, and frontend images are all `beta-137` and ready.
+  A live beta Redis publish/read probe returned the nested activity as a `dict`
+  with its source list intact, and the temporary test stream was deleted.
+- Next: confirm the visible source chips during the next real user search and
+  compare them with the persisted list after completion/reload.
 
 ## 2026-08-31 Work MVP beta-eval blocker fixes
 
