@@ -1129,3 +1129,33 @@ Deploy and canary the browser-ready authentication foundation across the backend
 
 1. Complete the production migration release.
 2. Rerun the coordinated beta Work activity timeline release and verify it live.
+
+## 2026-09-01 feedback batch: durable chat state
+
+### Current objective
+
+Ship server-backed chat drafts and Favorites together with the matching frontend recovery and Telegram layout fixes, then validate in beta before production.
+
+### Completed
+
+- Added additive Conversation fields for draft text/timestamps and favorite state/timestamps.
+- Added owned draft and favorite update endpoints; accepted user messages clear the saved draft in the same persistence flow.
+- Added migration `xl9f0a1b2c3d` and extended shared-head/additive migration coverage.
+- Added focused behavior and migration tests; 11 production-based backend tests, Ruff, Python compilation, and `git diff --check` pass.
+- Alembic reports `xl9f0a1b2c3d` as the single head; offline PostgreSQL SQL renders one transactional additive upgrade from the current production revision.
+- Integrated the batch onto `origin/master` in isolated branch `codex/feedback-batch-prod-20260901`; the production branch remains unpushed.
+- The first approved one-off migration attempt was cancelled before its first DDL statement after a pre-existing idle transaction blocked the required table lock; zero columns were applied and production health remained green.
+- Added local 5-second lock and 30-second statement timeouts to make every migration attempt fail fast instead of queuing production writes.
+- Built the bounded migration as immutable beta image `beta-145`; its first attempt timed out safely on transient contention, and one controlled retry completed in under two seconds.
+- Production now reports Alembic revision `xl9f0a1b2c3d`; all four additive columns and `ix_conversation_user_favorite` are present, while the unchanged production release remains publicly ready.
+- `LightnyBetaFlow` build 147 passed schema verification and deployed backend/worker image `beta-147`; both workloads are Ready with zero restarts and the signed-in draft/Favorites smoke checks passed.
+
+### Risks / blockers
+
+- The prepared production default-branch commit remains intentionally unpushed until the separate immediate production-release approval checkpoint.
+- Production preparation uses isolated worktrees because the normal backend and frontend checkouts contain unrelated user changes.
+
+### Next steps
+
+1. Obtain the separate immediate production-release approval before pushing the prepared default-branch commits that trigger `LightnyReleaseFlow`.
+2. Verify the production migration no-op, workloads, images, public health, and the same user-visible behaviors independently of CI success.

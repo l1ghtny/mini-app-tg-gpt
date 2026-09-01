@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional, Iterable, Union
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.services.model_registry import (
     ImageModelName,
@@ -89,6 +89,10 @@ class ConversationAPI(BaseModel):
     id: uuid.UUID
     title: str
     folder_id: Optional[uuid.UUID] = None
+    is_favorite: bool = False
+    favorited_at: Optional[datetime] = None
+    draft_text: Optional[str] = None
+    draft_updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(
         from_attributes=True,
@@ -106,6 +110,19 @@ class CreateConversationRequest(BaseModel):
 
 class RenameRequest(BaseModel):
     title: str
+
+
+class UpdateConversationFavoriteRequest(BaseModel):
+    is_favorite: bool
+
+
+class UpdateConversationDraftRequest(BaseModel):
+    content: str = Field(max_length=50_000)
+
+
+class ConversationDraftAPI(BaseModel):
+    content: str
+    updated_at: datetime
 
 
 class NewMessageRequest(BaseModel):

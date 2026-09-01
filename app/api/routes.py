@@ -14,6 +14,7 @@ from app.db.database import get_read_session, get_session
 from app.redis.event_bus import RedisEventBus
 from app.schemas.chat import (
     ConversationStreamRedirect,
+    ConversationDraftAPI,
     CreateConversationRequest,
     ConversationAPI,
     ConversationWithMessages,
@@ -23,9 +24,15 @@ from app.schemas.chat import (
     NewMessageRequest,
     RenameRequest,
     RequestExists,
-    UpdateConversationSettingsRequest, ConversationInfo,
+    UpdateConversationDraftRequest,
+    UpdateConversationFavoriteRequest,
+    UpdateConversationSettingsRequest,
+    ConversationInfo,
 )
-from app.schemas.documents import ConversationDocumentsUpdateRequest, ConversationDocumentsUpdateResponse
+from app.schemas.documents import (
+    ConversationDocumentsUpdateRequest,
+    ConversationDocumentsUpdateResponse,
+)
 
 router = APIRouter()
 
@@ -205,7 +212,46 @@ async def rename_conversation(
     )
 
 
-@router.delete("/conversations/{conversation_id}", status_code=204, response_class=Response)
+@router.put(
+    "/conversations/{conversation_id}/favorite",
+    response_model=ConversationAPI,
+)
+async def update_conversation_favorite(
+    conversation_id: uuid.UUID,
+    request: UpdateConversationFavoriteRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return await chat_helpers.handle_update_conversation_favorite(
+        conversation_id=conversation_id,
+        request=request,
+        session=session,
+        current_user=current_user,
+    )
+
+
+@router.put(
+    "/conversations/{conversation_id}/draft",
+    response_model=ConversationDraftAPI,
+)
+async def update_conversation_draft(
+    conversation_id: uuid.UUID,
+    request: UpdateConversationDraftRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    content, updated_at = await chat_helpers.handle_update_conversation_draft(
+        conversation_id=conversation_id,
+        request=request,
+        session=session,
+        current_user=current_user,
+    )
+    return ConversationDraftAPI(content=content, updated_at=updated_at)
+
+
+@router.delete(
+    "/conversations/{conversation_id}", status_code=204, response_class=Response
+)
 async def delete_conversation(
     conversation_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
