@@ -62,6 +62,33 @@
 - Next: confirm the visible source chips during the next real user search and
   compare them with the persisted list after completion/reload.
 
+## 2026-09-01 Work MVP beta-139 clarification-boundary follow-up
+
+- The two-case beta-139 rerun confirmed that the first structured clarification was
+  answered and resumed, but the executor attempted a second `ask_user` call because
+  the synthetic answer omitted a non-critical product-description detail. The case
+  explicitly allows one question, so the eval runner correctly had no second answer
+  interaction and was stopped instead of waiting for its timeout.
+- Cancelled the synthetic waiting run after inspection. No customer run was touched.
+- Resumed requests that explicitly limit clarification to one question now remove the
+  `ask_user` tool after the first answer. An unexpected repeated tool call is not
+  persisted; corrective generation must complete with a labelled reasonable
+  assumption for any remaining non-critical detail.
+- Added a regression test matching the live sequence: answered first question,
+  attempted second question, then completed and passed review without pausing again.
+
+### Validation
+
+- 142 focused Work, evaluation, and generated-artifact tests pass.
+- Ruff, Python compilation, and diff whitespace checks pass.
+
+### Next steps
+
+1. Deploy the one-question boundary fix to beta.
+2. Rerun structured clarification and cancel/recovery first.
+3. If both regressions pass, run the full six-case `mvp-core` profile and complete
+   human review before making a pilot decision.
+
 ## 2026-09-01 Work MVP beta-132 regression follow-up
 
 - Reran the four previously affected `mvp-core` cases against deployed beta-132.

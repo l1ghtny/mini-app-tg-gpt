@@ -225,6 +225,78 @@ async def test_resumed_clarification_is_available_to_review_and_retry() -> None:
     assert "previous_response_id" not in create.await_args_list[2].kwargs
 
 
+@pytest.mark.asyncio
+async def test_one_question_request_cannot_pause_for_second_clarification() -> None:
+    request = WorkHumanInputRequest(
+        id=uuid.uuid4(),
+        thread_id=uuid.uuid4(),
+        work_run_id=uuid.uuid4(),
+        round=1,
+        status="answered",
+        question="What are the product name, audience, and delivery channel?",
+        reason="Those details materially change the announcement.",
+        answer=(
+            "Atlas private beta for operations leads at design partners, sent by "
+            "email with a call to action to book onboarding."
+        ),
+        provider="openai",
+        provider_response_id="resp_ask_1",
+        provider_call_id="call_ask_1",
+        created_at=datetime(2026, 9, 1, 12, 0, 0),
+    )
+    second_question = _tool_response(
+        question="What primary benefit does Atlas provide?",
+        reason="The product benefit would make the announcement more specific.",
+    )
+    completed_draft = SimpleNamespace(
+        id="draft-complete",
+        output_text=(
+            "Subject: Book onboarding for the Atlas private beta\n\n"
+            "Atlas is now available to operations leads at our design partners. "
+            "Assumption: Atlas helps teams streamline day-to-day operations. "
+            "Book your onboarding session to get started."
+        ),
+        output=[],
+    )
+    passed_review = SimpleNamespace(
+        id="review-passed",
+        output_text=json.dumps(
+            {"passes": True, "issues": [], "revision_instructions": ""}
+        ),
+        output=[],
+    )
+    create = AsyncMock(side_effect=[second_question, completed_draft, passed_review])
+    handler = AsyncMock(return_value=True)
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+
+    result = await agent_execution._generate_validated_result(
+        client=client,  # type: ignore[arg-type]
+        request_payload={
+            "current_request": (
+                "Prepare a launch announcement. Ask one concise material question "
+                "before writing the announcement."
+            ),
+            "approved_plan": {"expected_outputs": []},
+        },
+        tools=[ASK_USER_TOOL],
+        observe_response=AsyncMock(),
+        resume_request=request,
+        handle_human_input=handler,
+    )
+
+    assert result.content == completed_draft.output_text
+    handler.assert_not_awaited()
+    for call in create.await_args_list[:2]:
+        assert not agent_execution._ask_user_available(call.kwargs["tools"])
+    retry_payload = json.loads(
+        create.await_args_list[1].kwargs["input"][1]["content"][0]["text"]
+    )
+    assert retry_payload["answered_clarification"] == {
+        "question": request.question,
+        "answer": request.answer,
+    }
+
+
 def test_waiting_run_can_resume_or_stop_but_not_finish_directly() -> None:
     assert can_transition_work_run(
         WorkRunStatus.RUNNING,

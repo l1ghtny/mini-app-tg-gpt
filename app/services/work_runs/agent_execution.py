@@ -196,7 +196,9 @@ _EXECUTOR_PROMPT = (
     "for one material question before a later deliverable, call ask_user; never return "
     "that question as an ordinary final answer. When answered_clarification is present, "
     "the user already answered that question; use the answer to complete the deliverable "
-    "and do not restart the clarification. Never ask for credentials or secrets."
+    "and do not restart the clarification. If the answer leaves a non-critical detail "
+    "open, proceed with a clearly labelled reasonable assumption. Never ask for "
+    "credentials or secrets."
 )
 _REVIEWER_PROMPT = (
     "Review a draft Work result against the user's request, approved expected outputs, "
@@ -442,6 +444,25 @@ def _request_requires_structured_clarification(
     return (asks_question and before_deliverable) or (
         russian_question and russian_continuation
     )
+
+
+def _request_limits_clarification_to_one(
+    request_payload: Mapping[str, object],
+) -> bool:
+    current_request = str(request_payload.get("current_request", "")).lower()
+    english_limit = bool(
+        re.search(
+            r"\b(?:ask|pose)\b.{0,80}\b(?:one|single|1)\b.{0,80}\bquestion\b",
+            current_request,
+        )
+    )
+    russian_limit = bool(
+        re.search(
+            r"\b(?:задай|спроси|уточни)\b.{0,80}\b(?:один|1)\b.{0,80}\bвопрос\b",
+            current_request,
+        )
+    )
+    return english_limit or russian_limit
 
 
 def _draft_is_plain_clarification(draft: str) -> bool:
@@ -748,6 +769,14 @@ async def _generate_validated_result(
                 "answer": resume_request.answer or "",
             },
         }
+        if _request_limits_clarification_to_one(request_payload):
+            tools = [
+                tool
+                for tool in tools
+                if not (
+                    tool.get("type") == "function" and tool.get("name") == "ask_user"
+                )
+            ]
     revision_feedback: str | None = None
     review_count = 0
     generation_count = 0
@@ -778,7 +807,11 @@ async def _generate_validated_result(
         await observe_response(f"draft_{generation_count}", response)
         if resume_request is not None and generation_count == 1 and observe_resume:
             await observe_resume(response)
-        if handle_human_input is not None and await handle_human_input(response):
+        if (
+            handle_human_input is not None
+            and _ask_user_available(tools)
+            and await handle_human_input(response)
+        ):
             raise WorkRunAwaitingUser
         steering = (
             await consume_steering()
