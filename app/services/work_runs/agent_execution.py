@@ -210,8 +210,15 @@ _REVIEWER_PROMPT = (
     "without supporting evidence, require actionable forward-looking items rather than "
     "claims that the items already pass. Return concise revision instructions when it "
     "does not pass. If research or sources were requested, require citations for the "
-    "material factual claims and reject obviously malformed, irrelevant, or placeholder "
-    "source references. When an approved expected output has kind artifact, fail the "
+    "material factual claims and reject malformed, irrelevant, or placeholder source "
+    "references. When available_evidence contains web sources, use web search to inspect "
+    "the cited pages themselves before passing the draft. A resolving URL, plausible "
+    "title, search snippet, or nearby page is not sufficient: the cited page must directly "
+    "support the claim shown in that citation's cited_context. Treat narrow API operation "
+    "pages as evidence only for claims about that documented operation. If a page does not "
+    "support its adjacent claim, fail the draft and instruct the executor to replace the "
+    "source, narrow the claim, or omit it. Do not pass merely because a different uncited "
+    "page supports the claim. When an approved expected output has kind artifact, fail the "
     "draft unless the response cites at least one generated file. Fail a draft whose "
     "language does not match current_request unless current_request explicitly asks "
     "for another language. When answered_clarification is present, review the completed "
@@ -665,6 +672,37 @@ async def _generate_draft(
     )
 
 
+def _citation_review_items(
+    draft: str,
+    evidence: Mapping[str, object],
+) -> list[dict[str, object]]:
+    review_items: list[dict[str, object]] = []
+    for citation in evidence.get("citations", []):
+        if not isinstance(citation, Mapping):
+            continue
+        item: dict[str, object] = {
+            "source_id": str(citation.get("source_id", "")),
+        }
+        start = citation.get("start_index")
+        end = citation.get("end_index")
+        if (
+            isinstance(start, int)
+            and not isinstance(start, bool)
+            and isinstance(end, int)
+            and not isinstance(end, bool)
+            and 0 <= start < end <= len(draft)
+        ):
+            context_start = max(draft.rfind("\n", 0, start) + 1, start - 800)
+            context_end = draft.find("\n", end)
+            if context_end < 0:
+                context_end = min(len(draft), end + 400)
+            item["cited_context"] = draft[context_start:context_end].strip()[:1200]
+        review_items.append(item)
+        if len(review_items) >= 50:
+            break
+    return review_items
+
+
 async def _review_draft(
     *,
     client: AsyncOpenAI,
@@ -680,10 +718,10 @@ async def _review_draft(
         documents=evidence_documents,
         provider_file_document_ids=provider_file_document_ids,
     )
-    return await _create_provider_response(
-        client,
-        model=AGENT_MODEL,
-        input=[
+    sources = list(evidence.get("sources", []))[:20]
+    reviewer_kwargs: dict[str, object] = {
+        "model": AGENT_MODEL,
+        "input": [
             {
                 "role": "developer",
                 "content": [{"type": "input_text", "text": _REVIEWER_PROMPT}],
@@ -711,7 +749,11 @@ async def _review_draft(
                                     ),
                                     "web_search_calls": web_search_calls,
                                     "file_search_calls": file_search_calls,
-                                    "sources": list(evidence.get("sources", []))[:20],
+                                    "sources": sources,
+                                    "citations": _citation_review_items(
+                                        draft,
+                                        evidence,
+                                    ),
                                     "citation_count": len(
                                         evidence.get("citations", [])
                                     ),
@@ -733,10 +775,10 @@ async def _review_draft(
                 ],
             },
         ],
-        max_output_tokens=1200,
-        reasoning={"effort": "low"},
-        store=True,
-        text={
+        "max_output_tokens": 1200,
+        "reasoning": {"effort": "low"},
+        "store": True,
+        "text": {
             "format": {
                 "type": "json_schema",
                 "name": "work_result_review",
@@ -744,7 +786,14 @@ async def _review_draft(
                 "schema": WorkResultReview.model_json_schema(),
             }
         },
-    )
+    }
+    if any(
+        isinstance(source, Mapping) and source.get("type") == "web"
+        for source in sources
+    ):
+        reviewer_kwargs["tools"] = [{"type": "web_search"}]
+        reviewer_kwargs["tool_choice"] = "required"
+    return await _create_provider_response(client, **reviewer_kwargs)
 
 
 async def _generate_validated_result(

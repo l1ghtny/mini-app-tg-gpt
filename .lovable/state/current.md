@@ -1,5 +1,30 @@
 # Current State
 
+## 2026-09-02 Work semantic citation grounding beta rollout
+
+- Integrated the latest `origin/beta` state, including durable conversation drafts,
+  favorites, and the bounded migration-lock wait fix, into the Work MVP branch.
+- Work result review now treats a resolving source URL as insufficient evidence. When
+  a draft contains web citations, the reviewer must browse the cited pages and verify
+  that each page directly supports the claim in its adjacent citation context.
+- The reviewer receives bounded citation context and is forced to use web search for
+  web-backed drafts. Non-web Work results keep the existing review path and do not pay
+  for an unnecessary reviewer search.
+- Added a regression matching the beta-147 failure: a valid OpenAI delete-eval endpoint
+  cited for general evaluation guidance is rejected, its precise feedback reaches the
+  corrective generation, and the supported replacement passes.
+- Validation passes: 16 focused agent-execution tests, 143 Work/generated-artifact
+  tests, focused Ruff, Python compilation, and diff whitespace checks. A repository-wide
+  Ruff scan still reports unrelated pre-existing lint debt outside this change.
+
+### Next steps
+
+1. Commit and push the integrated state to `origin/beta`.
+2. Follow the TeamCity beta flow and verify immutable backend/worker/frontend image
+   tags plus public beta health.
+3. Rerun `web_openai_agent_evals` with a fresh short-lived beta session, then update
+   the human review and acceptance evidence.
+
 ## 2026-09-02 Work MVP beta-147 acceptance evaluation
 
 - Ran the complete six-case `mvp-core` profile against the live beta environment

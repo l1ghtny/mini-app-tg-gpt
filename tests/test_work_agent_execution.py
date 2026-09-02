@@ -36,6 +36,38 @@ def _response(
     )
 
 
+def _cited_response(
+    response_id: str,
+    output_text: str,
+    *,
+    title: str,
+    url: str,
+) -> SimpleNamespace:
+    start_index = output_text.index(url)
+    end_index = start_index + len(url)
+    response = _response(response_id, output_text)
+    response.output = [
+        SimpleNamespace(type="web_search_call"),
+        SimpleNamespace(
+            type="message",
+            content=[
+                SimpleNamespace(
+                    annotations=[
+                        SimpleNamespace(
+                            type="url_citation",
+                            title=title,
+                            url=url,
+                            start_index=start_index,
+                            end_index=end_index,
+                        )
+                    ]
+                )
+            ],
+        ),
+    ]
+    return response
+
+
 def _request_payload() -> dict[str, object]:
     return {
         "original_goal": "Подготовь краткий чек-лист из 5 пунктов.",
@@ -143,9 +175,11 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
         "web_search_calls": 0,
         "file_search_calls": 0,
         "sources": [],
+        "citations": [],
         "citation_count": 0,
         "generated_artifacts": [],
     }
+    assert "tools" not in create.await_args_list[1].kwargs
     assert (
         review_payload["approved_plan"]["expected_outputs"][0]["acceptance_criteria"][1]
         == "Пункты сформулированы как действия или вопросы, а не как уже выполненные проверки."
@@ -168,6 +202,92 @@ async def test_agent_retries_a_status_report_and_returns_the_deliverable() -> No
         ("revising", 2),
         ("reviewing", 2),
     ]
+
+
+@pytest.mark.asyncio
+async def test_web_reviewer_rejects_resolving_but_irrelevant_source() -> None:
+    irrelevant_url = (
+        "https://platform.openai.com/docs/api-reference/evals/deleteRun?lang=python"
+    )
+    corrected_url = (
+        "https://developers.openai.com/api/reference/resources/evals/methods/create"
+    )
+    first_draft = _cited_response(
+        "draft-irrelevant-source",
+        (
+            "The first practical recommendation is to create task-specific evaluations "
+            "with explicit testing criteria, and then compare the model configurations "
+            f"for the agent. ([OpenAI Evals]({irrelevant_url}))"
+        ),
+        title="Evals | OpenAI API Reference",
+        url=irrelevant_url,
+    )
+    failed_review = _response(
+        "review-irrelevant-source",
+        json.dumps(
+            {
+                "passes": False,
+                "issues": [
+                    "The delete-eval endpoint does not support the adjacent advice."
+                ],
+                "revision_instructions": (
+                    "Replace the delete endpoint with a page that documents eval "
+                    "criteria and model comparison."
+                ),
+            }
+        ),
+        "web_search_call",
+    )
+    corrected_draft = _cited_response(
+        "draft-supported-source",
+        (
+            "The first practical recommendation is to create task-specific evaluations "
+            "with explicit testing criteria, and then compare the model configurations "
+            f"for the agent. ([OpenAI Evals]({corrected_url}))"
+        ),
+        title="Create eval | OpenAI API Reference",
+        url=corrected_url,
+    )
+    passed_review = _response(
+        "review-supported-source",
+        json.dumps({"passes": True, "issues": [], "revision_instructions": ""}),
+        "web_search_call",
+    )
+    create = AsyncMock(
+        side_effect=[first_draft, failed_review, corrected_draft, passed_review]
+    )
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    request_payload = _request_payload()
+    request_payload["current_request"] = (
+        "Using current official OpenAI documentation, recommend how to evaluate agents "
+        "and cite the source beside each claim."
+    )
+
+    result = await agent_execution._generate_validated_result(
+        client=client,  # type: ignore[arg-type]
+        request_payload=request_payload,
+        tools=[{"type": "web_search"}],
+        observe_response=AsyncMock(),
+    )
+
+    assert result.content == corrected_draft.output_text
+    first_review_kwargs = create.await_args_list[1].kwargs
+    assert first_review_kwargs["tools"] == [{"type": "web_search"}]
+    assert first_review_kwargs["tool_choice"] == "required"
+    assert "must directly support" in first_review_kwargs["input"][0]["content"][0][
+        "text"
+    ]
+    first_review_payload = json.loads(
+        first_review_kwargs["input"][1]["content"][0]["text"]
+    )
+    assert first_review_payload["available_evidence"]["sources"][0]["url"] == (
+        irrelevant_url
+    )
+    assert "create task-specific evaluations" in first_review_payload[
+        "available_evidence"
+    ]["citations"][0]["cited_context"]
+    retry_prompt = create.await_args_list[2].kwargs["input"][0]["content"][0]["text"]
+    assert "Replace the delete endpoint" in retry_prompt
 
 
 @pytest.mark.asyncio
