@@ -1506,3 +1506,29 @@ Deploy and canary the browser-ready authentication foundation across the backend
 1. Commit and push the persisted 512 MiB bot-worker limit, then confirm the new default-branch trigger starts exactly one `LightnyReleaseFlow` run and the legacy builds remain idle.
 2. Runtime-verify that triggered run, including both Rollouts, all workers, both CronJobs, and public health endpoints.
 3. Implement beta Phase 1 guardrails before provisioning shared-production-data beta workloads.
+
+## 2026-09-01 feedback batch: durable chat state
+
+### Current objective
+
+Ship server-backed chat drafts and Favorites together with the matching frontend recovery and Telegram layout fixes, then validate in beta before production.
+
+### Completed
+
+- Added additive Conversation fields for draft text/timestamps and favorite state/timestamps.
+- Added owned draft and favorite update endpoints; accepted user messages clear the saved draft in the same persistence flow.
+- Added migration `xl9f0a1b2c3d` and extended shared-head/additive migration coverage.
+- Added focused behavior tests; 10 backend tests, Ruff, Python compilation, and `git diff --check` pass.
+- The first approved migration attempt encountered a pre-existing idle production transaction before its first DDL statement; the migration backend was cancelled, PostgreSQL rolled the transaction back, and production readiness/schema remained unchanged.
+- The migration now sets local 5-second lock and 30-second statement timeouts before requesting DDL locks, preventing a retry from queuing production writes indefinitely. Focused tests, Ruff, and offline PostgreSQL SQL rendering pass.
+
+### Risks / blockers
+
+- Beta deployment remains gated until a new backend image containing the bounded-lock migration is built and the migration completes.
+- Final interaction proof still requires the deployed beta Mini App.
+
+### Next steps
+
+1. Push the bounded-lock migration follow-up to beta and wait for the new backend image.
+2. Retry the migration using that immutable image, verify production health, then deploy and validate beta.
+3. Obtain immediate production release approval before pushing the prepared production branches.

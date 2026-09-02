@@ -32,6 +32,8 @@ from app.schemas.chat import (
     NewMessageRequest,
     RequestExists,
     RenameRequest,
+    UpdateConversationDraftRequest,
+    UpdateConversationFavoriteRequest,
     UpdateConversationSettingsRequest, ConversationInfo,
 )
 from app.services.background.image_deriver import (
@@ -717,6 +719,51 @@ async def handle_rename_conversation(
     await session.commit()
     await session.refresh(conversation)
     return conversation
+
+
+async def handle_update_conversation_favorite(
+    *,
+    conversation_id: uuid.UUID,
+    request: UpdateConversationFavoriteRequest,
+    session: AsyncSession,
+    current_user: AppUser,
+) -> Conversation:
+    conversation = await _load_conversation_for_user(
+        session,
+        conversation_id,
+        current_user.id,
+    )
+    conversation.is_favorite = request.is_favorite
+    conversation.favorited_at = (
+        datetime.now(timezone.utc).replace(tzinfo=None)
+        if request.is_favorite
+        else None
+    )
+    session.add(conversation)
+    await session.commit()
+    await session.refresh(conversation)
+    return conversation
+
+
+async def handle_update_conversation_draft(
+    *,
+    conversation_id: uuid.UUID,
+    request: UpdateConversationDraftRequest,
+    session: AsyncSession,
+    current_user: AppUser,
+) -> tuple[str, datetime]:
+    conversation = await _load_conversation_for_user(
+        session,
+        conversation_id,
+        current_user.id,
+    )
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    content = request.content
+    conversation.draft_text = content or None
+    conversation.draft_updated_at = now
+    session.add(conversation)
+    await session.commit()
+    return content, now
 
 
 async def handle_delete_conversation(
@@ -1572,6 +1619,8 @@ async def _create_user_message(
     await session.flush()
 
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    conversation.draft_text = None
+    conversation.draft_updated_at = conversation.updated_at
     session.add(conversation)
 
     for part in request.content:

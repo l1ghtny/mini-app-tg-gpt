@@ -26,7 +26,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xk8e9f0a1b2c"
+    assert scripts.get_current_head() == "xl9f0a1b2c3d"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
@@ -34,6 +34,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     assert scripts.get_revision("xi6d7e8f9a0b").down_revision == "xh5c6d7e8f9"
     assert scripts.get_revision("xj7e8f9a0b1c").down_revision == "xi6d7e8f9a0b"
     assert scripts.get_revision("xk8e9f0a1b2c").down_revision == "xj7e8f9a0b1c"
+    assert scripts.get_revision("xl9f0a1b2c3d").down_revision == "xk8e9f0a1b2c"
 
 
 def test_agentic_work_migration_is_forward_compatible() -> None:
@@ -97,6 +98,23 @@ def test_chat_activity_migration_is_additive() -> None:
     assert "foreign key(message_id) references message (id) on delete cascade" in sql
     assert "alter table" not in sql
     assert "drop table" not in sql
+
+
+def test_conversation_drafts_and_favorites_migration_is_additive() -> None:
+    migration, sql = _render_upgrade(
+        "migrations.versions.xl9f0a1b2c3d_add_conversation_drafts_and_favorites"
+    )
+
+    assert migration.down_revision == "xk8e9f0a1b2c"
+    assert "set local lock_timeout = '5s'" in sql
+    assert "set local statement_timeout = '30s'" in sql
+    assert sql.index("set local lock_timeout") < sql.index("add column is_favorite")
+    assert "add column is_favorite" in sql
+    assert "add column favorited_at" in sql
+    assert "add column draft_text" in sql
+    assert "add column draft_updated_at" in sql
+    assert "create index ix_conversation_user_favorite" in sql
+    assert "drop column" not in sql
 
 
 def test_beta_pipeline_checks_the_shared_head_before_deploying() -> None:
