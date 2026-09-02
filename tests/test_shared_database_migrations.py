@@ -15,10 +15,22 @@ def _render_upgrade(module_name: str) -> tuple[object, str]:
     output = StringIO()
     context = MigrationContext.configure(
         dialect_name="postgresql",
-        opts={"as_sql": True, "output_buffer": output},
+        opts={"as_sql": True, "literal_binds": True, "output_buffer": output},
     )
     migration.op = Operations(context)
     migration.upgrade()
+    return migration, output.getvalue().lower()
+
+
+def _render_downgrade(module_name: str) -> tuple[object, str]:
+    migration = import_module(module_name)
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "literal_binds": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+    migration.downgrade()
     return migration, output.getvalue().lower()
 
 
@@ -26,7 +38,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xl9f0a1b2c3d"
+    assert scripts.get_current_head() == "xm0a1b2c3d4e"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
@@ -35,6 +47,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     assert scripts.get_revision("xj7e8f9a0b1c").down_revision == "xi6d7e8f9a0b"
     assert scripts.get_revision("xk8e9f0a1b2c").down_revision == "xj7e8f9a0b1c"
     assert scripts.get_revision("xl9f0a1b2c3d").down_revision == "xk8e9f0a1b2c"
+    assert scripts.get_revision("xm0a1b2c3d4e").down_revision == "xl9f0a1b2c3d"
 
 
 def test_agentic_work_migration_is_forward_compatible() -> None:
@@ -115,6 +128,33 @@ def test_conversation_drafts_and_favorites_migration_is_additive() -> None:
     assert "add column draft_updated_at" in sql
     assert "create index ix_conversation_user_favorite" in sql
     assert "drop column" not in sql
+
+
+def test_feedback_batch_whats_new_migration_is_idempotent_and_scoped() -> None:
+    module_name = (
+        "migrations.versions.xm0a1b2c3d4e_add_feedback_batch_whats_new"
+    )
+    migration, upgrade_sql = _render_upgrade(module_name)
+
+    assert migration.down_revision == "xl9f0a1b2c3d"
+    assert migration.ITEM_ID == "2026-09-01-drafts-favorites-chat-recovery"
+    assert migration.TITLE_EN == "Chats are now easier and more reliable"
+    assert migration.TITLE_RU == "Чаты стали удобнее и надёжнее"
+    assert "Drafts now save automatically" in migration.BODY_EN
+    assert "Failed image uploads stay attached" in migration.BODY_EN
+    assert "Черновики теперь сохраняются автоматически" in migration.BODY_RU
+    assert "Если изображение не загрузилось" in migration.BODY_RU
+    assert "insert into whats_new_item" in upgrade_sql
+    assert "on conflict (id) do update set" in upgrade_sql
+    assert migration.ITEM_ID in upgrade_sql
+    assert migration.TITLE_EN.lower() in upgrade_sql
+    assert "null, 'feature', null" not in upgrade_sql
+    assert "drop table" not in upgrade_sql
+    assert "drop column" not in upgrade_sql
+
+    _, downgrade_sql = _render_downgrade(module_name)
+    assert "delete from whats_new_item where id" in downgrade_sql
+    assert "drop table" not in downgrade_sql
 
 
 def test_beta_pipeline_checks_the_shared_head_before_deploying() -> None:

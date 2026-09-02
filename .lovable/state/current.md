@@ -13,15 +13,24 @@
 - Added a regression matching the beta-147 failure: a valid OpenAI delete-eval endpoint
   cited for general evaluation guidance is rejected, its precise feedback reaches the
   corrective generation, and the supported replacement passes.
-- Validation passes: 16 focused agent-execution tests, 143 Work/generated-artifact
-  tests, focused Ruff, Python compilation, and diff whitespace checks. A repository-wide
-  Ruff scan still reports unrelated pre-existing lint debt outside this change.
+- TeamCity beta flow `#148` built both `beta-148` images but failed closed before
+  deployment. Production release `#47` had already applied migration
+  `xm0a1b2c3d4e`, while the beta branch's Alembic graph ended at its parent
+  `xl9f0a1b2c3d`; beta therefore could not recognize the shared database head.
+- Restored the exact immutable `xm0a1b2c3d4e` migration from `origin/master` into
+  beta. Its blob hash is identical to production (`986b017ad2b3c99bbb0ae4911698278cbef185ee`),
+  so the next beta flow only verifies the already-applied revision and performs no
+  database write.
+- Validation passes: 25 focused citation/migration tests, 152 Work, generated-artifact,
+  and shared-migration tests, focused Ruff, Python compilation, and diff whitespace
+  checks. A repository-wide Ruff scan still reports unrelated pre-existing lint debt
+  outside this change.
 
 ### Next steps
 
-1. Commit and push the integrated state to `origin/beta`.
-2. Follow the TeamCity beta flow and verify immutable backend/worker/frontend image
-   tags plus public beta health.
+1. Commit and push the immutable migration-lineage sync to `origin/beta`.
+2. Follow the replacement TeamCity beta flow and verify immutable
+   backend/worker/frontend image tags plus public beta health.
 3. Rerun `web_openai_agent_evals` with a fresh short-lived beta session, then update
    the human review and acceptance evidence.
 
