@@ -1,5 +1,43 @@
 # Current State
 
+## 2026-09-02 Work MVP beta-147 acceptance evaluation
+
+- Ran the complete six-case `mvp-core` profile against the live beta environment
+  while backend, worker, and frontend were all serving immutable `beta-147` images.
+  Public backend and frontend health checks passed before the run.
+- All six cases completed with no API errors. Automated case pass, system success,
+  requested-artifact validity, and referential citation integrity were each 100%.
+- Completed human review for all six cases. Five were useful without correction,
+  producing an 83.3% usefulness-without-correction rate against the 70% gate and an
+  average human score of 4.625/5.
+- The XLSX preserved all nine source rows, used auditable `SUMIF` formulas with no
+  formula errors, reconciled monthly totals of 8,400 / 10,200 / 11,200 and regional
+  totals of 20,600 / 9,200, and rendered cleanly across all four sheets.
+- The DOCX was rendered independently through LibreOffice and visually inspected on
+  both pages. It is editable, source-accurate, keeps unknown owners/dates explicit,
+  and has no clipping, overlap, broken tables, or missing sections.
+- The cancellation/recovery case cancelled the first run, completed the redirected
+  five-item checklist without stale research, and left the reserved allowance ledger
+  in `refunded`. Its non-zero `actual_cost_usd` is provider-cost telemetry, not a
+  consumed Work allowance.
+- Human review found one semantic citation defect hidden by the current automated
+  metric: the first recommendation in `web_openai_agent_evals` cites the OpenAI API
+  endpoint for deleting an eval, which does not support the recommendation. The
+  current citation-integrity scorer proves only that citations resolve to recorded
+  sources, not that the source content entails the adjacent claim.
+- All fresh synthetic source documents and the four sources left by the interrupted
+  prior attempts were deleted. The short-lived beta session file and temporary QA
+  renders/scripts were also deleted after verification.
+
+### Next steps
+
+1. Correct the web-research source-selection behavior and/or add semantic citation
+   grounding to the evaluator so an irrelevant-but-resolving URL cannot pass.
+2. Deploy that narrow fix to beta and rerun `web_openai_agent_evals`; rerun the full
+   profile only if the shared research/citation path changes materially.
+3. Treat the numeric MVP gate as passed, but do not describe semantic citation quality
+   as fully green until the demonstrated source mismatch is fixed and rerun.
+
 ## 2026-09-01 OpenAI commentary activity
 
 - OpenAI GPT-5.4, GPT-5.5, and GPT-5.6 chat requests now ask the model for short,
