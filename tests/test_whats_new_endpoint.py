@@ -164,3 +164,58 @@ async def test_mark_seen_updates_watermark():
         assert response2.json()["seen_up_to"] == first_seen
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_image_resizing_migration_replay_and_localized_feed():
+    from importlib import import_module
+
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlmodel import select
+
+    migration = import_module(
+        "migrations.versions.xo2c3d4e5f6a_add_image_resizing_whats_new"
+    )
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"], echo=False)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            user = await _create_user(session, 721220099)
+            await _seed_items(session, user)
+
+        def apply(connection, operation):
+            with Operations.context(MigrationContext.configure(connection)):
+                operation()
+
+        async with engine.begin() as connection:
+            await connection.run_sync(apply, migration.upgrade)
+            await connection.run_sync(apply, migration.upgrade)
+        async with AsyncSession(engine) as session:
+            rows = (await session.exec(select(WhatsNewItem).where(
+                WhatsNewItem.id == migration.ITEM_ID
+            ))).all()
+            assert len(rows) == 1
+
+        app = _build_app(engine, user)
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for language, title, body in (
+                ("en", migration.TITLE_EN, migration.BODY_EN),
+                ("ru", migration.TITLE_RU, migration.BODY_RU),
+            ):
+                response = await client.get(f"/api/v1/whats-new?lang={language}&limit=20")
+                assert response.status_code == 200
+                item = next(item for item in response.json()["items"]
+                            if item["id"] == migration.ITEM_ID)
+                assert item["title"] == title
+                assert item["body"] == body
+                assert item["cta"] is None
+
+        async with engine.begin() as connection:
+            await connection.run_sync(apply, migration.downgrade)
+        async with AsyncSession(engine) as session:
+            assert await session.get(WhatsNewItem, migration.ITEM_ID) is None
+            assert await session.get(WhatsNewItem, "2026-05-folders") is not None
+    finally:
+        await engine.dispose()

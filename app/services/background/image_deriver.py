@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import hashlib
+import threading
 import uuid
 from typing import Optional, Tuple
 
@@ -51,6 +52,7 @@ SUPPORTED_DIRECT = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 MAX_IMAGE_PATCHES = 30_000
 MAX_IMAGE_SIDE = 65_535
 IMAGE_PATCH_SIDE = 32
+_IMAGE_TRANSCODE_LOCK = threading.Lock()
 
 
 def _is_not_found_client_error(exc: ClientError) -> bool:
@@ -105,7 +107,7 @@ def _key_from_public_url(url: str) -> Optional[str]:
     for public_base_url in _known_public_base_urls():
         if url.startswith(public_base_url):
             return _strip_legacy_bucket_prefix(url[len(public_base_url) :])
-    return None  # external URL or a different domain -> pass through as-is
+    return None  # Unknown domains are rejected by require_owned_image_asset.
 
 
 def _decide_target(mime: str, has_alpha: bool) -> str:
@@ -154,27 +156,42 @@ def _flatten_alpha_to_rgb(im: Image.Image) -> Image.Image:
 
 
 def _transcode(data: bytes, target: str, max_side: int) -> Tuple[bytes, str, bool]:
-    with Image.open(io.BytesIO(data)) as im:
-        im = ImageOps.exif_transpose(im)
-        size = _fit_image_dimensions(*im.size, max_side)
-        if im.size != size:
-            if im.mode == "P":
-                im = im.convert("RGBA" if "transparency" in im.info else "RGB")
-            im = im.resize(size, Image.Resampling.LANCZOS)
-        has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
-        buf = io.BytesIO()
-        if target == "jpeg":
-            im = _flatten_alpha_to_rgb(im)
-            im.save(buf, format="JPEG", quality=95, subsampling=0, optimize=True)
-            return buf.getvalue(), "image/jpeg", has_alpha
-        elif target == "png":
-            im.save(buf, format="PNG", optimize=True)
-            return buf.getvalue(), "image/png", has_alpha
-        elif target == "webp":
-            im.save(buf, format="WEBP", lossless=True, method=4)
-            return buf.getvalue(), "image/webp", has_alpha
-        else:
-            raise ValueError(f"Unsupported target: {target}")
+    # Serialize full pixel decodes within each worker to bound peak memory.
+    with _IMAGE_TRANSCODE_LOCK:
+        im = Image.open(io.BytesIO(data))
+        try:
+            if im.width * im.height > Image.MAX_IMAGE_PIXELS:
+                raise Image.DecompressionBombError("Image is too large to process")
+            size = _fit_image_dimensions(*im.size, max_side)
+            if im.size != size:
+                if im.mode == "P":
+                    previous = im
+                    im = im.convert("RGBA" if "transparency" in im.info else "RGB")
+                    previous.close()
+                previous = im
+                im = im.resize(size, Image.Resampling.LANCZOS)
+                previous.close()
+            # Rotate the smaller image, avoiding an unnecessary full-size copy.
+            ImageOps.exif_transpose(im, in_place=True)
+            has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
+            buf = io.BytesIO()
+            if target == "jpeg":
+                if im.mode != "RGB":
+                    previous = im
+                    im = _flatten_alpha_to_rgb(im)
+                    previous.close()
+                im.save(buf, format="JPEG", quality=95, subsampling=0, optimize=True)
+                return buf.getvalue(), "image/jpeg", has_alpha
+            elif target == "png":
+                im.save(buf, format="PNG", optimize=True)
+                return buf.getvalue(), "image/png", has_alpha
+            elif target == "webp":
+                im.save(buf, format="WEBP", lossless=True, method=4)
+                return buf.getvalue(), "image/webp", has_alpha
+            else:
+                raise ValueError(f"Unsupported target: {target}")
+        finally:
+            im.close()
 
 
 def _derive_image_sync(

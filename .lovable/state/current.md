@@ -13,8 +13,21 @@
   `0f5f2a3`; beta baseline is `6b562f1`. Frontend heads match the deployed revisions.
 - What's New: required, with one EN/RU announcement planned after production
   runtime verification. No beta draft is inserted into the shared database.
-- Next steps: finish focused PostgreSQL/API tests, push the feature to both
-  branches, verify both deployments, then ship the shared announcement migration.
+- Validation: 72 focused production tests and 40 beta image tests passed. Production
+  release 51 / TeamCity 8424 is Healthy; beta 156 / 8435 deployed after a transient
+  Kubernetes TLS failure in the initial attempt. Production real HTTP upload,
+  image answer, SSE resume, and history replay passed with GPT-5.6 Luna. The
+  8160x6144 source uses a 6376x4800 derivative (30,000 patches).
+- The first in-pod smoke client caused an OOM restart; tests now run outside the
+  API container. Follow-up processing closes pixel buffers promptly, rotates after
+  resizing, avoids copying RGB data, and serializes transcodes per worker. All 40
+  image cases pass after this change.
+- Production availability is verified, so migration xo2c3d4e5f6a now announces
+  automatic resizing once in the shared EN/RU feed, with no CTA.
+- Frontend follow-up: none; owned upload URLs and response shapes are unchanged.
+- Next steps: validate and deploy the memory follow-up and announcement on master,
+  verify the shared feed, then carry the same migration and fix to beta. Complete
+  final runtime checks and remove temporary test infrastructure.
 
 
 ## 2026-09-08 stale ordinary-chat reservations
