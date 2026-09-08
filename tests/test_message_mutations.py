@@ -1,5 +1,7 @@
 import os
 import uuid
+import io
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -15,9 +17,23 @@ from app.api.chat_helpers import (
 )
 from app.db import models as m
 from app.schemas.chat import EditMessageRequest
+from PIL import Image
+from app.services.background import image_deriver
+
+
+@pytest.fixture(autouse=True)
+def mock_image_storage(monkeypatch):
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(buffer, format="PNG")
+    monkeypatch.setattr(image_deriver, "head_object", AsyncMock(return_value={"ContentType": "image/png"}))
+    monkeypatch.setattr(image_deriver, "get_bytes", AsyncMock(return_value=buffer.getvalue()))
+    monkeypatch.setattr(image_deriver, "wait_for_image_url_reachability", AsyncMock())
 
 
 async def _seed_conversation_with_messages(session: AsyncSession, user_id: uuid.UUID):
+    session.add(m.ImageAsset(user_id=user_id, bucket=image_deriver.R2_BUCKET,
+        key="images/free/uploaded/new.png", public_url="https://cdn.example/new.png",
+        source="uploaded", retention_policy="free_30d", status="active"))
     conversation = m.Conversation(title=f"conv-{uuid.uuid4()}", user_id=user_id)
     session.add(conversation)
     await session.commit()

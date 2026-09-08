@@ -3,19 +3,21 @@ from __future__ import annotations
 import asyncio
 import io
 import hashlib
+import uuid
 from typing import Optional, Tuple
 
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
+from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.r2.settings import Settings
 from app.r2.client import R2_BUCKET
 from app.r2.methods import head_object, get_bytes, put_bytes
-from app.db.models import DerivedImage
+from app.db.models import DerivedImage, ImageAsset
 from app.core.config import settings
 from app.services.image_assets import (
     IMAGE_STATUS_ACTIVE,
@@ -37,12 +39,18 @@ logger = settings.custom_logger
 # Enable HEIC/HEIF if pillow-heif is installed
 try:
     import pillow_heif
+
     pillow_heif.register_heif_opener()
 except Exception:
     raise ImportError("pillow-heif is not installed")
 
 
 SUPPORTED_DIRECT = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+# Preserve original detail up to the provider's per-image rejection limits.
+# If this budget changes, invalidate the cached variants for MAX_IMAGE_SIDE.
+MAX_IMAGE_PATCHES = 30_000
+MAX_IMAGE_SIDE = 65_535
+IMAGE_PATCH_SIDE = 32
 
 
 def _is_not_found_client_error(exc: ClientError) -> bool:
@@ -63,12 +71,18 @@ def _user_public_base_url() -> str:
 
 
 def _openai_public_base_url() -> str:
-    return _normalize_public_base_url(Settings.R2_OPENAI_PUBLIC_BASE_URL) or _user_public_base_url()
+    return (
+        _normalize_public_base_url(Settings.R2_OPENAI_PUBLIC_BASE_URL)
+        or _user_public_base_url()
+    )
 
 
 def _known_public_base_urls() -> tuple[str, ...]:
     known: list[str] = []
-    for raw_base_url in (Settings.R2_PUBLIC_BASE_URL, Settings.R2_OPENAI_PUBLIC_BASE_URL):
+    for raw_base_url in (
+        Settings.R2_PUBLIC_BASE_URL,
+        Settings.R2_OPENAI_PUBLIC_BASE_URL,
+    ):
         normalized = _normalize_public_base_url(raw_base_url)
         if normalized and normalized not in known:
             known.append(normalized)
@@ -78,7 +92,7 @@ def _known_public_base_urls() -> tuple[str, ...]:
 def _strip_legacy_bucket_prefix(path: str) -> str:
     bucket_prefix = f"{R2_BUCKET}/"
     if path.startswith(bucket_prefix):
-        return path[len(bucket_prefix):]
+        return path[len(bucket_prefix) :]
     return path
 
 
@@ -86,17 +100,44 @@ def _public_url(key: str, *, for_openai: bool = False) -> str:
     base_url = _openai_public_base_url() if for_openai else _user_public_base_url()
     return f"{base_url}{key}"
 
+
 def _key_from_public_url(url: str) -> Optional[str]:
     for public_base_url in _known_public_base_urls():
         if url.startswith(public_base_url):
-            return _strip_legacy_bucket_prefix(url[len(public_base_url):])
+            return _strip_legacy_bucket_prefix(url[len(public_base_url) :])
     return None  # external URL or a different domain -> pass through as-is
 
+
 def _decide_target(mime: str, has_alpha: bool) -> str:
-    if mime in SUPPORTED_DIRECT:
-        return "direct"
-    # HEIC/HEIF/TIFF/BMP/etc.
+    if mime in {"image/png", "image/gif"}:
+        return "png"
+    if mime == "image/webp":
+        return "webp"
     return "png" if has_alpha else "jpeg"
+
+
+def _fit_image_dimensions(width: int, height: int, max_side: int) -> tuple[int, int]:
+    """Find the largest proportional size that fits both limits, without upscaling."""
+    if min(width, height, max_side) < 1:
+        raise ValueError("Image dimensions and max_side must be positive")
+    longest = max(width, height)
+
+    def dimensions(side: int) -> tuple[int, int]:
+        return max(1, width * side // longest), max(1, height * side // longest)
+
+    low, high = 1, min(longest, max_side, MAX_IMAGE_SIDE)
+    while low < high:
+        side = (low + high + 1) // 2
+        w, h = dimensions(side)
+        patches = ((w + IMAGE_PATCH_SIDE - 1) // IMAGE_PATCH_SIDE) * (
+            (h + IMAGE_PATCH_SIDE - 1) // IMAGE_PATCH_SIDE
+        )
+        if patches <= MAX_IMAGE_PATCHES:
+            low = side
+        else:
+            high = side - 1
+    return dimensions(low)
+
 
 def _flatten_alpha_to_rgb(im: Image.Image) -> Image.Image:
     # JPEG can't store alpha; flatten to white
@@ -111,52 +152,89 @@ def _flatten_alpha_to_rgb(im: Image.Image) -> Image.Image:
         return bg
     return im.convert("RGB")
 
+
 def _transcode(data: bytes, target: str, max_side: int) -> Tuple[bytes, str, bool]:
     with Image.open(io.BytesIO(data)) as im:
         im = ImageOps.exif_transpose(im)
-        # downscale
-        if max(im.size) > max_side:
-            im.thumbnail((max_side, max_side))
+        size = _fit_image_dimensions(*im.size, max_side)
+        if im.size != size:
+            if im.mode == "P":
+                im = im.convert("RGBA" if "transparency" in im.info else "RGB")
+            im = im.resize(size, Image.Resampling.LANCZOS)
         has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
         buf = io.BytesIO()
         if target == "jpeg":
             im = _flatten_alpha_to_rgb(im)
-            im.save(buf, format="JPEG", quality=85, optimize=True)
+            im.save(buf, format="JPEG", quality=95, subsampling=0, optimize=True)
             return buf.getvalue(), "image/jpeg", has_alpha
         elif target == "png":
             im.save(buf, format="PNG", optimize=True)
             return buf.getvalue(), "image/png", has_alpha
         elif target == "webp":
-            im.save(buf, format="WEBP", quality=85, method=6)
+            im.save(buf, format="WEBP", lossless=True, method=4)
             return buf.getvalue(), "image/webp", has_alpha
         else:
             raise ValueError(f"Unsupported target: {target}")
 
 
-def _derive_image_sync(original: bytes, mime: str, max_size: int) -> tuple[bytes, str, str]:
-    try:
-        with Image.open(io.BytesIO(original)) as im:
-            has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
-    except Exception:
-        has_alpha = False
+def _derive_image_sync(
+    original: bytes, mime: str, max_size: int
+) -> tuple[bytes, str, str] | None:
+    with Image.open(io.BytesIO(original)) as im:
+        # Inspect actual image content even when storage metadata claims a supported format.
+        mime = Image.MIME.get(im.format, mime)
+        has_alpha = (im.mode in ("RGBA", "LA")) or ("transparency" in im.info)
+        if (
+            mime in SUPPORTED_DIRECT
+            and _fit_image_dimensions(*im.size, max_size) == im.size
+            and not getattr(im, "is_animated", False)
+        ):
+            return None
 
     target = _decide_target(mime, has_alpha)
-    converted, converted_mime, _ = _transcode(original, target=target, max_side=max_size)
+    converted, converted_mime, _ = _transcode(
+        original, target=target, max_side=max_size
+    )
     return converted, converted_mime, target
+
+
+async def require_owned_image_asset(
+    session: AsyncSession, url: str, *, user_id: uuid.UUID
+) -> ImageAsset:
+    asset = await find_asset_by_url(session, url, user_id=user_id)
+    if asset is None:
+        key = _key_from_public_url(url)
+        if key:
+            asset = (
+                await session.exec(
+                    select(ImageAsset)
+                    .where(
+                        ImageAsset.user_id == user_id,
+                        ImageAsset.bucket == R2_BUCKET,
+                        ImageAsset.key == key,
+                    )
+                    .order_by(ImageAsset.created_at.desc())
+                )
+            ).first()
+    # Domain recognition alone is not authorization to access an R2 object.
+    if asset is None or asset.user_id != user_id or asset.bucket != R2_BUCKET:
+        raise HTTPException(status_code=403, detail="image_attachment_not_allowed")
+    return asset
+
 
 async def ensure_openai_compatible_image_url(
     session: AsyncSession,
     url_or_key: str,
     *,
-    max_size: int = 2048,
+    user_id: uuid.UUID,
+    max_size: int = MAX_IMAGE_SIDE,
 ) -> str:
     """
-    If this is our R2 public URL, ensure it's directly consumable by OpenAI.
-    - If already PNG/JPEG/WEBP/GIF -> return original public URL.
-    - Else (e.g., HEIC) -> derive once (JPEG/PNG), cache, and return derived public URL.
-    External URLs: returned unchanged.
+    Preserve supported originals within the dimension and patch limits; otherwise
+    cache a resized/converted copy. Only the authenticated owner's managed R2
+    assets are accepted; arbitrary URLs and unowned objects never reach a provider.
     """
-    asset = await find_asset_by_url(session, url_or_key)
+    asset = await require_owned_image_asset(session, url_or_key, user_id=user_id)
     if asset:
         status = effective_image_status(asset)
         if status == IMAGE_STATUS_PROCESSING:
@@ -179,10 +257,7 @@ async def ensure_openai_compatible_image_url(
         if status != IMAGE_STATUS_ACTIVE:
             raise HTTPException(status_code=410, detail="Image unavailable")
 
-    key = _key_from_public_url(url_or_key)
-    if key is None:
-        # Not our bucket / unknown domain -> let OpenAI fetch it as-is
-        return url_or_key
+    key = asset.key
 
     openai_url = _public_url(key, for_openai=True)
 
@@ -197,19 +272,10 @@ async def ensure_openai_compatible_image_url(
         raise
     mime = (meta.get("ContentType") or "application/octet-stream").lower()
 
-    if mime in SUPPORTED_DIRECT:
-        try:
-            await wait_for_image_url_reachability(openai_url, logger=logger, require_success=True)
-        except ImageReachabilityError as exc:
-            raise HTTPException(status_code=409, detail="image_not_ready") from exc
-        return openai_url
-
     # See if we already have a derived variant
-    target_guess = "png" if "png" in mime else "jpeg"
     res = await session.exec(
         select(DerivedImage).where(
             DerivedImage.original_key == key,
-            DerivedImage.target_format == target_guess,
             DerivedImage.max_side == max_size,
         )
     )
@@ -217,39 +283,84 @@ async def ensure_openai_compatible_image_url(
     if row:
         derived_openai_url = _public_url(row.derived_key, for_openai=True)
         try:
-            await wait_for_image_url_reachability(derived_openai_url, logger=logger, require_success=True)
+            await wait_for_image_url_reachability(
+                derived_openai_url, logger=logger, require_success=True
+            )
         except ImageReachabilityError as exc:
             raise HTTPException(status_code=409, detail="image_not_ready") from exc
         return derived_openai_url
 
     # Pull original bytes, transcode, and store.
     # Offload PIL decode/transcode to a worker thread to avoid blocking the event loop.
-    original = await get_bytes(key)
-    converted, converted_mime, target = await asyncio.to_thread(
-        _derive_image_sync,
-        original,
-        mime,
-        max_size,
-    )
+    try:
+        original = await get_bytes(key)
+    except ClientError as exc:
+        if _is_not_found_client_error(exc):
+            if asset and asset.status != IMAGE_STATUS_MISSING:
+                await mark_asset_status(session, asset, IMAGE_STATUS_MISSING)
+            raise HTTPException(status_code=410, detail="Image unavailable") from exc
+        raise
+    try:
+        derived = await asyncio.to_thread(
+            _derive_image_sync,
+            original,
+            mime,
+            max_size,
+        )
+    except Image.DecompressionBombError as exc:
+        raise HTTPException(
+            status_code=413, detail="Image is too large to process"
+        ) from exc
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid image") from exc
+    if derived is None:
+        try:
+            await wait_for_image_url_reachability(
+                openai_url, logger=logger, require_success=True
+            )
+        except ImageReachabilityError as exc:
+            raise HTTPException(status_code=409, detail="image_not_ready") from exc
+        return openai_url
+    converted, converted_mime, target = derived
 
-    sha = hashlib.sha256(converted).hexdigest()
-    ext = ".jpg" if converted_mime == "image/jpeg" else ".png" if converted_mime == "image/png" else ".webp"
+    # Distinct originals must not collide with derived_key's unique constraint.
+    digest = hashlib.sha256(key.encode())
+    digest.update(b"\0")
+    digest.update(converted)
+    sha = digest.hexdigest()
+    ext = (
+        ".jpg"
+        if converted_mime == "image/jpeg"
+        else ".png"
+        if converted_mime == "image/png"
+        else ".webp"
+    )
     derived_key = f"derived/{sha[:2]}/{sha}{ext}"
 
-    await put_bytes(derived_key, converted, content_type=converted_mime, metadata={"source": "derived"})
-    session.add(DerivedImage(
-        original_key=key,
-        target_format=target,
-        max_side=max_size,
-        derived_key=derived_key,
-    ))
+    await put_bytes(
+        derived_key,
+        converted,
+        content_type=converted_mime,
+        metadata={"source": "derived"},
+    )
+    await session.exec(
+        insert(DerivedImage)
+        .values(
+            original_key=key,
+            target_format=target,
+            max_side=max_size,
+            derived_key=derived_key,
+        )
+        .on_conflict_do_nothing(constraint="uq_derived_image_variant")
+    )
     await session.commit()
 
     derived_openai_url = _public_url(derived_key, for_openai=True)
     try:
-        await wait_for_image_url_reachability(derived_openai_url, logger=logger, require_success=True)
+        await wait_for_image_url_reachability(
+            derived_openai_url, logger=logger, require_success=True
+        )
     except ImageReachabilityError as exc:
         raise HTTPException(status_code=409, detail="image_not_ready") from exc
 
     return derived_openai_url
-

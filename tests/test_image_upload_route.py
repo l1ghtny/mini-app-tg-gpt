@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import uuid
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException, UploadFile
+from PIL import Image
+from fastapi import BackgroundTasks, UploadFile
 from starlette.datastructures import Headers
 
 import app.api.images as image_api
@@ -48,9 +49,12 @@ async def test_upload_image_returns_processing_and_schedules_probe(monkeypatch):
     monkeypatch.setattr(image_api.Settings, "R2_PUBLIC_BASE_URL", "https://user.example/images/", raising=False)
     monkeypatch.setattr(image_api.Settings, "R2_OPENAI_PUBLIC_BASE_URL", "https://provider.example/images/", raising=False)
 
+    image_buffer = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(image_buffer, format="PNG")
+    image_buffer.seek(0)
     upload = UploadFile(
         filename="cat.png",
-        file=io.BytesIO(b"png-bytes"),
+        file=image_buffer,
         headers=Headers({"content-type": "image/png"}),
     )
     result = await image_api.upload_image(upload, background_tasks, user, session)

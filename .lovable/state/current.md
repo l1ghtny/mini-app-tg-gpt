@@ -1,5 +1,22 @@
 # Current State
 
+## 2026-09-08 image attachment security and resizing release
+
+- Objective: close direct API attachment bypasses and release the detail-preserving
+  resizing fix to production and beta.
+- Managed attachments now require the authenticated owner's ImageAsset and R2
+  bucket, including send/edit preflight and history replay. Arbitrary URLs,
+  foreign-user objects, unknown content types, and forged message roles are rejected.
+- Uploads validate actual image data and a 20 MiB limit. Safe originals remain
+  unchanged; oversized images use separate cached copies within 30,000 patches.
+- Work is isolated from the dirty shared checkout, based on current production
+  `0f5f2a3`; beta baseline is `6b562f1`. Frontend heads match the deployed revisions.
+- What's New: required, with one EN/RU announcement planned after production
+  runtime verification. No beta draft is inserted into the shared database.
+- Next steps: finish focused PostgreSQL/API tests, push the feature to both
+  branches, verify both deployments, then ship the shared announcement migration.
+
+
 ## 2026-09-08 stale ordinary-chat reservations
 
 - Ordinary generation is bounded to 24 hours from assistant placeholder creation;

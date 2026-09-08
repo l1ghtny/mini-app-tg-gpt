@@ -48,7 +48,7 @@ async def test_history_includes_assistant_images(monkeypatch):
         session.add(m.MessageContent(message_id=assistant_message.id, type="image_url", value="https://cdn.example/cat.png"))
         await session.commit()
 
-        async def fake_ensure_image_url(_session, url, max_size=2048):
+        async def fake_ensure_image_url(_session, url, max_size=2048, user_id=None):
             return url
 
         monkeypatch.setattr(chat_helpers, "ensure_openai_compatible_image_url", fake_ensure_image_url, raising=True)
@@ -99,7 +99,7 @@ async def test_history_sliding_window_adds_summary_when_over_budget(monkeypatch)
             session.add(m.MessageContent(message_id=assistant_msg.id, ordinal=0, type="text", value=assistant_text))
             await session.commit()
 
-        async def fake_ensure_image_url(_session, url, max_size=2048):
+        async def fake_ensure_image_url(_session, url, max_size=2048, user_id=None):
             return url
 
         async def fake_summarize_history_chunk(**kwargs):
@@ -159,7 +159,7 @@ async def test_history_small_dialogue_has_no_summary(monkeypatch):
         session.add(m.MessageContent(message_id=assistant_message.id, ordinal=0, type="text", value="hi there"))
         await session.commit()
 
-        async def fake_ensure_image_url(_session, url, max_size=2048):
+        async def fake_ensure_image_url(_session, url, max_size=2048, user_id=None):
             return url
 
         async def fail_if_called(**kwargs):
@@ -213,7 +213,7 @@ async def test_history_keeps_stored_user_image_url_when_openai_url_differs(monke
         session.add(m.MessageContent(message_id=user_message.id, ordinal=0, type="image_url", value=proxied_url))
         await session.commit()
 
-        async def fake_ensure_image_url(_session, url, max_size=2048):
+        async def fake_ensure_image_url(_session, url, max_size=2048, user_id=None):
             assert url == proxied_url
             return openai_url
 
@@ -264,7 +264,7 @@ async def test_history_skips_unavailable_historic_user_images(monkeypatch):
         session.add(m.MessageContent(message_id=latest_user_message.id, ordinal=0, type="text", value="continue this chat"))
         await session.commit()
 
-        async def fake_ensure_image_url(_session, url, max_size=2048):
+        async def fake_ensure_image_url(_session, url, max_size=2048, user_id=None):
             if url == stale_url:
                 raise HTTPException(status_code=410, detail="Image unavailable")
             return url

@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import os
 import sys
 import time
@@ -15,6 +16,7 @@ from fastapi.params import Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.background import BackgroundTask
 from starlette.responses import StreamingResponse
+from PIL import Image, UnidentifiedImageError
 
 from app.api.dependencies import get_current_user
 from app.db.database import engine, get_session
@@ -41,6 +43,30 @@ from app.services.image_assets import (
 
 images = APIRouter(tags=["images"], prefix="/images")
 logger = logging.getLogger(__name__)
+MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
+
+
+def _validate_image_upload(image: UploadFile) -> str:
+    image.file.seek(0, 2)
+    size = image.file.tell()
+    image.file.seek(0)
+    if size > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds the 20 MB upload limit")
+    try:
+        with Image.open(image.file) as decoded:
+            mime = Image.MIME.get(decoded.format)
+            if not mime or not mime.startswith("image/"):
+                raise HTTPException(status_code=400, detail="Invalid image")
+            if decoded.width * decoded.height > Image.MAX_IMAGE_PIXELS:
+                raise HTTPException(status_code=413, detail="Image is too large to process")
+            decoded.verify()
+            return mime
+    except Image.DecompressionBombError as exc:
+        raise HTTPException(status_code=413, detail="Image is too large to process") from exc
+    except (UnidentifiedImageError, OSError, SyntaxError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid image") from exc
+    finally:
+        image.file.seek(0)
 _PROXY_ALLOWED_HOSTS_ENV = "IMAGE_FETCH_PROXY_ALLOWED_HOSTS"
 _PROXY_ACCEPT = "image/*,application/octet-stream;q=0.9,*/*;q=0.1"
 _PROXY_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=10.0)
@@ -248,6 +274,7 @@ async def upload_image(
     app_user: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    content_type = await asyncio.to_thread(_validate_image_upload, image)
     # 0. Generate a file key
     if not image.filename:
         file_name = "image"
@@ -260,7 +287,7 @@ async def upload_image(
     bucket, key = await upload_fileobject(
         key,
         image,
-        content_type=image.content_type,
+        content_type=content_type,
         extra_metadata={"author": str(app_user.id), "type": "image"},
     )
     url = public_url_for_key(bucket, key)
