@@ -1,5 +1,25 @@
 # Current State
 
+## 2026-09-08 selective chat and project deletion
+
+- Added `GET /api/v1/history/manage` and `POST /api/v1/history/bulk-delete` for
+  explicit chat selections and whole-project selections with membership snapshots.
+- Ownership is checked before deletion. Changed chat membership or project contents
+  require a fresh confirmation; retries tolerate already removed selections.
+- Reserved requests, unfinished chat activity, and nonterminal Work runs protect
+  active history across both channels. Busy projects are skipped as a whole.
+- Deletion is transactional, preserves accounting and library documents, and uses
+  existing image-asset detachment semantics. Project file links are removed.
+- Assistant placeholders now flush into the ledger reservation transaction so
+  deletion cannot slip between placeholder creation and reservation.
+- Validation: 16 focused tests passed on each branch using a disposable SQLite
+  database with foreign keys. Production PostgreSQL locking behavior has not been
+  exercised locally.
+- Frontend counterpart implements the management dialog, selection, confirmation,
+  active-chat removal, and English/Russian copy; no schema migration is required.
+- Next: verify normal CI/deployment after publishing the paired commits to backend
+  master/beta and frontend main/beta; distinguish deployed behavior from local checks.
+
 ## 2026-09-01 feedback-batch What's New announcement
 
 - Objective: publish one bilingual What's New item covering the complete release 46

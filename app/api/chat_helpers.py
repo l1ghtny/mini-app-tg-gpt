@@ -1659,8 +1659,9 @@ async def _create_assistant_message(
 ) -> Message:
     assistant_msg = models.Message(conversation_id=conversation_id, role="assistant")
     session.add(assistant_msg)
-    await session.commit()
-    await session.refresh(assistant_msg)
+    # Keep the FK lock until reserve_request commits both the placeholder and
+    # its ledger reservation; bulk deletion must never see a gap between them.
+    await session.flush()
     return assistant_msg
 
 
