@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.services.chat_lifetime import chat_busy_cutoff
 from app.api.dependencies import get_current_user
 from app.db.database import get_session
 from app.db.models import (
@@ -84,12 +85,17 @@ class BulkDeleteResult(BaseModel):
 
 
 async def busy_history(session: AsyncSession, user_id: uuid.UUID):
+    # Ordinary generation has a hard deadline plus cleanup grace. A historical
+    # accounting reservation is not evidence of an indefinitely running reply.
+    # Work below remains protected by its durable lifecycle, without an age limit.
+    cutoff = chat_busy_cutoff()
     chats = set(
         (
             await session.exec(
                 select(RequestLedger.conversation_id).where(
                     RequestLedger.user_id == user_id,
                     RequestLedger.state == State.reserved,
+                    or_(RequestLedger.created_at >= cutoff, RequestLedger.created_at.is_(None)),
                     RequestLedger.conversation_id.is_not(None),
                 )
             )
@@ -109,6 +115,7 @@ async def busy_history(session: AsyncSession, user_id: uuid.UUID):
                 .where(
                     Conversation.user_id == user_id,
                     MessageActivityEvent.status == "active",
+                    or_(Message.created_at >= cutoff, Message.created_at.is_(None)),
                 )
             )
         ).all()

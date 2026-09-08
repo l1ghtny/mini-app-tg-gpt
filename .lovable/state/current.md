@@ -1,5 +1,27 @@
 # Current State
 
+## 2026-09-08 stale ordinary-chat reservations
+
+- Ordinary generation is bounded to 24 hours from assistant placeholder creation;
+  deletion protection includes a further five-minute cleanup grace. Unknown dates
+  remain protected. Work keeps its independent nonterminal-state protection.
+- Old ordinary-chat ledger/activity rows no longer imply an indefinitely busy chat.
+  Historical accounting is preserved. New crashes, cancellation, timeouts, and streams
+  ending without completion conditionally refund only reserved requests; already
+  consumed requests retain their accounting state.
+- Thirty focused history/stream/image tests pass on both isolated branch variants.
+  Migration graph/offline SQL tests, Ruff, and whitespace checks also pass.
+- Frontend contract: unchanged; existing busy fields use the corrected guard.
+- What's New: required. Migration xn1b2c3d4e5f announces the already-live selective
+  history-management feature once in the shared feed. Production 49 runs the feature;
+  the live feed was checked and contains no prior history-management announcement.
+  Master is the migration writer; beta carries the identical migration.
+- User authorized publishing this fix independently on 2026-09-08. The separate
+  cascade request remains pending its unavailable side-chat context; it is not
+  implemented or included. No historical user data has been manually changed.
+- Next: push master and verify its normal TeamCity migration, then push beta with
+  the same shared schema head. Verify deployed code and feed separately from pushes.
+
 ## 2026-09-08 selective chat and project deletion
 
 - Added `GET /api/v1/history/manage` and `POST /api/v1/history/bulk-delete` for

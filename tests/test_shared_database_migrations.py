@@ -38,7 +38,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xm0a1b2c3d4e"
+    assert scripts.get_current_head() == "xn1b2c3d4e5f"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
@@ -180,3 +180,18 @@ def test_beta_pipeline_checks_the_shared_head_before_deploying() -> None:
     assert "verify_shared_schema:" in pipeline
     assert 'export MIGRATION_MODE="check"' in pipeline
     assert "      - verify_shared_schema" in pipeline
+
+
+def test_history_cleanup_announcement_is_idempotent_and_scoped() -> None:
+    module = "migrations.versions.xn1b2c3d4e5f_add_history_cleanup_whats_new"
+    migration, sql = _render_upgrade(module)
+    assert migration.down_revision == "xm0a1b2c3d4e"
+    assert migration.ITEM_ID == "2026-09-08-selective-history-cleanup"
+    assert "on conflict (id) do update set" in sql
+    assert migration.TITLE_EN.lower() in sql
+    assert migration.TITLE_RU.lower() in sql
+    assert "beta" not in migration.BODY_EN.lower()
+    assert "delete from" not in sql
+    _, downgrade = _render_downgrade(module)
+    assert "delete from whats_new_item where id" in downgrade
+    assert migration.ITEM_ID in downgrade

@@ -378,3 +378,86 @@ async def test_assistant_placeholder_and_reservation_share_a_commit(
                 select(RequestLedger).where(RequestLedger.request_id == "atomic")
             )
         ).one()
+
+
+@pytest.mark.parametrize("source", ["ledger", "activity"])
+@pytest.mark.parametrize("age_hours,expected_busy", [(25, False), (1, True), (24, True)])
+async def test_chat_lifetime_controls_deletion(history_db, source, age_hours, expected_busy):
+    from datetime import timedelta, timezone
+
+    engine, client, owner, _, _, inside, _, project, message = history_db
+    created = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=age_hours)
+    async with AsyncSession(engine) as session:
+        if source == "ledger":
+            session.add(RequestLedger(
+                user_id=owner.id, conversation_id=inside.id, request_id="orphan",
+                model_name="gpt-5.4-nano", feature="text", created_at=created,
+            ))
+        else:
+            stored = await session.get(Message, message.id)
+            stored.created_at = created
+            session.add(MessageActivityEvent(
+                message_id=message.id, sequence=0, event_key="turn", kind="turn", status="active",
+            ))
+        await session.commit()
+    data = await preview(client)
+    assert next(c for c in data["conversations"] if c["id"] == str(inside.id))["busy"] is expected_busy
+    result = await delete(client, projects=data["projects"])
+    assert result.status_code == 200, result.text
+    assert result.json()["skipped_project_ids"] == ([str(project.id)] if expected_busy else [])
+    async with AsyncSession(engine) as session:
+        assert (await session.get(Conversation, inside.id) is not None) is expected_busy
+        if source == "ledger":
+            ledger = (await session.exec(select(RequestLedger).where(RequestLedger.request_id == "orphan"))).one()
+            assert ledger.state == "reserved"  # Historical accounting is not rewritten.
+
+
+@pytest.mark.parametrize("failure", ["exception", "cancel", "deadline", "exhausted", "timeout"])
+@pytest.mark.parametrize("initial_state", ["reserved", "consumed"])
+async def test_failed_generation_releases_only_unused_reservation(history_db, monkeypatch, failure, initial_state):
+    import asyncio
+    from datetime import timedelta, timezone
+    import app.api.helpers as helpers
+
+    engine, _, owner, _, _, inside, _, _, message = history_db
+    async with AsyncSession(engine) as session:
+        ledger = (await session.exec(select(RequestLedger).where(RequestLedger.request_id == "completed"))).one()
+        ledger.state = initial_state
+        await session.commit()
+    monkeypatch.setattr(helpers, "engine", engine)
+
+    async def broken_stream(*args, **kwargs):
+        if failure == "cancel":
+            raise asyncio.CancelledError()
+        if failure == "exhausted":
+            return
+        if failure in {"deadline", "timeout"}:
+            await asyncio.sleep(10)
+        raise RuntimeError("provider disconnected")
+        yield  # async generator
+
+    class Bus:
+        async def publish(self, *args):
+            pass
+        async def mark_done(self, *args, **kwargs):
+            self.ok = kwargs["ok"]
+
+    monkeypatch.setattr(helpers, "stream_normalized_ai_response", broken_stream)
+    bus = Bus()
+    if failure == "timeout":
+        monkeypatch.setattr(helpers, "generation_seconds_remaining", lambda _: 0.05)
+    error = {"exception": RuntimeError, "cancel": asyncio.CancelledError, "deadline": TimeoutError, "timeout": TimeoutError, "exhausted": RuntimeError}[failure]
+    with pytest.raises(error):
+        await helpers.generate_and_publish(
+            conversation_id=inside.id, assistant_message_id=message.id, user_id=owner.id,
+            history_for_openai=[], bus=bus, tools=[], request_id="completed",
+            generation_started_at=datetime.now(timezone.utc) - timedelta(hours=25) if failure == "deadline" else None,
+        )
+    assert bus.ok is False
+    async with AsyncSession(engine) as session:
+        ledger = (await session.exec(select(RequestLedger).where(RequestLedger.request_id == "completed"))).one()
+        assert ledger.state == ("refunded" if initial_state == "reserved" else "consumed")
+        active = (await session.exec(select(MessageActivityEvent).where(
+            MessageActivityEvent.message_id == message.id, MessageActivityEvent.status == "active",
+        ))).all()
+        assert active == []

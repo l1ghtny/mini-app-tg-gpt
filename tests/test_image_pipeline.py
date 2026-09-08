@@ -16,6 +16,8 @@ class FakeBus:
 
 class _DummySession:
     async def exec(self, *a, **kw): return type("R", (), {"first": lambda self: None})()
+    async def rollback(self): pass
+    async def execute(self, *a, **kw): pass
     async def commit(self): pass
     def add(self, x): pass
     async def refresh(self, *a, **kw): pass

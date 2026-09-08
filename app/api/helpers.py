@@ -1,4 +1,5 @@
-﻿import base64
+import asyncio
+import base64
 import hashlib
 import uuid
 from datetime import datetime, timezone
@@ -9,10 +10,12 @@ import logging
 from fastapi import HTTPException
 from openai.types.responses import FileSearchToolParam, WebSearchToolParam
 from openai.types.responses.tool import CodeInterpreter, ImageGeneration
+from sqlalchemy import update as sql_update
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.models import Conversation, MessageContent
+from app.db.models import Conversation, MessageContent, RequestLedger, State
+from app.services.chat_lifetime import generation_seconds_remaining
 from app.api.document_helpers import touch_conversation_documents_last_used_in_search
 from app.r2.methods import delete_object, put_bytes
 from app.r2.client import R2_BUCKET
@@ -67,6 +70,7 @@ async def generate_and_publish(
         thinking_enabled: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
         search_mode: Optional[str] = None,
+        generation_started_at: datetime | None = None,
 ):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         buffers: dict[int, str] = {}
@@ -82,77 +86,100 @@ async def generate_and_publish(
         assistant_message_id_str = str(assistant_message_id)
 
         try:
-            await bus.publish(assistant_message_id_str, {"type": "start"})
-            await _publish_initial_activity(
-                session=session,
-                bus=bus,
-                assistant_message_id=assistant_message_id,
-            )
-
-            async for ev in stream_normalized_ai_response(
-                    history_for_openai,
-                    model,
-                    instructions=instructions,
-                    tool_choice=tool_choice,
-                    tools=tools,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    request_id=request_id,
-                    assistant_message_id=assistant_message_id,
-                    previous_response_id=previous_response_id,
-                    previous_interaction_id=previous_interaction_id,
-                    fallback_messages=fallback_history_for_openai,
-                    thinking_enabled=thinking_enabled,
-                    reasoning_effort=reasoning_effort,
-                    search_mode=search_mode,
-            ):
-                await _record_and_publish_activity(
+            remaining = generation_seconds_remaining(generation_started_at)
+            if remaining <= 0:
+                raise TimeoutError("Chat generation deadline exceeded")
+            async with asyncio.timeout(remaining):
+                await bus.publish(assistant_message_id_str, {"type": "start"})
+                await _publish_initial_activity(
                     session=session,
                     bus=bus,
                     assistant_message_id=assistant_message_id,
-                    event=ev,
-                    lifecycle=lifecycle,
                 )
 
-                if ev.get("type") not in {
-                    "image.partial",
-                    "image.ready",
-                    "response.meta",
-                    "reasoning.summary.delta",
-                    "reasoning.summary.done",
-                }:
-                    await bus.publish(assistant_message_id_str, ev)
+                async for ev in stream_normalized_ai_response(
+                        history_for_openai,
+                        model,
+                        instructions=instructions,
+                        tool_choice=tool_choice,
+                        tools=tools,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        request_id=request_id,
+                        assistant_message_id=assistant_message_id,
+                        previous_response_id=previous_response_id,
+                        previous_interaction_id=previous_interaction_id,
+                        fallback_messages=fallback_history_for_openai,
+                        thinking_enabled=thinking_enabled,
+                        reasoning_effort=reasoning_effort,
+                        search_mode=search_mode,
+                ):
+                    await _record_and_publish_activity(
+                        session=session,
+                        bus=bus,
+                        assistant_message_id=assistant_message_id,
+                        event=ev,
+                        lifecycle=lifecycle,
+                    )
 
-                await _handle_stream_event(
-                    ev=ev,
-                    assistant_message_id=assistant_message_id,
-                    session=session,
-                    request_id=request_id,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    tools=tools,
-                    bus=bus,
-                    image_entitlement_tier_id=image_entitlement_tier_id,
-                    image_entitlement_pack_id=image_entitlement_pack_id,
-                    buffers=buffers,
-                    last_ckpt=last_ckpt,
-                    content_cache=content_cache,
-                    partial_image_keys=partial_image_keys,
-                    lifecycle=lifecycle,
-                    chain_context_fingerprint=chain_context_fingerprint,
-                )
+                    if ev.get("type") not in {
+                        "image.partial",
+                        "image.ready",
+                        "response.meta",
+                        "reasoning.summary.delta",
+                        "reasoning.summary.done",
+                    }:
+                        await bus.publish(assistant_message_id_str, ev)
 
-        except Exception as e:
+                    await _handle_stream_event(
+                        ev=ev,
+                        assistant_message_id=assistant_message_id,
+                        session=session,
+                        request_id=request_id,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        tools=tools,
+                        bus=bus,
+                        image_entitlement_tier_id=image_entitlement_tier_id,
+                        image_entitlement_pack_id=image_entitlement_pack_id,
+                        buffers=buffers,
+                        last_ckpt=last_ckpt,
+                        content_cache=content_cache,
+                        partial_image_keys=partial_image_keys,
+                        lifecycle=lifecycle,
+                        chain_context_fingerprint=chain_context_fingerprint,
+                    )
+
+                if request_id and not lifecycle["text_request_finalized"]:
+                    raise RuntimeError("Chat stream ended without a completion event")
+
+        except (Exception, asyncio.CancelledError) as e:
             logger.exception(
                 "Generate/publish pipeline failed request_id=%s conversation_id=%s assistant_message_id=%s",
                 request_id,
                 str(conversation_id),
                 str(assistant_message_id),
             )
+            # A broken transaction must not prevent releasing an unused request.
+            # Use a conditional update: output already charged by text.done stays charged.
+            if request_id:
+                try:
+                    await session.rollback()
+                    await session.execute(
+                        sql_update(RequestLedger).where(
+                            RequestLedger.user_id == user_id,
+                            RequestLedger.request_id == request_id,
+                            RequestLedger.state == State.reserved,
+                        ).values(state=State.refunded)
+                    )
+                    await session.commit()
+                except Exception:
+                    logger.exception("Could not release failed chat reservation request_id=%s", request_id)
+                    await session.rollback()
             await _cleanup_partial_images(partial_image_keys)
             error_event = {
                 "type": "error",
-                "error": lifecycle.get("last_error_message") or str(e),
+                "error": lifecycle.get("last_error_message") or str(e) or "Chat generation interrupted",
             }
             if lifecycle.get("last_error_code"):
                 error_event["code"] = lifecycle["last_error_code"]
