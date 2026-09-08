@@ -61,7 +61,7 @@ source change in this release. Existing feed entries contain no duplicate notice
 Deploy and verify the feature first, then publish one backend-master announcement
 migration and carry that same migration into beta (shared database, one writer).
 
-Pending announcement:
+Announcement (publish after verified production availability):
 
 - EN title: Automatic resizing for large images
 - EN body: Attach a photo or screenshot in chat as usual. Images that exceed the
@@ -75,3 +75,7 @@ Pending announcement:
 
 Release implementation and deployment evidence will be recorded in the state
 checkpoint. Publication is deferred until the feature is verified in production.
+
+Full pixel transcodes run one at a time per worker. Resize before EXIF rotation,
+close replaced buffers immediately, and avoid RGB-to-RGB copies to reduce peak
+memory; original R2 uploads remain untouched.

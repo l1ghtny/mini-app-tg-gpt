@@ -38,7 +38,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xn1b2c3d4e5f"
+    assert scripts.get_current_head() == "xo2c3d4e5f6a"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
@@ -187,6 +187,21 @@ def test_history_cleanup_announcement_is_idempotent_and_scoped() -> None:
     migration, sql = _render_upgrade(module)
     assert migration.down_revision == "xm0a1b2c3d4e"
     assert migration.ITEM_ID == "2026-09-08-selective-history-cleanup"
+    assert "on conflict (id) do update set" in sql
+    assert migration.TITLE_EN.lower() in sql
+    assert migration.TITLE_RU.lower() in sql
+    assert "beta" not in migration.BODY_EN.lower()
+    assert "delete from" not in sql
+    _, downgrade = _render_downgrade(module)
+    assert "delete from whats_new_item where id" in downgrade
+    assert migration.ITEM_ID in downgrade
+
+
+def test_image_resizing_announcement_is_idempotent_and_scoped() -> None:
+    module = "migrations.versions.xo2c3d4e5f6a_add_image_resizing_whats_new"
+    migration, sql = _render_upgrade(module)
+    assert migration.down_revision == "xn1b2c3d4e5f"
+    assert migration.ITEM_ID == "2026-09-08-large-image-attachments"
     assert "on conflict (id) do update set" in sql
     assert migration.TITLE_EN.lower() in sql
     assert migration.TITLE_RU.lower() in sql
