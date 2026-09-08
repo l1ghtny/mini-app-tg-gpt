@@ -103,7 +103,7 @@ async def test_ensure_openai_compatible_image_url_marks_missing_asset_on_head_40
         monkeypatch.setattr(image_deriver, "head_object", fake_head_object, raising=True)
 
         with pytest.raises(HTTPException) as exc_info:
-            await image_deriver.ensure_openai_compatible_image_url(session, proxied_url, max_size=2048)
+            await image_deriver.ensure_openai_compatible_image_url(session, proxied_url, max_size=2048, user_id=user.id)
 
         await session.refresh(asset)
 

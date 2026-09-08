@@ -127,7 +127,7 @@ class ConversationDraftAPI(BaseModel):
 
 class NewMessageRequest(BaseModel):
     client_request_id: str
-    role: Literal["user", "assistant"]
+    role: Literal["user"]
     content: List[MessageContent]
     model: AllowedModels
     tool_choice: Optional[Union[AllowedToolChoices, List]] = "auto"
@@ -139,6 +139,20 @@ class NewMessageRequest(BaseModel):
     search_mode: Optional[SearchMode] = None
     premium_sample_kind: Optional[PremiumSampleKind] = None
     workflow_kind: Optional[WorkflowKind] = None
+
+    @field_validator("content")
+    @classmethod
+    def validate_user_content(cls, parts: List[MessageContent]) -> List[MessageContent]:
+        if not parts:
+            raise ValueError("A message must contain text or images")
+        for part in parts:
+            if part.type not in {"text", "image_url", "image"}:
+                raise ValueError("Only text and image attachments are accepted")
+            if part.type == "image":
+                part.type = "image_url"
+            if part.type == "image_url" and not part.value.strip():
+                raise ValueError("Image attachments must have a URL")
+        return parts
 
     @field_validator("model", mode="before")
     @classmethod

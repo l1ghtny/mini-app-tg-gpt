@@ -286,6 +286,10 @@ async def handle_create_message(
 
     conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
 
+    for part in request.content:
+        if part.type == "image_url":
+            await ensure_openai_compatible_image_url(session, part.value, user_id=current_user.id)
+
     (
         text_entitlement,
         image_entitlement,
@@ -1367,6 +1371,9 @@ async def _replace_message_content(
     if not has_text and not image_values:
         raise HTTPException(status_code=400, detail="Edited message must include text or images")
 
+    for image_url in image_values:
+        await ensure_openai_compatible_image_url(session, image_url, user_id=user_id)
+
     await detach_assets_from_message_content_ids(
         session,
         [part.id for part in message.content if part.type == "image_url"],
@@ -1803,6 +1810,14 @@ async def _finalize_history_payload(
     skip_unavailable_images: bool = False,
 ) -> dict[str, Any] | None:
     payload = {"role": candidate.payload["role"], "content": []}
+    image_owner_id = None
+    if any(part.get("type") == "input_image" for part in candidate.payload.get("content", [])):
+        image_owner_id = (await session.exec(
+            select(Conversation.user_id).join(Message, Message.conversation_id == Conversation.id)
+            .where(Message.id == candidate.message_id)
+        )).first()
+        if image_owner_id is None:
+            raise HTTPException(status_code=403, detail="image_attachment_not_allowed")
     for part in candidate.payload.get("content", []):
         if part.get("type") != "input_image":
             payload["content"].append(part)
@@ -1812,9 +1827,9 @@ async def _finalize_history_payload(
         if not source_url:
             continue
         try:
-            compatible_url = await ensure_openai_compatible_image_url(session, source_url, max_size=2048)
+            compatible_url = await ensure_openai_compatible_image_url(session, source_url, user_id=image_owner_id)
         except HTTPException as exc:
-            if skip_unavailable_images and exc.status_code == 410:
+            if skip_unavailable_images and exc.status_code in {403, 410}:
                 continue
             raise
         payload["content"].append({"type": "input_image", "image_url": compatible_url})
