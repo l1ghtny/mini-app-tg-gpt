@@ -1,5 +1,17 @@
 # Current State
 
+## 2026-09-09 bilingual error notifications
+
+- What's New: required for visible EN/RU error explanations across uploads, chat,
+  payments, accounts, and image actions. Frontend main b0e619b is Healthy in
+  production release 54; deployed upload-error UI passes in both languages.
+- Migration xp3d4e5f6a7b publishes one stable shared notice with no CTA. Prior
+  feed and migrations were checked for duplicates; beta-only Work is not announced.
+- Validation: 13 migration unit tests, offline SQL and single head, PostgreSQL
+  idempotent upgrade/localized endpoint/scoped downgrade tests, and diff checks pass.
+- Next: deploy master migration, verify live EN/RU feed, carry identical history
+  into beta, and verify both release revisions. Frontend API contract is unchanged.
+
 ## 2026-09-08 image attachment security and resizing release
 
 - Objective: close direct API attachment bypasses and release the detail-preserving
@@ -760,7 +772,8 @@ Deploy and canary the browser-ready authentication foundation across the backend
 
 - Sentry issue GPT-MINI-APP-BACKEND-5G was traced to DNS/DB connectivity failures during MicroK8s/control-plane instability, not an application-code regression.
 - Reduced main-server pressure by scaling AFFiNE workloads to zero and scaling the legacy TeamCity agent on main-server to zero; backend service currently has a healthy endpoint on k8s-node-2 (10.1.140.114:8000).
-- main-server is Ready and API /readyz passes after containerd/kubelite restarts, but normal ingress DaemonSet remains stale (desired=3, eady=2) and has not recreated the main-server ingress pod.
+- main-server is Ready and API /readyz passes after containerd/kubelite restarts, but normal ingress DaemonSet remains stale (desired=3,
+eady=2) and has not recreated the main-server ingress pod.
 - Temporary ingress/nginx-ingress-main-manual host-network pod is Running and can route locally to /api/v1/models/catalog, but external traffic to 152.53.95.40:80/443 still times out.
 - Next action: inspect/fix main-server host firewall/routing for ports 80/443, or repoint public origin/Cloudflare to k8s-node-2 (152.53.33.181) as the fastest restore path.
 

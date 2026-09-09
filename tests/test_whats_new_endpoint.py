@@ -167,16 +167,18 @@ async def test_mark_seen_updates_watermark():
 
 
 @pytest.mark.asyncio
-async def test_image_resizing_migration_replay_and_localized_feed():
+@pytest.mark.parametrize("module_name", [
+    "migrations.versions.xo2c3d4e5f6a_add_image_resizing_whats_new",
+    "migrations.versions.xp3d4e5f6a7b_add_error_toast_whats_new",
+])
+async def test_release_notice_migration_replay_and_localized_feed(module_name):
     from importlib import import_module
 
     from alembic.operations import Operations
     from alembic.runtime.migration import MigrationContext
     from sqlmodel import select
 
-    migration = import_module(
-        "migrations.versions.xo2c3d4e5f6a_add_image_resizing_whats_new"
-    )
+    migration = import_module(module_name)
     engine = create_async_engine(os.environ["TEST_DATABASE_URL"], echo=False)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -184,8 +186,12 @@ async def test_image_resizing_migration_replay_and_localized_feed():
             await _seed_items(session, user)
 
         def apply(connection, operation):
-            with Operations.context(MigrationContext.configure(connection)):
+            previous_op = migration.op
+            migration.op = Operations(MigrationContext.configure(connection))
+            try:
                 operation()
+            finally:
+                migration.op = previous_op
 
         async with engine.begin() as connection:
             await connection.run_sync(apply, migration.upgrade)
