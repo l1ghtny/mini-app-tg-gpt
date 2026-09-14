@@ -350,3 +350,17 @@ async def search_conversations(
         session=session,
         current_user=current_user,
     )
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/cancel")
+async def cancel_message_generation(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: AppUser = Depends(get_current_user),
+    bus: RedisEventBus = Depends(get_bus),
+):
+    return await chat_helpers.handle_cancel_generation(
+        conversation_id=conversation_id, message_id=message_id,
+        session=session, current_user=current_user, bus=bus,
+    )

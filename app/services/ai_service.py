@@ -1,4 +1,5 @@
 import uuid
+from contextlib import aclosing
 from typing import Any, AsyncGenerator, Iterable, Optional
 
 from openai.types.responses import FileSearchToolParam, WebSearchToolParam
@@ -52,7 +53,7 @@ async def stream_normalized_ai_response(
 ) -> AsyncGenerator[dict[str, Any], None]:
     provider = get_text_model_provider(model or "gpt-5.4-nano")
     if provider == "google":
-        async for event in stream_normalized_google_response(
+        async with aclosing(stream_normalized_google_response(
             messages,
             model or "gpt-5.4-nano",
             instructions=instructions,
@@ -65,8 +66,9 @@ async def stream_normalized_ai_response(
             previous_interaction_id=previous_interaction_id,
             thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort,
-        ):
-            yield event
+        )) as response_events:
+            async for event in response_events:
+                yield event
         return
 
     if provider == "perplexity":
@@ -91,7 +93,7 @@ async def stream_normalized_ai_response(
         thinking_enabled=thinking_enabled,
     )
 
-    async for event in stream_normalized_openai_response(
+    async with aclosing(stream_normalized_openai_response(
         messages,
         model,
         instructions=instructions,
@@ -105,5 +107,6 @@ async def stream_normalized_ai_response(
         reasoning_effort=openai_reasoning_effort,
         previous_response_id=previous_response_id,
         fallback_messages=fallback_messages,
-    ):
-        yield event
+    )) as response_events:
+        async for event in response_events:
+            yield event

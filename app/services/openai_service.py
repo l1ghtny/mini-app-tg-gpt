@@ -803,8 +803,8 @@ async def stream_normalized_openai_response(
     chain_succeeded = False
     chain_fallback_reason: str | None = None
 
+    response = None
     try:
-        response = None
         max_openai_retries = 3
 
         # Retry response creation
@@ -1030,6 +1030,10 @@ async def stream_normalized_openai_response(
                 cache_write_tokens=usage.cache_write_tokens,
             )
         raise
+
+    finally:
+        if response is not None:
+            await response.close()
 
 
 async def generate_conversation_title(first_message: str) -> str:
