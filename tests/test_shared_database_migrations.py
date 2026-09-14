@@ -38,7 +38,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xp3d4e5f6a7b"
+    assert scripts.get_current_head() == "xr5f6a7b8c9d"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
@@ -226,3 +226,23 @@ def test_error_toast_announcement_is_idempotent_and_scoped() -> None:
     _, downgrade = _render_downgrade(module)
     assert "delete from whats_new_item where id" in downgrade
     assert migration.ITEM_ID in downgrade
+
+
+def test_ui_2_announcements_are_bilingual_idempotent_and_scoped() -> None:
+    module_name = "migrations.versions.xr5f6a7b8c9d_add_ui_2_whats_new"
+    migration, sql = _render_upgrade(module_name)
+    assert migration.down_revision == "xq4e5f6a7b8c"
+    assert len(migration.ITEMS) == 3
+    assert len({item["id"] for item in migration.ITEMS}) == 3
+    assert [item["pinned"] for item in migration.ITEMS] == [True, False, False]
+    for item in migration.ITEMS:
+        assert all(item[key] for key in ("title_en", "title_ru", "body_en", "body_ru"))
+        assert item["id"] in sql
+    assert sql.count("insert into whats_new_item") == 3
+    assert sql.count("on conflict (id) do update") == 3
+    assert "delete from" not in sql
+    assert "drop " not in sql
+    _, rollback_sql = _render_downgrade(module_name)
+    assert rollback_sql.count("delete from whats_new_item where id =") == 3
+    for item in migration.ITEMS:
+        assert item["id"] in rollback_sql
