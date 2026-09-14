@@ -94,6 +94,8 @@ class ConversationAPI(BaseModel):
     draft_text: Optional[str] = None
     draft_updated_at: Optional[datetime] = None
 
+    tool_choice: AllowedToolChoices | list[AllowedToolChoices] = "auto"
+
     model_config = ConfigDict(
         from_attributes=True,
         extra="ignore",
@@ -131,6 +133,7 @@ class NewMessageRequest(BaseModel):
     content: List[MessageContent]
     model: AllowedModels
     tool_choice: Optional[Union[AllowedToolChoices, List]] = "auto"
+    required_tool: Literal["web_search", "file_search", "image_generation", "code_interpreter"] | None = None
     image_model: Optional[AllowedImageModels] = None
     image_quality: Optional[ImageQualitySetting] = None
     image_size: Optional[ImageSizeSetting] = None
@@ -174,7 +177,7 @@ class UpdateConversationSettingsRequest(BaseModel):
     folder_id: Optional[uuid.UUID] = None
     model: Optional[AllowedModels] = None
     image_model: Optional[AllowedImageModels] = None
-    tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
+    tool_choice: AllowedToolChoices | list[AllowedToolChoices] | None = None
     image_quality: Optional[ImageQualitySetting] = None
     image_size: Optional[ImageSizeSetting] = None
     thinking: Optional[bool] = None
@@ -195,7 +198,7 @@ class ConversationInfo(BaseModel):
     model: AllowedModels
     image_model: AllowedImageModels
     folder_id: Optional[uuid.UUID] = None
-    tool_choice: Optional[Iterable[AllowedToolChoices]] = "auto"
+    tool_choice: AllowedToolChoices | list[AllowedToolChoices] = "auto"
     image_quality: ImageQualitySetting
     image_size: ImageSizeSetting
     thinking: bool = True

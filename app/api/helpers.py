@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import aclosing
 import base64
 import hashlib
 import uuid
@@ -15,6 +16,9 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import Conversation, MessageContent, RequestLedger, State
+from app.services.chat_cancellation import GenerationStopped, cancellable_events
+from app.services.openai_chain import invalidate_openai_chain_state
+from app.services.google_chain import invalidate_google_chain_state
 from app.services.chat_lifetime import generation_seconds_remaining
 from app.api.document_helpers import touch_conversation_documents_last_used_in_search
 from app.r2.methods import delete_object, put_bytes
@@ -86,18 +90,19 @@ async def generate_and_publish(
         assistant_message_id_str = str(assistant_message_id)
 
         try:
-            remaining = generation_seconds_remaining(generation_started_at)
-            if remaining <= 0:
-                raise TimeoutError("Chat generation deadline exceeded")
-            async with asyncio.timeout(remaining):
-                await bus.publish(assistant_message_id_str, {"type": "start"})
-                await _publish_initial_activity(
-                    session=session,
-                    bus=bus,
-                    assistant_message_id=assistant_message_id,
-                )
+            try:
+                remaining = generation_seconds_remaining(generation_started_at)
+                if remaining <= 0:
+                    raise TimeoutError("Chat generation deadline exceeded")
+                async with asyncio.timeout(remaining):
+                    await bus.publish(assistant_message_id_str, {"type": "start"})
+                    await _publish_initial_activity(
+                        session=session,
+                        bus=bus,
+                        assistant_message_id=assistant_message_id,
+                    )
 
-                async for ev in stream_normalized_ai_response(
+                    source = stream_normalized_ai_response(
                         history_for_openai,
                         model,
                         instructions=instructions,
@@ -113,45 +118,75 @@ async def generate_and_publish(
                         thinking_enabled=thinking_enabled,
                         reasoning_effort=reasoning_effort,
                         search_mode=search_mode,
-                ):
-                    await _record_and_publish_activity(
-                        session=session,
-                        bus=bus,
-                        assistant_message_id=assistant_message_id,
-                        event=ev,
-                        lifecycle=lifecycle,
                     )
+                    async with aclosing(cancellable_events(source, bus, assistant_message_id_str)) as events:
+                        async for ev in events:
+                            await _record_and_publish_activity(
+                                session=session,
+                                bus=bus,
+                                assistant_message_id=assistant_message_id,
+                                event=ev,
+                                lifecycle=lifecycle,
+                            )
 
-                    if ev.get("type") not in {
-                        "image.partial",
-                        "image.ready",
-                        "response.meta",
-                        "reasoning.summary.delta",
-                        "reasoning.summary.done",
-                    }:
-                        await bus.publish(assistant_message_id_str, ev)
+                            if ev.get("type") not in {
+                                "image.partial",
+                                "image.ready",
+                                "response.meta",
+                                "reasoning.summary.delta",
+                                "reasoning.summary.done",
+                            }:
+                                await bus.publish(assistant_message_id_str, ev)
 
-                    await _handle_stream_event(
-                        ev=ev,
-                        assistant_message_id=assistant_message_id,
-                        session=session,
-                        request_id=request_id,
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        tools=tools,
-                        bus=bus,
-                        image_entitlement_tier_id=image_entitlement_tier_id,
-                        image_entitlement_pack_id=image_entitlement_pack_id,
-                        buffers=buffers,
-                        last_ckpt=last_ckpt,
-                        content_cache=content_cache,
-                        partial_image_keys=partial_image_keys,
-                        lifecycle=lifecycle,
-                        chain_context_fingerprint=chain_context_fingerprint,
-                    )
+                            await _handle_stream_event(
+                                ev=ev,
+                                assistant_message_id=assistant_message_id,
+                                session=session,
+                                request_id=request_id,
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                tools=tools,
+                                bus=bus,
+                                image_entitlement_tier_id=image_entitlement_tier_id,
+                                image_entitlement_pack_id=image_entitlement_pack_id,
+                                buffers=buffers,
+                                last_ckpt=last_ckpt,
+                                content_cache=content_cache,
+                                partial_image_keys=partial_image_keys,
+                                lifecycle=lifecycle,
+                                chain_context_fingerprint=chain_context_fingerprint,
+                            )
 
-                if request_id and not lifecycle["text_request_finalized"]:
-                    raise RuntimeError("Chat stream ended without a completion event")
+                    if request_id and not lifecycle["text_request_finalized"]:
+                        raise RuntimeError("Chat stream ended without a completion event")
+
+            except GenerationStopped:
+                # Cancellation occurs between events, never halfway through a DB/image write.
+                for ordinal, text in buffers.items():
+                    await _upsert_text(assistant_message_id, ordinal, text, session=session, content_cache=content_cache)
+                if request_id:
+                    await session.execute(sql_update(RequestLedger).where(
+                        RequestLedger.user_id == user_id,
+                        RequestLedger.request_id == request_id,
+                        RequestLedger.state == State.reserved,
+                    ).values(state=State.refunded))
+                conversation = await session.get(Conversation, conversation_id)
+                if conversation:
+                    invalidate_openai_chain_state(conversation)
+                    invalidate_google_chain_state(conversation)
+                    session.add(conversation)
+                await session.commit()
+                await _cleanup_partial_images(partial_image_keys)
+                await _record_and_publish_activity(
+                    session=session, bus=bus, assistant_message_id=assistant_message_id,
+                    event={"type": "cancelled"}, lifecycle=lifecycle, raise_on_error=True,
+                )
+                # Publish the terminal activity before done so reconnect/reload agree.
+                await bus.publish(assistant_message_id_str, {"type": "done", "cancelled": "true"})
+                if buffers:
+                    await queue_assistant_index_refresh(conversation_id=conversation_id, assistant_message_id=assistant_message_id)
+
+                return
 
         except (Exception, asyncio.CancelledError) as e:
             logger.exception(
@@ -243,6 +278,7 @@ async def _record_and_publish_activity(
     assistant_message_id: uuid.UUID,
     event: dict[str, Any],
     lifecycle: dict[str, Any],
+    raise_on_error: bool = False,
 ) -> None:
     try:
         updates = await record_stream_activity(
@@ -258,6 +294,8 @@ async def _record_and_publish_activity(
             str(assistant_message_id),
             event.get("type"),
         )
+        if raise_on_error:
+            raise
         return
     for update in updates:
         await bus.publish(str(assistant_message_id), update)
@@ -635,6 +673,12 @@ async def _clear_active_stream_pointer(
         return
 
     key = f"conv:{conversation_id}:current"
+    if hasattr(bus.r, "eval"):
+        await bus.r.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            1, key, assistant_message_id,
+        )
+        return
     current = await bus.r.get(key)
     if current is None:
         return

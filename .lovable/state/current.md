@@ -1,5 +1,21 @@
 # Current State
 
+## 2026-09-14 production chat UI backend 2.0.0
+
+- Production candidate based on master 3cd1064. Includes persistent conversation
+  tool choices, server-side generation cancellation, and conversational response
+  formatting. APP_VERSION and package metadata are 2.0.0; FastAPI and Sentry use it.
+- Work models, endpoints, workers, and beta deployment configuration are excluded.
+  Existing production image proxy fixes are preserved. Shared migration xq4e5f6a7b8c
+  is identical to beta; live shared schema already contains it.
+- Validation: 40 isolated tests pass without running destructive DB conftest;
+  local production API completed a real frontend send. No live user data deleted.
+- Frontend counterpart: new settings persist tool choice and Stop calls cancel;
+  ship paired frontend main with this backend master.
+- Next: publish and run production release flow, then verify revisions, rollout,
+  API version, and browser send. Keep unfinished Work on beta.
+
+
 ## 2026-09-09 bilingual error notifications
 
 - What's New: required for visible EN/RU error explanations across uploads, chat,

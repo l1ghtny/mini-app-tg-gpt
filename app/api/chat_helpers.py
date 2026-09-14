@@ -178,7 +178,7 @@ def _validate_text_provider_request_capabilities(
             },
         )
 
-    if _is_image_generation_requested(request.tool_choice):
+    if (_is_image_generation_requested(request.tool_choice) or request.required_tool == "image_generation"):
         raise HTTPException(
             status_code=409,
             detail={
@@ -285,6 +285,9 @@ async def handle_create_message(
         return existing_response
 
     conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
+    if "tool_choice" not in request.model_fields_set and get_text_model_provider(request.model) != "perplexity":
+        request.tool_choice = conversation.tool_choice
+
 
     for part in request.content:
         if part.type == "image_url":
@@ -309,6 +312,8 @@ async def handle_create_message(
     tools, request_tool_choice, ledger_tool_choice = _resolve_openai_tooling(
         request.tool_choice,
         available_tools,
+        required_tool=request.required_tool,
+        provider=provider,
     )
 
     resolved_system_prompt = _resolve_system_prompt(conversation, current_user)
@@ -858,6 +863,10 @@ async def handle_update_conversation_settings(
     if request.thinking is not None:
         conversation.thinking = bool(request.thinking)
 
+    if request.tool_choice is not None and get_text_model_provider(conversation.model) != "perplexity":
+        # Keep scalar explicit choices distinct from lists of allowed tools.
+        conversation.tool_choice = request.tool_choice
+
     session.add(conversation)
     await session.commit()
     await session.refresh(conversation)
@@ -925,13 +934,19 @@ async def _check_entitlements(
     )
     await _enforce_gpt52_safeguard(session, user, request.model)
 
+    requires_image = request.required_tool == "image_generation" or (
+        not isinstance(request.tool_choice, list) and _is_image_generation_requested(request.tool_choice)
+    )
+    requires_files = request.required_tool == "file_search" or (
+        not isinstance(request.tool_choice, list) and _is_file_search_requested(request.tool_choice)
+    )
     image_model, image_quality, image_size = _resolve_image_settings(request, conversation, request.model)
     model_provider = get_text_model_provider(request.model)
     _validate_text_provider_request_capabilities(request, model_provider=model_provider)
     _validate_provider_image_option_controls(
         request=request,
         image_model=image_model,
-        requires_image_generation=_is_image_generation_requested(request.tool_choice),
+        requires_image_generation=requires_image,
     )
     image_entitlement = await _require_image_entitlement(
         session,
@@ -960,7 +975,7 @@ async def _check_entitlements(
         conversation.id,
         user=user,
     )
-    if _is_file_search_requested(request.tool_choice) and model_provider != "openai":
+    if requires_files and model_provider != "openai":
         raise HTTPException(
             status_code=409,
             detail={
@@ -982,9 +997,9 @@ async def _check_entitlements(
         provider=model_provider,
     )
 
-    if _is_image_generation_requested(request.tool_choice) and not image_entitlement.allowed:
+    if requires_image and not image_entitlement.allowed:
         _raise_image_entitlement_error(image_entitlement, image_model, image_quality, image_size)
-    if _is_file_search_requested(request.tool_choice) and not vector_store_ids:
+    if requires_files and not vector_store_ids:
         raise HTTPException(
             status_code=409,
             detail={
@@ -1110,7 +1125,23 @@ def _is_file_search_requested(tool_choice: Any) -> bool:
 def _resolve_openai_tooling(
     request_tool_choice: Any,
     available_tools: list,
+    *,
+    required_tool: str | None = None,
+    provider: str = "openai",
 ) -> tuple[list, str | dict[str, Any], str]:
+    if required_tool:
+        # Permissions and a one-answer instruction are independent. Validate before
+        # reserving a ledger row; never silently turn an unavailable requirement into auto.
+        if provider == "perplexity" or (provider == "google" and required_tool != "image_generation"):
+            raise HTTPException(status_code=409, detail={"error": "required_tool_not_supported", "tool": required_tool, "provider": provider})
+        if isinstance(request_tool_choice, list) and "auto" not in request_tool_choice and required_tool not in request_tool_choice:
+            raise HTTPException(status_code=409, detail={"error": "required_tool_not_allowed", "tool": required_tool})
+        resolved, _, ledger = _resolve_openai_tooling(request_tool_choice, available_tools, provider=provider)
+        selected = next((tool for tool in resolved if _normalize_tool_name(_extract_tool_type(tool)) == required_tool), None)
+        if selected is None:
+            raise HTTPException(status_code=409, detail={"error": "required_tool_unavailable", "tool": required_tool})
+        return resolved, {"type": _extract_tool_type(selected)}, ledger
+
     ledger_choice = _serialize_tool_choice_for_ledger(request_tool_choice)
 
     tool_by_type: dict[str, Any] = {}
@@ -1139,7 +1170,7 @@ def _resolve_openai_tooling(
 
         selected_tools = [tool_by_type[name] for name in normalized_choices if name in tool_by_type]
         if not selected_tools:
-            return default_tools, "auto", ledger_choice
+            return (default_tools, "auto", ledger_choice) if provider == "perplexity" else ([], "none", ledger_choice)
 
         allowed_tool_defs = []
         for tool in selected_tools:
@@ -2049,6 +2080,7 @@ async def handle_get_conversation(
         image_model=conversation.image_model,
         image_quality=conversation.image_quality,
         image_size=conversation.image_size,
+        tool_choice=conversation.tool_choice,
         thinking=bool(getattr(conversation, "thinking", True)),
     )
 
@@ -2064,3 +2096,19 @@ async def handle_conversation_search(
         current_user=current_user,
         query=query,
     )
+
+
+async def handle_cancel_generation(*, conversation_id, message_id, session, current_user, bus):
+    from app.services.chat_cancellation import cancellation_key
+    await _load_conversation_for_user(session, conversation_id, current_user.id)
+    message = await session.get(models.Message, message_id)
+    if not message or message.conversation_id != conversation_id or message.role != "assistant":
+        raise HTTPException(status_code=404, detail="Message not found")
+    current = await bus.r.get(_conversation_current_stream_key(conversation_id))
+    if isinstance(current, bytes):
+        current = current.decode()
+    if current != str(message_id):
+        return {"status": "finished"}
+    # Message ID scope makes retries safe even after a newer reply has started.
+    await bus.r.set(cancellation_key(str(message_id)), "1", ex=86400)
+    return {"status": "requested"}

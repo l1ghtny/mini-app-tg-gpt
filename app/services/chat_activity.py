@@ -362,6 +362,13 @@ async def record_stream_activity(
             )
         )
 
+    elif event_type == "cancelled":
+        touched.extend(await _finish_active_events(session, message_id=message_id, status="cancelled"))
+        touched.append(await _upsert(
+            session, message_id=message_id, event_key="turn", kind="turn",
+            status="cancelled", detail={"stage": "cancelled"},
+        ))
+
     elif event_type == "done":
         touched.extend(
             await _finish_active_events(

@@ -22,18 +22,10 @@ from app.services.model_registry import (
 )
 from app.db.database import engine
 from sqlmodel.ext.asyncio.session import AsyncSession
+from app.services.response_style import STYLE_GUIDE
 
 logger = logging.getLogger(__name__)
 runtime_logger = logging.getLogger("uvicorn")
-
-STYLE_GUIDE = (
-    "Format replies in Markdown:\n"
-    "- Use proper headings for sections (##, ###).\n"
-    "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
-    "- Use fenced code blocks for code.\n"
-    "- Use standard [text](url) links.\n"
-    "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
-)
 
 GOOGLE_UPSTREAM_ERROR_CODE = "GOOGLE_UPSTREAM_UNAVAILABLE"
 GOOGLE_UPSTREAM_USER_MESSAGE = "Sorry, Google Gemini has some issues on their end. Please try again in a moment."
@@ -345,6 +337,7 @@ async def _stream_google_response_with_function_handoff(
     image_model: str,
     image_size: str | None,
     web_search_enabled: bool,
+    require_image: bool = False,
 ) -> AsyncGenerator[dict[str, Any], None]:
     current_input: Any
     if previous_interaction_id:
@@ -388,7 +381,7 @@ async def _stream_google_response_with_function_handoff(
             error_message=error_message,
         )
 
-    for _ in range(max_function_rounds + 1):
+    for round_index in range(max_function_rounds + 1):
         kwargs: dict[str, Any] = {
             "model": model,
             "input": current_input,
@@ -396,8 +389,11 @@ async def _stream_google_response_with_function_handoff(
             "system_instruction": system_text,
             "tools": tools_payload,
         }
-        if generation_config:
-            kwargs["generation_config"] = generation_config
+        round_config = dict(generation_config or {})
+        if require_image and round_index == 0:
+            round_config["tool_choice"] = {"allowed_tools": {"mode": "any", "tools": ["generate_image"]}}
+        if round_config:
+            kwargs["generation_config"] = round_config
         if current_previous_interaction_id:
             kwargs["previous_interaction_id"] = current_previous_interaction_id
 
@@ -739,6 +735,7 @@ async def _stream_google_response_with_function_handoff(
                     "status": "success",
                     "prompt": optimized_prompt,
                     "images_generated": len(image_events),
+                    "display": "The app displays the generated images automatically. Briefly confirm completion; do not add image links, markdown images, or external image services.",
                 },
                 "signature": pending_function_call.get("signature"),
             }
@@ -1097,6 +1094,7 @@ async def stream_normalized_google_response(
                 image_model=request_model,
                 image_size=image_size,
                 web_search_enabled=web_search_enabled,
+                require_image=isinstance(tool_choice, dict) and tool_choice.get("type") == "image_generation",
             ):
                 yield event
             return

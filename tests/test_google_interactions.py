@@ -249,7 +249,8 @@ async def test_google_auto_tool_choice_keeps_text_model(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_google_auto_tool_choice_hands_off_image_generation_via_function_call(monkeypatch):
+@pytest.mark.parametrize("required", [False, True])
+async def test_google_auto_tool_choice_hands_off_image_generation_via_function_call(monkeypatch, required):
     monkeypatch.setattr(google_service.settings, "GEMINI_API_KEY", "test_key")
     monkeypatch.setattr(google_service.settings, "GEMINI_PROXY_URL", None)
     monkeypatch.setattr(google_service, "_log_google_success_usage", _noop_async)
@@ -347,7 +348,7 @@ async def test_google_auto_tool_choice_hands_off_image_generation_via_function_c
         [{"role": "user", "content": [{"type": "input_text", "text": "Draw a cinematic poster of a cat astronaut"}]}],
         model="gemini-3.1-flash-lite",
         instructions="You are a helpful assistant",
-        tool_choice="auto",
+        tool_choice={"type": "image_generation"} if required else "auto",
         tools=[
             {"type": "web_search"},
             {"type": "image_generation", "model": "gemini-2.5-flash-image", "image_size": "2k"},
@@ -379,6 +380,13 @@ async def test_google_auto_tool_choice_hands_off_image_generation_via_function_c
     image_ready = next(ev for ev in events if ev.get("type") == "image.ready")
     assert image_ready["data"] == base64.b64encode(fake_png).decode("ascii")
 
+
+    first_config = interactions.calls[0].get("generation_config", {})
+    if required:
+        assert first_config["tool_choice"] == {"allowed_tools": {"mode": "any", "tools": ["generate_image"]}}
+    else:
+        assert "tool_choice" not in first_config
+    assert "tool_choice" not in interactions.calls[1].get("generation_config", {})
 
 @pytest.mark.asyncio
 async def test_google_auto_tool_choice_accepts_namespaced_image_function_call(monkeypatch):

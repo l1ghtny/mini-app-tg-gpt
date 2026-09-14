@@ -363,6 +363,10 @@ class Conversation(SQLModel, table=True):
     image_quality: str = Field(default="low")  # low, medium, high
     image_size: str = Field(default="1k")  # 512, 1k, 2k
     thinking: bool = Field(default=True)
+    tool_choice: str | list[str] = Field(
+        default="auto",
+        sa_column=Column(JSONB, nullable=False, server_default=text("'\"auto\"'::jsonb")),
+    )
     is_favorite: bool = Field(
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default=text("false")),

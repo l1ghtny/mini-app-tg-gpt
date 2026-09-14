@@ -46,3 +46,32 @@ def test_image_generation_request_detection():
     assert _is_image_generation_requested(["web_search", "image_generation"])
     assert _is_image_generation_requested("image_generation")
     assert not _is_image_generation_requested(["web_search"])
+
+
+import pytest
+from fastapi import HTTPException
+
+
+def test_required_tool_keeps_other_permitted_tools():
+    tools, choice, _ = _resolve_openai_tooling("auto", _available_tools(), required_tool="web_search")
+    assert [tool.type for tool in tools] == ["web_search", "image_generation"]
+    assert choice == {"type": "web_search"}
+
+
+@pytest.mark.parametrize("permissions,required,error", [([], "web_search", "required_tool_not_allowed"), (["web_search"], "image_generation", "required_tool_not_allowed"), ("auto", "file_search", "required_tool_unavailable")])
+def test_required_tool_fails_closed(permissions, required, error):
+    with pytest.raises(HTTPException) as exc:
+        _resolve_openai_tooling(permissions, _available_tools(), required_tool=required)
+    assert exc.value.detail["error"] == error
+
+
+def test_missing_optional_tool_does_not_enable_everything():
+    tools, choice, _ = _resolve_openai_tooling(["file_search"], _available_tools())
+    assert tools == [] and choice == "none"
+
+
+@pytest.mark.parametrize("provider,required", [("google", "web_search"), ("perplexity", "image_generation")])
+def test_unsupported_provider_requirement_is_rejected(provider, required):
+    with pytest.raises(HTTPException) as exc:
+        _resolve_openai_tooling("auto", _available_tools(), required_tool=required, provider=provider)
+    assert exc.value.detail["error"] == "required_tool_not_supported"

@@ -135,6 +135,9 @@ async def test_openai_reasoning_text_events_are_not_exposed(monkeypatch):
             ]
             self._idx = 0
 
+        async def close(self):
+            self.closed = True
+
         def __aiter__(self):
             return self
 
