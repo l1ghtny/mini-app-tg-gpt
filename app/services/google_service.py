@@ -22,18 +22,10 @@ from app.services.model_registry import (
 )
 from app.db.database import engine
 from sqlmodel.ext.asyncio.session import AsyncSession
+from app.services.response_style import STYLE_GUIDE
 
 logger = logging.getLogger(__name__)
 runtime_logger = logging.getLogger("uvicorn")
-
-STYLE_GUIDE = (
-    "Format replies in Markdown:\n"
-    "- Use proper headings for sections (##, ###).\n"
-    "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
-    "- Use fenced code blocks for code.\n"
-    "- Use standard [text](url) links.\n"
-    "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
-)
 
 GOOGLE_UPSTREAM_ERROR_CODE = "GOOGLE_UPSTREAM_UNAVAILABLE"
 GOOGLE_UPSTREAM_USER_MESSAGE = "Sorry, Google Gemini has some issues on their end. Please try again in a moment."

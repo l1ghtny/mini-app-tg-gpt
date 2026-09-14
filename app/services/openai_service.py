@@ -25,15 +25,7 @@ from app.core.metrics import track_event, track_internal_event
 from app.db.database import engine
 from app.redis.settings import settings
 from app.services.background.save_openai_usage import log_usage
-
-STYLE_GUIDE = (
-    "Format replies in Markdown:\n"
-    "- Use proper headings for sections (##, ###).\n"
-    "- Use bullet lists with '-' and numbered lists with '1.' (not '1)')\n"
-    "- Use fenced code blocks for code.\n"
-    "- Use standard [text](url) links.\n"
-    "Only use headings, bullet lists, and others when it is applicable, don't use big headings for short messages"
-)
+from app.services.response_style import STYLE_GUIDE
 
 COMMENTARY_GUIDE = (
     "\n\nFor requests that require multiple steps, tool calls, or meaningful analysis, "
@@ -349,7 +341,7 @@ def _supports_commentary_phase(model: str | None) -> bool:
 
 
 def _instructions_for_openai(model: str | None, instructions: str | None) -> str:
-    combined = (instructions or "") + STYLE_GUIDE
+    combined = ((instructions or "").strip() + "\n\n" + STYLE_GUIDE).strip()
     if _supports_commentary_phase(model):
         combined += COMMENTARY_GUIDE
     return combined

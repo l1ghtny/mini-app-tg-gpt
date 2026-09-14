@@ -1651,3 +1651,13 @@ Ship server-backed chat drafts and Favorites together with the matching frontend
 1. Push the bounded-lock migration follow-up to beta and wait for the new backend image.
 2. Retry the migration using that immutable image, verify production health, then deploy and validate beta.
 3. Obtain immediate production release approval before pushing the prepared production branches.
+
+
+## 2026-09-14 conversational response style (beta release candidate)
+
+- OpenAI and Gemini use shared presentation defaults from response_style.py. Short replies use prose; substantial answers retain useful headings, ordered steps, code and tables. Explicit user formatting/language requests take precedence over these defaults; generic closing offers are discouraged. Perplexity remains unchanged.
+- OpenAI instruction assembly now separates supplied instructions from the style block. Commentary and tool behavior are unchanged.
+- Consulted https://developers.openai.com/api/docs/guides/reasoning-best-practices#how-to-prompt-reasoning-models-effectively: use simple/direct instructions, explicit goals and clear delimiters; start without examples and evaluate actual responses.
+- Validation: 31 isolated provider/prompt tests pass, Ruff and diff checks pass. Two existing Google tests need external resources; one revealed the separate test database lacks conversation.tool_choice, so no schema-reset fixture or migration was run for them. Real provider acceptance uses the already-migrated local API/test account.
+- Frontend follow-up: no API/schema change. Ship with the already-verified document picker/accessibility and private-tier identity fixes. Production is outside this beta release.
+- Next: verify beta pipeline revisions, browser picker and real short response after release.
