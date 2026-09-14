@@ -38,7 +38,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xr5f6a7b8c9d"
+    assert scripts.get_current_head() == "xs6a7b8c9d0e"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
@@ -246,3 +246,25 @@ def test_ui_2_announcements_are_bilingual_idempotent_and_scoped() -> None:
     assert rollback_sql.count("delete from whats_new_item where id =") == 3
     for item in migration.ITEMS:
         assert item["id"] in rollback_sql
+
+
+def test_ui_2_overview_correction_preserves_identity_and_publication() -> None:
+    module_name = "migrations.versions.xs6a7b8c9d0e_refine_ui_2_whats_new"
+    migration, sql = _render_upgrade(module_name)
+    assert migration.down_revision == "xr5f6a7b8c9d"
+    assert sql.count("update whats_new_item") == 1
+    assert "where id = '2026-09-14-lightny-2-ui'" in sql
+    assert "lightny 2.0 —" in sql
+    assert "2.0.0" not in sql
+    assert "start with a question" not in sql
+    assert "начните с вопроса" not in sql
+    assert "kind = 'feature'" in sql
+    assert "icon = 'circle-plus'" in sql
+    for untouched in ("published_at", "pinned", "created_at", "insert into", "delete from"):
+        assert untouched not in sql
+    _, rollback = _render_downgrade(module_name)
+    assert "where id = '2026-09-14-lightny-2-ui'" in rollback
+    assert "kind = 'improvement'" in rollback
+    original = import_module("migrations.versions.xr5f6a7b8c9d_add_ui_2_whats_new").ITEMS[0]
+    for key in ("title_en", "title_ru", "body_en", "body_ru"):
+        assert original[key].lower().replace("'", "''") in rollback
