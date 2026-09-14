@@ -1,9 +1,13 @@
+import os
+from datetime import datetime
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
-import httpx
-import os
-import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -56,6 +60,45 @@ class _EmptyResult:
 class _NoAssetSession:
     async def exec(self, *_args, **_kwargs):
         return _EmptyResult()
+
+
+class _FakeR2Body:
+    def __init__(self, body: bytes):
+        self.body = body
+        self.closed = False
+
+    async def iter_chunks(self, chunk_size: int = 65536):
+        yield self.body
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeR2Client:
+    def __init__(self, *, response: dict | None = None, error: Exception | None = None):
+        self.response = response
+        self.error = error
+        self.calls = []
+
+    async def get_object(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.response
+
+
+class _FakeR2Context:
+    def __init__(self, client: _FakeR2Client):
+        self.client = client
+        self.exited = False
+        self.exit_args = None
+
+    async def __aenter__(self):
+        return self.client
+
+    async def __aexit__(self, *args):
+        self.exited = True
+        self.exit_args = args
 
 
 def _build_test_client() -> TestClient:
@@ -137,9 +180,136 @@ def test_proxy_image_streams_binary(monkeypatch):
     assert upstream.closed is True
 
 
-def test_proxy_image_rejects_disallowed_host(monkeypatch):
+def test_proxy_image_streams_tracked_asset_directly_from_r2(monkeypatch):
     monkeypatch.setenv("IMAGE_FETCH_PROXY_ALLOWED_HOSTS", "allowed.example")
     monkeypatch.setattr(image_api.Settings, "R2_PUBLIC_BASE_URL", "https://allowed.example/")
+    asset = SimpleNamespace(
+        id="asset-1",
+        bucket="images",
+        key="images/free/generated/cat.png",
+        public_url="https://allowed.example/images/free/generated/cat.png",
+        status="active",
+        expires_at=None,
+    )
+
+    async def _find_asset(*_args, **_kwargs):
+        return asset
+
+    body = _FakeR2Body(b"r2-image")
+    r2_client = _FakeR2Client(
+        response={
+            "Body": body,
+            "ContentType": "image/png",
+            "ContentLength": 8,
+            "ETag": '"r2-etag"',
+            "LastModified": datetime.fromisoformat("2026-08-08T12:55:53+02:00"),
+        }
+    )
+    context = _FakeR2Context(r2_client)
+    monkeypatch.setattr(image_api, "find_asset_by_url", _find_asset)
+    monkeypatch.setattr(image_api, "s3_client", lambda: context)
+    monkeypatch.setattr(
+        image_api.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: pytest.fail("HTTP fallback must not run"),
+    )
+
+    client = _build_test_client()
+    response = client.get("/api/v1/images/proxy", params={"url": asset.public_url})
+
+    assert response.status_code == 200
+    assert response.content == b"r2-image"
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.headers["etag"] == '"r2-etag"'
+    assert response.headers["last-modified"] == "Sat, 08 Aug 2026 10:55:53 GMT"
+    assert r2_client.calls == [{"Bucket": "images", "Key": asset.key}]
+    assert body.closed is True
+    assert context.exited is True
+
+
+def test_r2_response_headers_treats_naive_last_modified_as_utc():
+    headers = image_api._r2_response_headers(
+        {"LastModified": datetime(2026, 8, 8, 10, 55, 53)},
+        "cat.png",
+    )
+
+    assert headers["Last-Modified"] == "Sat, 08 Aug 2026 10:55:53 GMT"
+
+
+@pytest.mark.asyncio
+async def test_stream_tracked_image_closes_r2_when_response_setup_fails(monkeypatch):
+    asset = SimpleNamespace(
+        bucket="images",
+        key="images/free/generated/cat.png",
+        public_url="https://allowed.example/images/free/generated/cat.png",
+    )
+    body = _FakeR2Body(b"r2-image")
+    context = _FakeR2Context(
+        _FakeR2Client(
+            response={
+                "Body": body,
+                "ContentType": "image/png",
+            }
+        )
+    )
+
+    def _raise_header_error(*_args, **_kwargs):
+        raise ValueError("response header construction failed")
+
+    monkeypatch.setattr(image_api, "s3_client", lambda: context)
+    monkeypatch.setattr(image_api, "_r2_response_headers", _raise_header_error)
+
+    with pytest.raises(ValueError, match="response header construction failed"):
+        await image_api._stream_tracked_image(asset)
+
+    assert body.closed is True
+    assert context.exited is True
+    assert context.exit_args[0] is ValueError
+
+
+def test_proxy_image_marks_missing_tracked_asset_unavailable(monkeypatch):
+    monkeypatch.setenv("IMAGE_FETCH_PROXY_ALLOWED_HOSTS", "allowed.example")
+    monkeypatch.setattr(
+        image_api.Settings, "R2_PUBLIC_BASE_URL", "https://allowed.example/"
+    )
+    asset = SimpleNamespace(
+        id="asset-2",
+        bucket="images",
+        key="images/free/generated/missing.png",
+        public_url="https://allowed.example/images/free/generated/missing.png",
+        status="active",
+        expires_at=None,
+    )
+
+    async def _find_asset(*_args, **_kwargs):
+        return asset
+
+    async def _mark_status(_session, current_asset, status):
+        current_asset.status = status
+
+    missing = ClientError(
+        {"Error": {"Code": "NoSuchKey", "Message": "missing"}},
+        "GetObject",
+    )
+    context = _FakeR2Context(_FakeR2Client(error=missing))
+    monkeypatch.setattr(image_api, "find_asset_by_url", _find_asset)
+    monkeypatch.setattr(image_api, "mark_asset_status", _mark_status)
+    monkeypatch.setattr(image_api, "s3_client", lambda: context)
+
+    client = _build_test_client()
+    response = client.get("/api/v1/images/proxy", params={"url": asset.public_url})
+
+    assert response.status_code == 410
+    assert response.json()["detail"] == "Image unavailable"
+    assert asset.status == image_api.IMAGE_STATUS_MISSING
+    assert context.exited is True
+
+
+def test_proxy_image_rejects_disallowed_host(monkeypatch):
+    monkeypatch.setenv("IMAGE_FETCH_PROXY_ALLOWED_HOSTS", "allowed.example")
+    monkeypatch.setattr(
+        image_api.Settings, "R2_PUBLIC_BASE_URL", "https://allowed.example/"
+    )
 
     client = _build_test_client()
     response = client.get("/api/v1/images/proxy", params={"url": "https://evil.example/cat.png"})
