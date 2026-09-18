@@ -38,7 +38,7 @@ def test_shared_database_graph_contains_the_beta_revisions() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "xp3d4e5f6a7b"
+    assert scripts.get_current_head() == "xs6a7b8c9d0e"
     assert scripts.get_revision("xe2f3a4b5c6d").down_revision == "vc1d2e3f4a5b"
     assert scripts.get_revision("xf3a4b5c6d7e").down_revision == "xe2f3a4b5c6d"
     assert scripts.get_revision("xg4b5c6d7e8").down_revision == "xf3a4b5c6d7e"
@@ -79,6 +79,19 @@ def test_multiple_artifact_migration_only_relaxes_the_old_constraint() -> None:
     assert "drop column" not in sql
 
 
+def test_work_activity_migration_is_additive() -> None:
+    migration, sql = _render_upgrade(
+        "migrations.versions.xg4b5c6d7e8_add_work_run_activity_events"
+    )
+
+    assert migration.down_revision == "xf3a4b5c6d7e"
+    assert "create table work_run_activity_event" in sql
+    assert "foreign key(work_run_id) references work_run (id) on delete cascade" in sql
+    assert "alter table" not in sql
+    assert "drop table" not in sql
+    assert "drop column" not in sql
+
+
 def test_human_input_migration_is_additive() -> None:
     migration, sql = _render_upgrade(
         "migrations.versions.xh5c6d7e8f9_add_work_human_input_requests"
@@ -86,6 +99,7 @@ def test_human_input_migration_is_additive() -> None:
 
     assert migration.down_revision == "xg4b5c6d7e8"
     assert "create table work_human_input_request" in sql
+    assert "alter table" not in sql
     assert "drop table" not in sql
 
 
@@ -212,3 +226,45 @@ def test_error_toast_announcement_is_idempotent_and_scoped() -> None:
     _, downgrade = _render_downgrade(module)
     assert "delete from whats_new_item where id" in downgrade
     assert migration.ITEM_ID in downgrade
+
+
+def test_ui_2_announcements_are_bilingual_idempotent_and_scoped() -> None:
+    module_name = "migrations.versions.xr5f6a7b8c9d_add_ui_2_whats_new"
+    migration, sql = _render_upgrade(module_name)
+    assert migration.down_revision == "xq4e5f6a7b8c"
+    assert len(migration.ITEMS) == 3
+    assert len({item["id"] for item in migration.ITEMS}) == 3
+    assert [item["pinned"] for item in migration.ITEMS] == [True, False, False]
+    for item in migration.ITEMS:
+        assert all(item[key] for key in ("title_en", "title_ru", "body_en", "body_ru"))
+        assert item["id"] in sql
+    assert sql.count("insert into whats_new_item") == 3
+    assert sql.count("on conflict (id) do update") == 3
+    assert "delete from" not in sql
+    assert "drop " not in sql
+    _, rollback_sql = _render_downgrade(module_name)
+    assert rollback_sql.count("delete from whats_new_item where id =") == 3
+    for item in migration.ITEMS:
+        assert item["id"] in rollback_sql
+
+
+def test_ui_2_overview_correction_preserves_identity_and_publication() -> None:
+    module_name = "migrations.versions.xs6a7b8c9d0e_refine_ui_2_whats_new"
+    migration, sql = _render_upgrade(module_name)
+    assert migration.down_revision == "xr5f6a7b8c9d"
+    assert sql.count("update whats_new_item") == 1
+    assert "where id = '2026-09-14-lightny-2-ui'" in sql
+    assert "lightny 2.0 —" in sql
+    assert "2.0.0" not in sql
+    assert "start with a question" not in sql
+    assert "начните с вопроса" not in sql
+    assert "kind = 'feature'" in sql
+    assert "icon = 'circle-plus'" in sql
+    for untouched in ("published_at", "pinned", "created_at", "insert into", "delete from"):
+        assert untouched not in sql
+    _, rollback = _render_downgrade(module_name)
+    assert "where id = '2026-09-14-lightny-2-ui'" in rollback
+    assert "kind = 'improvement'" in rollback
+    original = import_module("migrations.versions.xr5f6a7b8c9d_add_ui_2_whats_new").ITEMS[0]
+    for key in ("title_en", "title_ru", "body_en", "body_ru"):
+        assert original[key].lower().replace("'", "''") in rollback

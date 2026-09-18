@@ -1,3 +1,15 @@
+## 2026-09-18 production fixes merged into beta
+
+- Merge master 280b5d3 into beta, preserving Work routes, provider source streaming,
+  and beta-specific CI repositories. Remove the duplicate history-router inclusion.
+- Includes writable-database readiness with stale-pool disposal, pinned WARP image,
+  version 2.0.0, and the current shared migration head xs6a7b8c9d0e.
+- Production recovery is complete and the owner confirmed login works. This beta
+  release verifies the shared schema without applying migrations.
+- Validation: 74 focused tests and changed-file Ruff pass. Two existing Google
+  tests require an external test database and were excluded. No frontend contract changes.
+- Next: push beta, verify TeamCity rollout and beta login/chat/stream behavior.
+
 # Current State
 
 ## 2026-09-09 bilingual error notifications

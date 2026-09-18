@@ -65,7 +65,8 @@ async def test_cancel_checks_ownership_and_does_not_cancel_newer_message(monkeyp
     owned = AsyncMock(side_effect=HTTPException(404, 'Conversation not found'))
     monkeypatch.setattr(chat, '_load_conversation_for_user', owned)
     args = dict(conversation_id=cid, message_id=mid, session=session, current_user=SimpleNamespace(id=uuid.uuid4()), bus=SimpleNamespace(r=redis))
-    with pytest.raises(HTTPException): await handle_cancel_generation(**args)
+    with pytest.raises(HTTPException):
+        await handle_cancel_generation(**args)
     assert not redis.values
     owned.side_effect = None
     redis.values[f'conv:{cid}:current'] = str(newer)
@@ -131,11 +132,13 @@ async def test_cancellation_closes_openai_http_stream(monkeypatch):
     monkeypatch.setattr(provider, 'client', SimpleNamespace(responses=SimpleNamespace(create=AsyncMock(return_value=HttpStream()))))
     async def consume():
         async with aclosing(cancellable_events(routing.stream_normalized_ai_response([],model='gpt-5.4-nano'),SimpleNamespace(r=redis),'provider')) as events:
-            async for _ in events: pass
+            async for _ in events:
+                pass
     task=asyncio.create_task(consume())
     await asyncio.wait_for(started.wait(),2)
     await redis.set(cancellation_key('provider'),'1')
-    with pytest.raises(GenerationStopped): await asyncio.wait_for(task,2)
+    with pytest.raises(GenerationStopped):
+        await asyncio.wait_for(task,2)
     assert closed.is_set()
 
 
@@ -149,5 +152,6 @@ async def test_terminal_event_runs_provider_bookkeeping_despite_late_stop():
     async with aclosing(cancellable_events(source(), SimpleNamespace(r=redis), 'message')) as events:
         assert await anext(events) == {'type': 'done'}
         await redis.set(cancellation_key('message'), '1')
-        with pytest.raises(StopAsyncIteration): await anext(events)
+        with pytest.raises(StopAsyncIteration):
+            await anext(events)
     assert bookkeeping == ['usage logged']

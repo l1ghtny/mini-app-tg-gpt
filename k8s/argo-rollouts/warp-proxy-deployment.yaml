@@ -59,7 +59,7 @@ spec:
           value: "1"
       containers:
       - name: warp
-        image: caomingjun/warp:latest
+        image: caomingjun/warp@sha256:d50d29d859bd437420bf63256f803e9fac28657c346b6f5ba50e21ffeb93dff2
         imagePullPolicy: Always
         ports:
         - containerPort: 1080

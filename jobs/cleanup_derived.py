@@ -8,9 +8,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import DerivedImage, MessageContent
 from app.r2.methods import delete_object, head_object
-from app.r2.settings import Settings
-from app.r2.client import R2_BUCKET
 from app.services.background.image_deriver import _public_url  # reuse internal helper
+from app.services.image_cleanup import cleanup_image_storage
 
 # Safety: only delete originals older than this many hours since derivation
 DEFAULT_AGE_HOURS = 24
@@ -91,3 +90,25 @@ if __name__ == "__main__":
     hours = int(os.getenv("CLEANUP_AGE_HOURS", str(DEFAULT_AGE_HOURS)))
     scan, rm = asyncio.run(cleanup_derived_images(db_url, older_than_hours=hours, dry_run=dry))
     print(f"Scanned: {scan}, Deleted originals: {rm} (older_than_hours={hours}, dry_run={dry})")
+    image_result = asyncio.run(
+        cleanup_image_storage(
+            db_url,
+            dry_run=os.getenv("IMAGE_CLEANUP_DRY_RUN", "0") == "1",
+            limit=int(os.getenv("IMAGE_CLEANUP_LIMIT", "500")),
+            detached_grace_hours=int(
+                os.getenv("IMAGE_CLEANUP_DETACHED_GRACE_HOURS", "48")
+            ),
+            partial_days=int(os.getenv("IMAGE_PARTIAL_RETENTION_DAYS", "1")),
+            free_days=int(os.getenv("IMAGE_FREE_RETENTION_DAYS", "30")),
+            paid_days=int(os.getenv("IMAGE_PAID_RETENTION_DAYS", "365")),
+        )
+    )
+    print(
+        "Image cleanup: "
+        f"scanned={image_result.scanned}, "
+        f"candidates={image_result.candidates}, "
+        f"deleted={image_result.deleted}, "
+        f"deleted_bytes={image_result.deleted_bytes}, "
+        f"asset_rows_updated={image_result.asset_rows_updated}, "
+        f"skipped={image_result.skipped}"
+    )

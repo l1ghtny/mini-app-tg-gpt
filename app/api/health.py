@@ -14,7 +14,18 @@ health = APIRouter(tags=["health"])
 
 async def _check_database() -> None:
     async with AsyncSession(engine) as session:
-        await session.execute(text("SELECT 1"))
+        result = await session.execute(
+            text(
+                "SELECT NOT pg_is_in_recovery() "
+                "AND current_setting('transaction_read_only') = 'off'"
+            )
+        )
+        if not result.scalar_one():
+            # A demoted primary can still answer SELECT 1 on pooled connections.
+            # Discard those connections so the next probe follows current routing.
+            await session.invalidate()
+            await engine.dispose()
+            raise RuntimeError("database_not_writable")
 
 
 async def _check_redis() -> None:

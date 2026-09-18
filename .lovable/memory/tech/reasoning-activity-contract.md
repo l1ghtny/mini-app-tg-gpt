@@ -53,3 +53,6 @@ summaries and may drive the transient collapsed label.
 - During streaming, prefer the latest commentary label as the collapsed headline and
   keep concrete tools in the expanded timeline. Reconnect/retry states are the only
   higher-priority headline because they explain an actual wait or transport problem.
+
+- Track OpenAI message phase by item ID and output index; deltas may omit it.
+- Commentary is optional; simple requests may emit none.
