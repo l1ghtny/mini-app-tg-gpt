@@ -1,5 +1,20 @@
 # Current State
 
+## 2026-09-18 login outage recovery
+
+- Telegram login returned 500 because pooled writer connections reached the former
+  primary after failover. Kubernetes EndpointSlice and node routing were stale.
+- Reconciled the primary route and recovered dqlite/kubelite one control-plane
+  node at a time, followed by the worker's kubelite. Both PostgreSQL replicas
+  now stream with zero lag. Closed only idle app connections on the old primary.
+- Replaced failed WARP pods; real HTTPS proxy probes pass again. Pin the tested
+  image digest so recovery cannot silently pull a different latest image.
+- Readiness now checks primary/writeability and discards a stale read-only pool.
+  Five focused tests and Ruff pass. No schema or frontend contract changes.
+- Next: release the fix, verify public login/chat/SSE and monitor new errors.
+- Underlying trigger for the stalled Kubernetes watches is not established;
+  ingress forwarding was working for the failing login requests.
+
 ## 2026-09-14 production chat UI backend 2.0.0
 
 - Production candidate based on master 3cd1064. Includes persistent conversation
