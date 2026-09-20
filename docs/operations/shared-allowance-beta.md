@@ -89,11 +89,27 @@ spending cap. Tune these values after feedback, not by relabeling the UI multipl
 
 Verify actual authenticated login, text/stream/resume/cancel, web sources,
 document citations, uploaded-image vision, Flare generation and follow-up edit.
-Run the capability matrix across every advertised model before public release;
-local shared-tool checks are representative, not every model/tool permutation.
+Repeat the capability smoke matrix on the deployed assets before public release.
+Locally, all seven models passed text/vision/web/documents/images; all three
+image quality levels passed generation and follow-up editing.
 Verify public image URLs and storage retention with production-backed beta data.
-Run mobile and desktop checks on the deployed assets, including exhaustion and
-network failures. Confirm the private feedback account and record friend feedback.
+Repeat the local mobile/desktop, exhaustion, duplicate-send and SSE recovery
+checks on the deployed assets, including network failures. Confirm the private feedback account and record friend feedback.
 
 Public checkout, production cutover, private-tier capacity amounts and verified
 payment-fee economics remain outside this beta implementation.
+
+## Local refinements ready for review
+
+Quality-aware reservations replace the previous flat image hold. The text adapter
+adapts output capacity to the remaining reservation, with explicit incomplete-task
+errors. Fable required tools use auto plus a verified required-call postcondition.
+Vision and image edits use validated owned storage bytes; no arbitrary remote URL
+fetch is introduced. Legacy upload processing is unchanged outside this cohort.
+The allowance snapshot adds optional image_output_units and history.activities;
+the paired frontend consumes those for quality hints and activity labels.
+
+Current local evidence: 32 isolated allowance tests, 11 existing backend units,
+316 frontend tests, 35 real model/task smoke combinations and six image quality
+cases. The validation report contains measured whole-task image percentages and
+low-balance results. These do not replace deployed authentication/CDN/cohort checks.

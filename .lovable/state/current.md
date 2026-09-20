@@ -1,3 +1,10 @@
+## 2026-09-20 pre-beta allowance refinement (not deployed)
+
+- Completed quality-aware image holds, remaining-budget text output caps, required Fable tool compatibility, owned-image vision for both providers, quality percentage hints and explicit image/edit task-history labels. Removed the legacy energy panel for shared users.
+- Final local validation: 32 isolated backend allowance tests, 11 selected existing backend units, 316 frontend tests; 35 real model/task combinations; generation/edit at Low/Medium/High; near-empty Start, both exhausted pools, signed caps, duplicate send, SSE resume/cancel. Mobile/desktop exhaustion reviewed; temporary fixture counters restored.
+- Recomputed 134 known synthetic provider attempts without mismatch; five unknown attempts remain unknown. Actual complete image examples and limitations are in backend docs/product-strategy/2026-09-20-shared-allowance-validation.md.
+- User explicitly requested no beta deployment. No remote push, production DB mutation or deployment performed. Next: review the local preview and paired branches, then perform migration/configuration/deployed acceptance only when deployment is authorized. Pricing/capacity rebalance and permanent private grants remain separate follow-up decisions.
+
 ## 2026-09-20 shared allowance beta implementation
 
 - Implemented in isolated production-based backend/frontend worktrees under `/private/tmp/lightny-allowance-20260920`, branch `codex/shared-allowance-20260920`. Shared checkouts and production data untouched.

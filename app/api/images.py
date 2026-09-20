@@ -274,6 +274,8 @@ async def upload_image(
     app_user: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    from app.services.allowance import enabled
+    shared = enabled(app_user.id)
     content_type = await asyncio.to_thread(_validate_image_upload, image)
     # 0. Generate a file key
     if not image.filename:
@@ -298,11 +300,12 @@ async def upload_image(
         bucket=bucket,
         key=key,
         source=IMAGE_SOURCE_UPLOADED,
-        initial_status=IMAGE_STATUS_PROCESSING,
+        initial_status="active" if shared else IMAGE_STATUS_PROCESSING,
     )
     await session.commit()
     await session.refresh(asset)
-    background_tasks.add_task(_refresh_uploaded_image_readiness, asset.id)
+    if not shared:
+        background_tasks.add_task(_refresh_uploaded_image_readiness, asset.id)
     image_payload = serialize_image_asset(asset) or {}
     return ImageUploaded(
         key=key,

@@ -35,3 +35,8 @@ def test_openai_reasoning_is_a_subset_of_output():
 def test_missing_claude_usage_is_not_a_free_success():
     with pytest.raises(ValueError):
         normalize_claude_usage({"output_tokens": 20})
+
+
+def test_missing_openai_usage_is_not_a_free_success():
+    with pytest.raises(ValueError):
+        normalize_openai_usage({"output_tokens": 20})

@@ -15,6 +15,10 @@ from app.services.allowance_policy import (
     FLARE,
     step_budget,
     usage_units,
+    output_target,
+    affordable_output,
+    image_budget,
+    reference_count,
 )
 from app.services.openai_service import client, _instructions_for_openai
 
@@ -44,7 +48,7 @@ def tool_schema(name):
 def normalize_openai_usage(u, output=()):
     if hasattr(u, "model_dump"):
         u = u.model_dump()
-    if not isinstance(u, dict):
+    if not isinstance(u, dict) or "input_tokens" not in u or "output_tokens" not in u:
         raise ValueError("Provider omitted usage")
     details = u.get("input_tokens_details") or {}
     return dict(
@@ -145,6 +149,38 @@ class ChatRun:
         async with AsyncSession(engine, expire_on_commit=False) as session:
             await allowance.identify_attempt(session, attempt, provider_id)
 
+    async def text_capacity(
+        self, model, messages, instructions, effort, required, tools
+    ):
+        included = model == LUNA
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            remaining = await allowance.remaining_request_budget(
+                session, self.user_id, self.request_id, included=included
+            )
+        keep = 0
+        if required and not included:
+            # Protect the requested tool and a short final answer from routing output.
+            keep = step_budget(model, messages, instructions, max_output=256)
+            if required == "image_generation":
+                keep += image_budget(
+                    tools[required].get("quality", "medium"),
+                    reference_tokens=reference_count(messages) * 1024,
+                )
+            elif required == "web_search":
+                keep += 30_000
+        maximum = affordable_output(
+            model,
+            messages,
+            instructions,
+            max(0, remaining - keep),
+            target=output_target(model, effort, required),
+        )
+        if maximum < 256:
+            from fastapi import HTTPException
+
+            raise HTTPException(402, detail={"error": "request_spend_limit"})
+        return maximum
+
     async def response(
         self,
         *,
@@ -208,7 +244,10 @@ async def openai_turn(
         }
         for name in tools
     ]
-    budget = step_budget(model, messages, instructions)
+    maximum = await run.text_capacity(
+        model, messages, instructions, effort, required, tools
+    )
+    budget = step_budget(model, messages, instructions, max_output=maximum)
     attempt = await run.start(model, budget, included=model == LUNA)
     complete = None
     stream = None
@@ -224,7 +263,7 @@ async def openai_turn(
             if schemas
             else "none",
             reasoning={"effort": effort},
-            max_output_tokens=MODELS[model].max_output,
+            max_output_tokens=maximum,
             parallel_tool_calls=False,
             stream=True,
             store=False,
@@ -275,8 +314,18 @@ async def claude_turn(
 ):
     if not settings.ANTHROPIC_API_KEY:
         raise RuntimeError("Claude is unavailable: provider configuration missing")
+    if required and model == "claude-fable-5-1":
+        # Fable accepts auto/none only; enforce the required call in the app too.
+        instructions += (
+            f"\nThe user explicitly selected {required}. Call this tool before "
+            "answering. Do not substitute an answer from memory."
+        )
+        tools = {required: tools[required]}
     # Bound text + images and signed thinking included in follow-up requests.
-    budget = step_budget(model, messages, instructions)
+    maximum = await run.text_capacity(
+        model, messages, instructions, effort, required, tools
+    )
+    budget = step_budget(model, messages, instructions, max_output=maximum)
     attempt = await run.start(model, budget)
     body = dict(
         model=model,
@@ -288,7 +337,7 @@ async def claude_turn(
                 "cache_control": {"type": "ephemeral"},
             }
         ],
-        max_tokens=MODELS[model].max_output,
+        max_tokens=maximum,
         stream=True,
         output_config={"effort": "medium" if effort == "none" else effort},
     )
@@ -304,7 +353,11 @@ async def claude_turn(
             for name in tools
         ]
         if required:
-            body["tool_choice"] = {"type": "tool", "name": required}
+            body["tool_choice"] = (
+                {"type": "auto"}
+                if model == "claude-fable-5-1"
+                else {"type": "tool", "name": required}
+            )
     blocks = {}
     fragments = {}
     usage = {}
@@ -498,6 +551,29 @@ async def stream_shared_response(
     run = ChatRun(user_id, request_id, kwargs.get("conversation_id"))
     messages = await compress_context(run, messages)
     original = messages
+    from app.services.allowance_images import image_files
+    import base64
+
+    hydrated = []
+    for message in messages:
+        parts = []
+        for part in message.get("content", []):
+            if part.get("type") == "input_image":
+                files = await image_files([part], run)
+                _, data, mime = files[0]
+                parts.append(
+                    {
+                        "type": "input_image",
+                        "image_url": "data:"
+                        + mime
+                        + ";base64,"
+                        + base64.b64encode(data).decode(),
+                    }
+                )
+            else:
+                parts.append(part)
+        hydrated.append({**message, "content": parts})
+    messages = hydrated
     selected = {
         t["type"]: t
         for t in (tools or [])
@@ -536,6 +612,12 @@ async def stream_shared_response(
                 yield event
         if result is None:
             raise RuntimeError("Missing provider result")
+        if (
+            turn == 0
+            and required
+            and not any(call["name"] == required for call in result["calls"])
+        ):
+            raise RuntimeError("The model did not use the requested tool; please retry")
         yield {"type": "text.done", "index": index}
         if not result["calls"]:
             yield {"type": "done"}

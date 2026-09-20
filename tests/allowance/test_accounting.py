@@ -54,6 +54,7 @@ def test_flare_usage_counts_cache_and_output_once():
     assert (
         image_usage_units(
             {
+                "input_tokens": 300,
                 "input_tokens_details": {
                     "text_tokens": 100,
                     "image_tokens": 200,

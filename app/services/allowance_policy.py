@@ -155,3 +155,40 @@ def public_plans() -> list[dict]:
         )
         for key, p in PLANS.items()
     ]
+
+
+# OpenAI's 1024-square output calculator, verified 2026-09-20.
+# Inputs and reference images are additional; settlement always uses returned usage.
+IMAGE_OUTPUT_TOKENS = {"low": 196, "medium": 439, "high": 1756}
+
+
+def image_budget(quality, prompt_bytes=1000, reference_tokens=0):
+    output = IMAGE_OUTPUT_TOKENS[quality] * 30
+    return (
+        ceil_units(Decimal(output + reference_tokens * 8) * Decimal("1.25"))
+        + prompt_bytes * 5
+    )
+
+
+def reference_count(messages):
+    return min(
+        4,
+        sum(
+            p.get("type") in {"input_image", "image"}
+            for m in messages
+            for p in m.get("content", [])
+            if isinstance(p, dict)
+        ),
+    )
+
+
+def output_target(model, effort="medium", required_tool=None):
+    target = 2048 if required_tool else 8192 if effort == "high" else 4096
+    return min(target, MODELS[model].max_output)
+
+
+def affordable_output(model, messages, instructions, budget, *, target):
+    base = step_budget(model, messages, instructions, max_output=1)
+    base -= ceil_units(Decimal(MODELS[model].output_rate))
+    remaining = Decimal(max(0, budget - base)) / Decimal(MODELS[model].output_rate)
+    return min(target, int(remaining))

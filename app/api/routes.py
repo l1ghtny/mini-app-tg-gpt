@@ -361,11 +361,11 @@ async def estimate_message_usage(conversation_id: uuid.UUID, request: NewMessage
     session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
     from app.api.chat_helpers import _load_conversation_for_user
     from app.services.allowance_chat import estimate
-    from app.api.chat_helpers import ensure_openai_compatible_image_url
+    from app.services.allowance_images import validate_owned_image
     conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
     if "tool_choice" not in request.model_fields_set:
         request.tool_choice = conversation.tool_choice
     for part in request.content:
         if part.type == "image_url":
-            await ensure_openai_compatible_image_url(session, part.value, user_id=current_user.id)
+            await validate_owned_image(session, part.value, current_user.id)
     return await estimate(session, current_user, conversation, request)

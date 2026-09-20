@@ -2,17 +2,33 @@
 
 from decimal import Decimal
 from openai import APIStatusError
-from app.services.allowance_policy import FLARE, ceil_units
+from app.services.allowance_policy import FLARE, ceil_units, image_budget
+from io import BytesIO
+from PIL import Image
+import math
+import asyncio
 
 
 def image_usage_units(usage):
     details = usage.get("input_tokens_details") or {}
+    if (
+        "input_tokens" not in usage
+        or "output_tokens" not in usage
+        or "text_tokens" not in details
+        or "image_tokens" not in details
+    ):
+        raise ValueError("Image endpoint omitted usage details")
     text = int(details.get("text_tokens", 0))
     images = int(details.get("image_tokens", 0))
     output = int(usage.get("output_tokens", 0))
     cached = details.get("cached_tokens_details") or {}
     ct, ci = int(cached.get("text_tokens", 0)), int(cached.get("image_tokens", 0))
-    if min(text, images, output, ct, ci) < 0 or ct > text or ci > images:
+    if (
+        min(text, images, output, ct, ci) < 0
+        or ct > text
+        or ci > images
+        or text + images != int(usage["input_tokens"])
+    ):
         raise ValueError("Invalid image usage")
     return ceil_units(
         Decimal(text - ct) * 5
@@ -23,10 +39,25 @@ def image_usage_units(usage):
     )
 
 
+async def validate_owned_image(session, url, user_id):
+    from app.services.background.image_deriver import require_owned_image_asset
+    from app.services.image_assets import effective_image_status
+    from fastapi import HTTPException
+
+    asset = await require_owned_image_asset(session, url, user_id=user_id)
+    if effective_image_status(asset) != "active":
+        raise HTTPException(410, detail="Image unavailable")
+    return asset.public_url
+
+
 async def image_files(refs, run):
     from app.db.database import engine
     from sqlmodel.ext.asyncio.session import AsyncSession
-    from app.services.background.image_deriver import require_owned_image_asset
+    from app.services.background.image_deriver import (
+        require_owned_image_asset,
+        _derive_image_sync,
+        _transcode,
+    )
     from app.services.image_assets import effective_image_status, IMAGE_STATUS_ACTIVE
     from app.r2.methods import head_object, get_bytes
 
@@ -40,13 +71,21 @@ async def image_files(refs, run):
                 raise ValueError("Reference image is unavailable")
             meta = await head_object(asset.key)
             mime = meta.get("ContentType", "").split(";")[0]
-            if mime not in {"image/png", "image/jpeg", "image/webp"}:
-                raise ValueError("Unsupported reference image format")
             if int(meta.get("ContentLength", 0)) > 50_000_000:
                 raise ValueError("Reference image is too large")
             data = await get_bytes(asset.key)
             if len(data) > 50_000_000:
                 raise ValueError("Reference image is too large")
+            derived = await asyncio.to_thread(_derive_image_sync, data, mime, 3840)
+            if derived:
+                data, mime, _ = derived
+            if (
+                mime not in {"image/png", "image/jpeg", "image/webp"}
+                or len(data) > 4_500_000
+            ):
+                data, mime, _ = await asyncio.to_thread(
+                    _transcode, data, "png" if len(data) <= 4_500_000 else "jpeg", 2048
+                )
             files.append((f"reference-{i}.{mime.split('/')[-1]}", data, mime))
     return files
 
@@ -86,7 +125,14 @@ async def generate_image(run, query, refs, quality, reference_mode="none"):
             raise ValueError("No available image to edit; attach an image first")
     files = await image_files(refs, run) if refs else []
     # A conservative reservation; actual counters settle the request afterward.
-    attempt = await run.start(FLARE, 500_000)
+    reference_tokens = 0
+    for _, data, _ in files:
+        with Image.open(BytesIO(data)) as image:
+            reference_tokens += math.ceil(image.width / 32) * math.ceil(
+                image.height / 32
+            )
+    budget = image_budget(quality, len(query.encode("utf-8")), reference_tokens)
+    attempt = await run.start(FLARE, budget)
     params = dict(
         model=FLARE,
         prompt=query,
@@ -113,6 +159,9 @@ async def generate_image(run, query, refs, quality, reference_mode="none"):
         input_tokens=raw["input_tokens"],
         output_tokens=raw["output_tokens"],
         image_usage=raw,
+        image_action="edit" if files else "generate",
+        image_quality=quality,
+        reference_count=len(files),
     )
     images = [x.b64_json for x in response.data or [] if x.b64_json]
     await run.finish(
