@@ -149,3 +149,10 @@ image editing, web search and document search. Shared users never see the old
 image-energy meter, including users with an existing private-tier energy balance.
 
 No remote push, beta deployment, production migration or payment change was made.
+
+## Beta integration verification
+
+Prepared an additional local beta-based branch without pushing. Its 343 frontend
+tests, app TypeScript and Vite build pass; backend 32 allowance and 11 selected
+existing tests pass. Real Fable text and signed-estimate smoke checks passed on
+the integrated local runtime. See the rollout runbook for branch/revision details.

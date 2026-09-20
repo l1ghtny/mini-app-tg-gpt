@@ -113,3 +113,33 @@ Current local evidence: 32 isolated allowance tests, 11 existing backend units,
 316 frontend tests, 35 real model/task smoke combinations and six image quality
 cases. The validation report contains measured whole-task image percentages and
 low-balance results. These do not replace deployed authentication/CDN/cohort checks.
+
+## Prepared local beta integration
+
+A separate `codex/shared-allowance-beta-20260920` branch exists in both repos.
+Backend starts at beta `2dc7b25`; frontend starts at beta `9e78e1b` (fetched
+20 September). Only the two allowance feature commits were cherry-picked.
+Backend required a state-note conflict resolution; both histories were retained.
+Frontend applied cleanly. Do not merge the entire production-based frontend
+branch into beta: parallel UI history produces unrelated merge conflicts.
+
+The beta-integrated revisions are backend `1359a1e` and frontend `dd99504`
+(before documentation-only completion commits). The production-based revisions
+remain backend `729ff3b` and frontend `e9a41cd`. Existing beta Work code is retained;
+this task does not redesign or validate Work capacity.
+
+Integrated validation: 32 allowance tests, 11 selected existing backend tests,
+343 frontend tests, app TypeScript and production build pass. The accounting,
+provider, image, context and chat-helper implementations match the validated
+feature branch. A real Fable text response and signed-estimate rejection checks
+also passed through the integrated local API. The integrated UI renders the
+retained beta navigation, image quality percentages and shared allowance.
+
+The local preview at port 5197 now serves `frontend-beta`, backed by
+`backend-beta` on port 8097. Both use the synthetic test schema only. That fixture
+needed the existing beta-only tier/document columns; they were added only to the
+isolated test schema. This is not a production migration or deployment.
+
+All branches are local and unpushed. Before a later deployment, recheck remote
+heads, apply the allowance migration through the schema owner, configure the
+beta cohort/provider settings and run deployed authenticated acceptance.
