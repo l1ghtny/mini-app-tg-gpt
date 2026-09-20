@@ -1,3 +1,10 @@
+## 2026-09-20 local beta integration complete
+
+- Production-based feature branch: `codex/shared-allowance-20260920` (backend 729ff3b / frontend e9a41cd before docs). Separate local beta-integration branch: `codex/shared-allowance-beta-20260920` (backend 1359a1e / frontend dd99504 before docs), carrying only the allowance commits and preserving beta Work. Both remain unpushed.
+- Integrated checks: 32 allowance tests, 11 selected backend units, 343 frontend tests, TypeScript and build pass. Real integrated Fable text and signed estimates pass. Full 35-case capability matrix and six image-quality cases passed on identical provider/accounting code.
+- Local preview now serves the beta-integration worktrees at UI5197/API8097 against the isolated synthetic test schema. Existing beta-only tier/document columns were added only to that fixture.
+- Next: user reviews preview and measured costs. No beta deploy until requested; deployment requires schema-owner migration, server settings/cohort and deployed acceptance. No production writes or remote pushes occurred.
+
 ## 2026-09-20 pre-beta allowance refinement (not deployed)
 
 - Completed quality-aware image holds, remaining-budget text output caps, required Fable tool compatibility, owned-image vision for both providers, quality percentage hints and explicit image/edit task-history labels. Removed the legacy energy panel for shared users.
