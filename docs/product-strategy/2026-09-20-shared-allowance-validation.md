@@ -30,15 +30,15 @@ or a deployed beta.
 - Browser review covered 390×844 mobile and 1280×900 desktop, Russian/dark and
   English/light layouts, model selection, expanded plan examples, image display
   and spending confirmation. Cancelling the confirmation restored the draft
-  before any provider call. Exhaustion has component/accounting coverage; a
-  deployed seeded-exhaustion walkthrough remains pending.
+  before any provider call. Seeded zero-balance guidance was also inspected at both sizes, including
+  exhausted Luna. The synthetic preview counters were restored afterward.
 - The isolated PostgreSQL migration was applied twice successfully. Alembic has
   one head, `xt7b8c9d0e1f`. Accounting tests cover concurrent final-balance sends,
   exactly-once settlement, month rollover, child ceilings, included Luna,
   platform-funded failures, crash recovery, unknown supplier exposure and the
   aggregate guard. Image tests check ownership and new-image reference isolation.
 
-Final automated results: **21 allowance backend tests, 11 existing backend unit tests and 312 frontend tests passed**. App-project TypeScript, focused Ruff/ESLint, Python compilation and Vite build passed.
+Final automated results: **32 allowance backend tests, 11 existing backend unit tests and 316 frontend tests passed**. App-project TypeScript, focused Ruff/ESLint, Python compilation and Vite build passed.
 
 ## Measured examples used by the pricing screen
 
@@ -66,8 +66,9 @@ attempts from the earlier experiment remain recorded rather than guessed away.
 
 The local public CDN could not find test-schema image records. Owned Flare edit
 references therefore read validated owned R2 objects, without arbitrary URL fetch.
-Uploaded-image vision still needs deployed-beta verification. Direct tool checks
-on one text model do not certify every other model/tool combination.
+Owned uploaded-image vision now uses validated storage bytes for both providers,
+including format preparation, ownership and size checks. Local vision passed on
+all seven models; deployed routing and retention still need acceptance.
 
 The test database route was briefly unavailable during final checks. A subsequent
 full isolated suite passed; no database reset or public-schema cleanup was used.
@@ -88,3 +89,63 @@ The accounting fixture creates and removes only its own random schema. Run the
 paired frontend Vitest suite, `tsc --noEmit --project tsconfig.app.json`, ESLint on
 changed files and a Vite production build. Build/lint warnings about existing
 large chunks, mixed imports and Fast Refresh exports are distinct from failures.
+
+## Pre-beta refinement and full local capability smoke test
+
+The final local matrix passed all 35 combinations: seven advertised chat models
+against text, uploaded-image vision, web search, document search and Flare image
+generation. These are integration smoke tests, not a ranking of reasoning quality.
+All six Low/Medium/High generation and same-conversation edit cases completed.
+The High edit was visually inspected: the blue cup became red with its shape and
+cream background preserved.
+
+Fable 5.1 rejects forced tool_choice=tool/any. Its adapter now exposes only the
+required tool with auto selection and an explicit instruction. The app verifies
+that the required tool was actually called; skipping it cannot settle as success.
+See [Anthropic tool-choice constraints](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools).
+
+Reservations now depend on selected image quality and reference inputs. Text
+output capacity adapts to remaining reservation: 4,096 tokens normally, 8,192 at
+high effort, 2,048 for the initial required-tool routing turn, subject to model
+and available-budget caps. This bounds hidden reasoning plus visible output;
+it does not guarantee that complex work completes inside those caps. Incomplete
+responses fail visibly and remain platform-funded in this beta. No silent model
+substitution or disabling of Fable's required thinking is used.
+
+Unconfirmed paid requests are capped at 5% of the monthly grant; explicit image
+requests and sufficiently expensive possible automatic image calls require the
+existing spending confirmation. Actual usage, not the reservation, is deducted.
+Missing or inconsistent image usage stays unknown rather than being priced as zero.
+
+With a separate synthetic Start fixture, a Low image completed with 60,000 units
+(4.8%) remaining; a short Terra reply completed with 20,000 (1.6%). Zero paid
+balance rejected Terra before generation but allowed Luna. Exhausting both pools
+returned the Luna fair-use error. Signed-estimate replay after prompt changes,
+tiny request caps, duplicate send identity, SSE resume and cancellation passed.
+
+Recalculated all 134 known provider attempts in the synthetic preview snapshot
+from their input/cache/output and tool counters with no mismatches. Five unknown
+attempts from interruptions/earlier experiments remain explicit. This validates
+rate-card arithmetic, not reconciliation to a provider invoice.
+
+## Actual complete image-task usage
+
+Fresh Terra generation followed by a Sonnet edit, low reasoning, 1024×1024.
+Includes text-model routing/final answer, image prompt and reference processing.
+One sample per case: these are examples, not quotas or guaranteed prices.
+
+| Task | Actual units | Start | Plus | Premium | Max |
+|---|---:|---:|---:|---:|---:|
+| Low generation | 9,850 | 0.79% | 0.39% | 0.16% | 0.04% |
+| Medium generation | 17,615 | 1.41% | 0.70% | 0.28% | 0.07% |
+| High generation | 56,726 | 4.54% | 2.27% | 0.91% | 0.23% |
+| Low edit | 19,492 | 1.56% | 0.78% | 0.31% | 0.08% |
+| Medium edit | 24,161 | 1.93% | 0.97% | 0.39% | 0.10% |
+| High edit | 63,852 | 5.11% | 2.55% | 1.02% | 0.26% |
+
+The quality picker shows the output-only approximate share and identifies prompt
+and reference processing as additional. Recent tasks distinguish image generation,
+image editing, web search and document search. Shared users never see the old
+image-energy meter, including users with an existing private-tier energy balance.
+
+No remote push, beta deployment, production migration or payment change was made.

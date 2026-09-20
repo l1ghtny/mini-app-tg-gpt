@@ -14,6 +14,8 @@ from app.services.allowance_policy import (
     RATE_VERSION,
     step_budget,
     usage_units,
+    image_budget,
+    output_target,
 )
 
 
@@ -72,23 +74,42 @@ async def estimate(session, user, conversation, request):
     instructions = _instructions_for_openai(
         request.model, _resolve_system_prompt(conversation, user)
     )
-    upper = step_budget(request.model, messages, instructions + " " * 512)
+    effort = request.reasoning_effort or (
+        "none" if request.thinking is False else "medium"
+    )
+    quality = request.image_quality or conversation.image_quality or "medium"
+    target = output_target(request.model, effort, request.required_tool)
+    upper = step_budget(
+        request.model, messages, instructions + " " * 512, max_output=target
+    )
+    minimum = step_budget(
+        request.model, messages, instructions + " " * 512, max_output=256
+    )
     included = request.model == LUNA
+    refs = min(
+        4,
+        sum(kind in {"image", "image_url"} for kind, _ in rows)
+        + sum(p.type == "image_url" for p in request.content),
+    )
+    image_reserve = image_budget(quality, reference_tokens=refs * 1024)
     paid_upper = 0 if included else upper
-    # Leave room for a follow-up after a tool result, without forcing a tool call.
     if tools:
-        paid_upper += (upper if not included else 0) + 150_000
+        paid_upper += upper if not included else 0
+        if "web_search" in tools:
+            paid_upper += 30_000
+        if "file_search" in tools:
+            paid_upper += 10_000
     if "image_generation" in tools:
-        paid_upper += 500_000
-    ceiling = min(paid_upper, allowance.available(a))
-    if request.spend_limit_units is not None:
-        ceiling = min(ceiling, request.spend_limit_units)
+        paid_upper += image_reserve
     lower = (
         0
         if included
         else usage_units(
             request.model,
-            {"input_tokens": min(len(text) // 3 + 1024, 10000), "output_tokens": 400},
+            {
+                "input_tokens": min(len(text) // 3 + 1024, 10000),
+                "output_tokens": 200,
+            },
         )
     )
     typical = (
@@ -96,15 +117,39 @@ async def estimate(session, user, conversation, request):
         if included
         else usage_units(
             request.model,
-            {"input_tokens": min(len(text) // 3 + 2048, 14000), "output_tokens": 2000},
+            {
+                "input_tokens": min(len(text) // 3 + 2048, 14000),
+                "output_tokens": 1200,
+            },
         )
     )
     if request.required_tool == "image_generation":
-        lower += 30_000
-        typical += 100_000
+        from app.services.allowance_policy import IMAGE_OUTPUT_TOKENS
+
+        lower += IMAGE_OUTPUT_TOKENS[quality] * 30
+        typical += image_reserve
     if request.required_tool == "web_search":
         lower += 10_000
         typical += 30_000
+    # Automatic tools share a small preauthorized ceiling. Expensive potential
+    # image calls require confirmation even when the model chooses the tool.
+    threshold = max(1, a.granted * 5 // 100)
+    needs_confirmation = (
+        typical >= threshold
+        or (not included and minimum >= threshold)
+        or request.required_tool == "image_generation"
+        or ("image_generation" in tools and image_reserve >= threshold)
+    )
+    if not needs_confirmation:
+        paid_upper = min(paid_upper, threshold)
+    ceiling = min(paid_upper, allowance.available(a))
+    if request.spend_limit_units is not None:
+        ceiling = min(ceiling, request.spend_limit_units)
+    minimum_ceiling = 0 if included else minimum
+    if request.required_tool == "image_generation":
+        minimum_ceiling += image_reserve + (minimum if not included else 0)
+    elif request.required_tool == "web_search":
+        minimum_ceiling += 30_000
     fingerprint = hashlib.sha256(
         json.dumps(
             dict(
@@ -115,7 +160,7 @@ async def estimate(session, user, conversation, request):
                 required=request.required_tool,
                 reasoning=request.reasoning_effort,
                 thinking=request.thinking,
-                image_quality=request.image_quality,
+                image_quality=quality,
                 history=[(k, v) for k, v in rows],
                 summary=conversation.history_summary,
                 instructions=instructions,
@@ -159,12 +204,18 @@ async def estimate(session, user, conversation, request):
         estimated_min_percent=round(lower * 100 / a.granted, 2),
         estimated_max_percent=round(typical * 100 / a.granted, 2),
         ceiling_units=ceiling,
-        minimum_ceiling_units=(0 if included else upper)
-        + (500_000 if request.required_tool == "image_generation" else 0),
+        minimum_ceiling_units=minimum_ceiling,
         ceiling_percent=round(ceiling * 100 / a.granted, 2),
-        needs_confirmation=typical * 100 / a.granted >= 5
-        or request.required_tool == "image_generation",
-        luna_ceiling=(upper * 2 if included else 0) + (50_000 if older else 0),
+        needs_confirmation=needs_confirmation,
+        image_quality=quality if "image_generation" in tools else None,
+        image_estimated_percent=round(image_reserve * 100 / a.granted, 2)
+        if "image_generation" in tools
+        else None,
+        luna_minimum=minimum if included else 0,
+        luna_ceiling=min(
+            (upper * 2 if included else 0) + (50_000 if older else 0),
+            max(0, a.luna_granted - a.luna_spent - a.luna_reserved),
+        ),
     )
     await session.commit()
     return result
@@ -174,6 +225,8 @@ async def admit(session, user, conversation, request):
     e = await estimate(session, user, conversation, request)
     if e["needs_confirmation"] and not request.estimate_reference:
         raise HTTPException(409, detail={"error": "usage_confirmation_required", **e})
+    if request.model == LUNA and e["luna_ceiling"] < e["luna_minimum"]:
+        raise HTTPException(429, detail={"error": "luna_fair_use"})
     if e["ceiling_units"] < e["minimum_ceiling_units"]:
         raise HTTPException(
             402,

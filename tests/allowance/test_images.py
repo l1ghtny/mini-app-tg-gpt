@@ -33,7 +33,7 @@ async def test_new_image_does_not_reuse_previous_image(monkeypatch):
 
     usage = {
         "input_tokens": 10,
-        "input_tokens_details": {"text_tokens": 10},
+        "input_tokens_details": {"text_tokens": 10, "image_tokens": 0},
         "output_tokens": 20,
     }
     response = SimpleNamespace(
@@ -74,3 +74,79 @@ async def test_invalid_reference_mode_cannot_start_spend():
     with pytest.raises(ValueError):
         await images.generate_image(run, "edit", [], "medium", "any-account")
     run.start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_provider_rejection_releases_known_image_exposure(monkeypatch):
+    import httpx
+    from openai import APIStatusError
+    from app.services import openai_service
+
+    failure = APIStatusError(
+        "rejected",
+        response=httpx.Response(
+            429,
+            request=httpx.Request(
+                "POST", "https://api.openai.com/v1/images/generations"
+            ),
+        ),
+        body={},
+    )
+    generate = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(
+        openai_service,
+        "client",
+        SimpleNamespace(
+            with_options=lambda **kw: SimpleNamespace(
+                images=SimpleNamespace(generate=generate)
+            )
+        ),
+    )
+    run = SimpleNamespace(
+        start=AsyncMock(return_value="attempt"),
+        finish=AsyncMock(),
+        conversation_id=None,
+    )
+    with pytest.raises(APIStatusError):
+        await images.generate_image(run, "A cup", [], "low", "none")
+    assert run.start.call_args.args[1] < 20000
+    assert run.finish.call_args.kwargs["units"] == 0
+    assert run.finish.call_args.kwargs["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_unknown_image_failure_is_not_falsely_recorded_as_free(monkeypatch):
+    from app.services import openai_service
+
+    generate = AsyncMock(side_effect=TimeoutError("provider connection lost"))
+    monkeypatch.setattr(
+        openai_service,
+        "client",
+        SimpleNamespace(
+            with_options=lambda **kw: SimpleNamespace(
+                images=SimpleNamespace(generate=generate)
+            )
+        ),
+    )
+    run = SimpleNamespace(
+        start=AsyncMock(return_value="attempt"),
+        finish=AsyncMock(),
+        conversation_id=None,
+    )
+    with pytest.raises(TimeoutError):
+        await images.generate_image(run, "A cup", [], "medium", "none")
+    run.start.assert_awaited_once()
+    run.finish.assert_not_called()
+
+
+def test_image_usage_requires_complete_and_consistent_input_split():
+    with pytest.raises(ValueError, match="omitted"):
+        images.image_usage_units({"input_tokens": 50, "output_tokens": 196})
+    with pytest.raises(ValueError, match="Invalid"):
+        images.image_usage_units(
+            {
+                "input_tokens": 50,
+                "output_tokens": 196,
+                "input_tokens_details": {"text_tokens": 10, "image_tokens": 30},
+            }
+        )

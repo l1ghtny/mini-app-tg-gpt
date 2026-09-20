@@ -12,6 +12,7 @@ from app.db.allowance import (
 )
 from app.services.allowance_policy import (
     BASE_GRANT,
+    IMAGE_OUTPUT_TOKENS,
     RATE_VERSION,
     PLANS,
     MODELS,
@@ -117,6 +118,31 @@ async def snapshot(session, user_id):
             .limit(20)
         )
     ).all()
+    attempts = (
+        (
+            await session.exec(
+                select(ProviderAttempt).where(
+                    ProviderAttempt.request_id.in_([r.id for r in requests])
+                )
+            )
+        ).all()
+        if requests
+        else []
+    )
+    activities = {}
+    for attempt in attempts:
+        kinds = activities.setdefault(attempt.request_id, set())
+        if attempt.model == "gpt-image-2.5-flare":
+            details = attempt.usage_details or {}
+            kinds.add(
+                "image_edit"
+                if details.get("image_action") == "edit"
+                else "image_generation"
+            )
+        if attempt.search_calls:
+            kinds.add("web_search")
+        if attempt.file_calls:
+            kinds.add("file_search")
     result = dict(
         enabled=True,
         mode="beta",
@@ -133,6 +159,7 @@ async def snapshot(session, user_id):
         default_model="gpt-5.6-terra",
         image_model="gpt-image-2.5-flare",
         luna_available=a.luna_granted - a.luna_spent - a.luna_reserved > 0,
+        image_output_units={k: v * 30 for k, v in IMAGE_OUTPUT_TOKENS.items()},
         catalog=catalog(),
         plans=public_plans(),
         history=[
@@ -140,6 +167,7 @@ async def snapshot(session, user_id):
                 request_id=r.request_id,
                 model=r.model,
                 status=r.status,
+                activities=sorted(activities.get(r.id, set())),
                 percent=round(100 * r.charged / a.granted, 3),
                 created_at=r.created_at.replace(tzinfo=UTC).isoformat(),
             )
@@ -223,6 +251,23 @@ async def request_row(session, user_id, request_id, lock=False):
     if lock:
         q = q.with_for_update()
     return (await session.exec(q)).first()
+
+
+async def remaining_request_budget(session, user_id, request_id, *, included=False):
+    r = await request_row(session, user_id, request_id)
+    if not r or r.status != "reserved":
+        raise HTTPException(409, detail="Allowance reservation is not active")
+    attempts = (
+        await session.exec(
+            select(ProviderAttempt).where(
+                ProviderAttempt.request_id == r.id, ProviderAttempt.included == included
+            )
+        )
+    ).all()
+    used = sum(
+        p.supplier_units if p.supplier_units is not None else p.budget for p in attempts
+    )
+    return max(0, (r.luna_ceiling if included else r.ceiling) - used)
 
 
 async def begin_attempt(

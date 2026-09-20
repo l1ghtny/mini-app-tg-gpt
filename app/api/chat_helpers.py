@@ -291,7 +291,12 @@ async def handle_create_message(
 
     for part in request.content:
         if part.type == "image_url":
-            await ensure_openai_compatible_image_url(session, part.value, user_id=current_user.id)
+            from app.services.allowance import enabled
+            if enabled(current_user.id):
+                from app.services.allowance_images import validate_owned_image
+                await validate_owned_image(session, part.value, current_user.id)
+            else:
+                await ensure_openai_compatible_image_url(session, part.value, user_id=current_user.id)
 
     (
         text_entitlement,
@@ -1456,7 +1461,12 @@ async def _replace_message_content(
         raise HTTPException(status_code=400, detail="Edited message must include text or images")
 
     for image_url in image_values:
-        await ensure_openai_compatible_image_url(session, image_url, user_id=user_id)
+        from app.services.allowance import enabled
+        if enabled(user_id):
+            from app.services.allowance_images import validate_owned_image
+            await validate_owned_image(session, image_url, user_id)
+        else:
+            await ensure_openai_compatible_image_url(session, image_url, user_id=user_id)
 
     await detach_assets_from_message_content_ids(
         session,
@@ -1926,7 +1936,12 @@ async def _finalize_history_payload(
         if not source_url:
             continue
         try:
-            compatible_url = await ensure_openai_compatible_image_url(session, source_url, user_id=image_owner_id)
+            from app.services.allowance import enabled
+            if enabled(image_owner_id):
+                from app.services.allowance_images import validate_owned_image
+                compatible_url = await validate_owned_image(session, source_url, image_owner_id)
+            else:
+                compatible_url = await ensure_openai_compatible_image_url(session, source_url, user_id=image_owner_id)
         except HTTPException as exc:
             if skip_unavailable_images and exc.status_code in {403, 410}:
                 continue
@@ -2203,7 +2218,7 @@ async def _shared_entitlements(session, user, request, conversation):
     requires_files = request.required_tool == "file_search" or request.tool_choice == "file_search"
     if requires_files and not stores:
         raise HTTPException(409, detail={"error": "file_search_requires_documents"})
-    quality = request.image_quality or "medium"
+    quality = request.image_quality or conversation.image_quality or "medium"
     if quality not in {"low", "medium", "high"}:
         raise HTTPException(400, detail={"error": "image_quality_unavailable"})
     tools = [{"type": "web_search"}]
