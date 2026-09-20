@@ -1,6 +1,7 @@
 from typing import Literal
 
 TextModelName = Literal[
+    "gpt-6-astra", "claude-sonnet-5", "claude-opus-5", "claude-fable-5-1",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
@@ -17,16 +18,18 @@ TextModelName = Literal[
 ]
 
 ImageModelName = Literal[
+    "gpt-image-2.5-flare",
     "gpt-image-1.5",
     "gpt-image-2",
     "gemini-3.1-flash-image",
     "gemini-3-pro-image",
 ]
 
-ProviderName = Literal["openai", "google", "perplexity"]
+ProviderName = Literal["openai", "google", "perplexity", "anthropic"]
 ImageProviderName = Literal["openai", "google"]
 
 TEXT_MODEL_PROVIDER: dict[str, ProviderName] = {
+    "gpt-6-astra": "openai", "claude-sonnet-5": "anthropic", "claude-opus-5": "anthropic", "claude-fable-5-1": "anthropic",
     "gpt-5.6-sol": "openai",
     "gpt-5.6-terra": "openai",
     "gpt-5.6-luna": "openai",
@@ -43,6 +46,7 @@ TEXT_MODEL_PROVIDER: dict[str, ProviderName] = {
 }
 
 IMAGE_MODEL_PROVIDER: dict[str, ImageProviderName] = {
+    "gpt-image-2.5-flare": "openai",
     "gpt-image-1.5": "openai",
     "gpt-image-2": "openai",
     "gemini-3.1-flash-image": "google",
@@ -61,6 +65,7 @@ DEFAULT_IMAGE_MODEL_BY_PROVIDER: dict[ImageProviderName, str] = {
 }
 
 TEXT_PROVIDER_IMAGE_PROVIDER: dict[ProviderName, ImageProviderName] = {
+    "anthropic": "openai",
     "openai": "openai",
     "google": "google",
     "perplexity": "openai",

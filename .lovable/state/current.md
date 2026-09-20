@@ -1,3 +1,14 @@
+## 2026-09-20 shared allowance beta implementation
+
+- Implemented in isolated production-based backend/frontend worktrees under `/private/tmp/lightny-allowance-20260920`, branch `codex/shared-allowance-20260920`. Shared checkouts and production data untouched.
+- Seven chat models in four navigation groups, Flare as chat image/edit tool, one shared monthly allowance, separate Luna fair use, signed estimates and spend confirmations, exact-once accounting, provider-attempt audit, bounded tools and Luna context summaries. User explicitly approved Luna summaries for Claude chats and owned same-conversation image reuse for Flare.
+- Pricing preview: Start/Plus/Premium/Max at 490/990/2490/9990 RUB and 1/2/5/20x Start; purchases disabled. Measured task examples, percentage meter, reset date and task history; no legacy reply quota UI for shared users. Private-tier capacity mapping remains later.
+- Validation: 21 isolated-schema backend tests and 11 existing backend unit tests; 312 frontend tests; TypeScript app project, Vite build, focused ESLint/Ruff and Python compilation pass. One Alembic head; migration applied twice on isolated test schema. Existing chunk/import/Fast Refresh warnings remain.
+- Real local adapter checks: all seven text models, Claude web sources/document citations, Flare generation/follow-up edit, long-chat correction retention at reply20/reply40, tiny cap, duplicate assistant identity, SSE resume and cancellation. Unknown cancellation supplier usage remains pending with zero customer charge; stale customer holds expire while unknown supplier exposure remains reserved operationally.
+- Browser reviewed mobile Russian/dark and desktop English/light, grouped model picker, measured examples, red image edit, and confirmation cancellation restoring the draft. Local preview: UI5197/API8097/Redis6397, TEST database schema `allowance_preview_20260920_b`, synthetic account only, USD3 guard.
+- No beta or production deployment. Live beta pipeline only checks shared schema; additive migration must land through the schema-owner path before beta deployment. Backend runbook: `docs/operations/shared-allowance-beta.md`; evidence: `docs/product-strategy/2026-09-20-shared-allowance-validation.md`.
+- Next: review paired branches, apply additive migration through the owner path, integrate into beta, configure server-side Anthropic key/finite allowance/cohort, deploy paired images, then verify deployed model/tool matrix (including uploaded-image vision), seeded exhaustion and friend feedback. Public checkout/cutover and permanent private grants remain deferred.
+
 # Current State
 
 ## 2026-09-18 login outage recovery

@@ -89,9 +89,14 @@ async def generate_and_publish(
         }
         assistant_message_id_str = str(assistant_message_id)
 
+        allowance_success = False
         try:
             try:
                 remaining = generation_seconds_remaining(generation_started_at)
+                from app.services import allowance
+                if allowance.enabled(user_id):
+                    from app.core.config import settings
+                    remaining = min(remaining, settings.SHARED_ALLOWANCE_REQUEST_SECONDS)
                 if remaining <= 0:
                     raise TimeoutError("Chat generation deadline exceeded")
                 async with asyncio.timeout(remaining):
@@ -121,6 +126,10 @@ async def generate_and_publish(
                     )
                     async with aclosing(cancellable_events(source, bus, assistant_message_id_str)) as events:
                         async for ev in events:
+                            if ev.get("type") == "done" and request_id:
+                                from app.services import allowance
+                                if allowance.enabled(user_id):
+                                    await allowance.settle(session, user_id, request_id, success=not lifecycle["stream_failed"])
                             await _record_and_publish_activity(
                                 session=session,
                                 bus=bus,
@@ -157,6 +166,7 @@ async def generate_and_publish(
                                 chain_context_fingerprint=chain_context_fingerprint,
                             )
 
+                    allowance_success = not lifecycle["stream_failed"]
                     if request_id and not lifecycle["text_request_finalized"]:
                         raise RuntimeError("Chat stream ended without a completion event")
 
@@ -177,6 +187,9 @@ async def generate_and_publish(
                     session.add(conversation)
                 await session.commit()
                 await _cleanup_partial_images(partial_image_keys)
+                from app.services import allowance
+                if request_id and allowance.enabled(user_id):
+                    await allowance.settle(session, user_id, request_id, success=False)
                 await _record_and_publish_activity(
                     session=session, bus=bus, assistant_message_id=assistant_message_id,
                     event={"type": "cancelled"}, lifecycle=lifecycle, raise_on_error=True,
@@ -218,6 +231,12 @@ async def generate_and_publish(
             }
             if lifecycle.get("last_error_code"):
                 error_event["code"] = lifecycle["last_error_code"]
+            from app.services import allowance
+            if request_id and allowance.enabled(user_id):
+                error_event["error"] = "The request could not be completed. No allowance will be charged for an unsuccessful task."
+                if isinstance(e, HTTPException) and isinstance(e.detail, dict):
+                    error_event["code"] = e.detail.get("error", "generation_failed")
+                await allowance.settle(session, user_id, request_id, success=False)
             await _record_and_publish_activity(
                 session=session,
                 bus=bus,
@@ -231,7 +250,8 @@ async def generate_and_publish(
                 ok=False,
                 error=lifecycle.get("last_error_message") or str(e),
             )
-            raise
+            if not allowance.enabled(user_id):
+                raise
         else:
             if lifecycle.get("stream_failed"):
                 await bus.mark_done(
@@ -242,11 +262,17 @@ async def generate_and_publish(
             else:
                 await bus.mark_done(assistant_message_id_str, ok=True)
         finally:
-            await _clear_active_stream_pointer(
-                bus=bus,
-                conversation_id=conversation_id,
-                assistant_message_id=assistant_message_id_str,
-            )
+            from app.services import allowance
+            try:
+                if request_id and allowance.enabled(user_id):
+                    await session.rollback()
+                    await allowance.settle(session, user_id, request_id, success=allowance_success)
+            finally:
+                await _clear_active_stream_pointer(
+                    bus=bus,
+                    conversation_id=conversation_id,
+                    assistant_message_id=assistant_message_id_str,
+                )
 
 
 async def _publish_initial_activity(
@@ -395,7 +421,8 @@ async def _handle_stream_event(
             if image_provider == "google"
             else (_extract_image_quality(tools) or "low")
         )
-        image_cost = await get_image_quality_cost(session, image_model, image_option_value)
+        from app.services.allowance import enabled
+        image_cost = 0 if enabled(user_id) else await get_image_quality_cost(session, image_model, image_option_value)
         await update_request_ledger_image(
             session,
             request_id,
@@ -745,6 +772,9 @@ async def update_request_ledger_image(session: AsyncSession, request_id: str, us
                                      conversation_id: uuid.UUID, assistant_message_id: uuid.UUID, image_model: str,
                                      cost: float, tier_id: Optional[uuid.UUID] = None,
                                      usage_pack_id: Optional[uuid.UUID] = None):
+    from app.services.allowance import enabled
+    if enabled(user_id):
+        return  # Child provider attempt already accounts for the image.
     img_req_id = f"{request_id}:img:{ordinal}"
     await reserve_request(
         session,

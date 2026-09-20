@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List, Literal, Optional, Iterable, Union
+from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -128,6 +128,9 @@ class ConversationDraftAPI(BaseModel):
 
 
 class NewMessageRequest(BaseModel):
+    estimate_reference: str | None = None
+    spend_limit_units: int | None = Field(default=None, ge=0, le=100_000_000)
+
     client_request_id: str
     role: Literal["user"]
     content: List[MessageContent]
