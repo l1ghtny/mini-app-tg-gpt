@@ -1530,3 +1530,6 @@ class ImageQualityPricing(SQLModel, table=True):
     description: Optional[str] = None  # e.g., "1024x1024, fast"
     description_ru: Optional[str] = None
     is_active: bool = Field(default=True)
+
+# Register additive allowance tables with the application metadata.
+from app.db import allowance as _allowance_models  # noqa: E402,F401

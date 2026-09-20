@@ -44,3 +44,9 @@ async def my_image_energy_usage(
     user=Depends(get_current_user),
 ):
     return await user_usage_helpers.get_image_energy_usage(session, user)
+
+
+@user_usage.get("/me/allowance")
+async def my_allowance(session: AsyncSession = Depends(get_session), user=Depends(get_current_user)):
+    from app.services.allowance import snapshot
+    return await snapshot(session, user.id)

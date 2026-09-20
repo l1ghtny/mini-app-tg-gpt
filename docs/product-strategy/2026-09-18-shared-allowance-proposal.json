@@ -1,0 +1,79 @@
+{
+  "status": "Beta configuration proposal only, not approved public tariffs",
+  "assumptions": {
+    "payment_fraction": 0.06,
+    "tax_fraction": 0.06,
+    "refund_reserve": 0.03,
+    "fx": 100,
+    "fx_stress": 120,
+    "retry_contingency": 0.2,
+    "base_standard_provider_usd": 1.25
+  },
+  "policy": "One measured paid-usage allowance for paid chat/search/images; Luna text and internal background work separately reserved. No fixed image grant added on top. Actual provider cost is separate from customer-debit rate-card values.",
+  "plans": [
+    {
+      "plan": "Start",
+      "price_rub": 490,
+      "multiple": 1,
+      "paid_usage_standard_usd": 1.25,
+      "paid_usage_loaded_rub": 150.0,
+      "luna_reserve_rub": 35,
+      "background_reserve_rub": 10,
+      "total_provider_reserve_rub": 195.0,
+      "fixed_overhead_rub": 25,
+      "normal_budget_rub": 195.5,
+      "full_contribution_rub": 196.5,
+      "full_contribution_fraction": 0.4010204081632653,
+      "fx120_contribution_fraction": 0.32142857142857145,
+      "intro50_contribution_rub": -11.75
+    },
+    {
+      "plan": "Plus",
+      "price_rub": 990,
+      "multiple": 2,
+      "paid_usage_standard_usd": 2.5,
+      "paid_usage_loaded_rub": 300.0,
+      "luna_reserve_rub": 60,
+      "background_reserve_rub": 20,
+      "total_provider_reserve_rub": 380.0,
+      "fixed_overhead_rub": 40,
+      "normal_budget_rub": 405.5,
+      "full_contribution_rub": 421.5,
+      "full_contribution_fraction": 0.4257575757575758,
+      "fx120_contribution_fraction": 0.348989898989899,
+      "intro50_contribution_rub": 0.75
+    },
+    {
+      "plan": "Premium",
+      "price_rub": 2490,
+      "multiple": 5,
+      "paid_usage_standard_usd": 6.25,
+      "paid_usage_loaded_rub": 750.0,
+      "luna_reserve_rub": 120,
+      "background_reserve_rub": 40,
+      "total_provider_reserve_rub": 910.0,
+      "fixed_overhead_rub": 80,
+      "normal_budget_rub": 1040.5,
+      "full_contribution_rub": 1126.5,
+      "full_contribution_fraction": 0.45240963855421684,
+      "fx120_contribution_fraction": 0.3793172690763052,
+      "intro50_contribution_rub": 68.25
+    },
+    {
+      "plan": "Max",
+      "price_rub": 9990,
+      "multiple": 20,
+      "paid_usage_standard_usd": 25.0,
+      "paid_usage_loaded_rub": 3000.0,
+      "luna_reserve_rub": 400,
+      "background_reserve_rub": 100,
+      "total_provider_reserve_rub": 3500.0,
+      "fixed_overhead_rub": 200,
+      "normal_budget_rub": 4295.5,
+      "full_contribution_rub": 4791.5,
+      "full_contribution_fraction": 0.47962962962962963,
+      "fx120_contribution_fraction": 0.4095595595595596,
+      "intro50_contribution_rub": 545.75
+    }
+  ]
+}

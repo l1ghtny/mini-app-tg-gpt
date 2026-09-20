@@ -51,6 +51,15 @@ async def stream_normalized_ai_response(
     reasoning_effort: str | None = None,
     search_mode: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
+    from app.services.allowance import enabled
+    if enabled(user_id):
+        from app.services.shared_chat_provider import stream_shared_response
+        async with aclosing(stream_shared_response(messages, model, instructions=instructions,
+            tools=tools, tool_choice=tool_choice, user_id=user_id, request_id=request_id,
+            conversation_id=conversation_id, reasoning_effort=reasoning_effort, thinking_enabled=thinking_enabled)) as events:
+            async for event in events:
+                yield event
+        return
     provider = get_text_model_provider(model or "gpt-5.4-nano")
     if provider == "google":
         async with aclosing(stream_normalized_google_response(

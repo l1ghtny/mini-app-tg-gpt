@@ -331,139 +331,149 @@ async def handle_create_message(
     if request.thinking is not None:
         conversation.thinking = bool(request.thinking)
 
-    user_msg = await _create_user_message(session, conversation, request, background_tasks)
-    assistant_msg = await _create_assistant_message(session, conversation_id)
+    from app.services import allowance
+    if allowance.enabled(current_user.id):
+        from app.services.allowance_chat import admit
+        await admit(session, current_user, conversation, request)
+    try:
+        user_msg = await _create_user_message(session, conversation, request, background_tasks)
+        assistant_msg = await _create_assistant_message(session, conversation_id)
 
-    await reserve_request(
-        session,
-        user_id=current_user.id,
-        conversation_id=conversation_id,
-        assistant_message_id=assistant_msg.id,
-        request_id=idempotency_key,
-        model_name=request.model,
-        feature="text",
-        cost=1.0,
-        tool_choice=ledger_tool_choice,
-        tier_id=text_entitlement.tier_id,
-        usage_pack_id=text_entitlement.usage_pack_id,
-        access_path=text_access_path,
-        workflow_kind=request.workflow_kind,
-    )
-    if text_access_path and text_access_path.startswith("premium_sample:"):
-        background_tasks.add_task(
-            track_event,
-            "premium_sample_sent",
-            str(current_user.id),
-            {
-                "campaign": current_user.campaign or "organic",
-                "kind": text_access_path.split("premium_sample:", 1)[-1],
-                "model": request.model,
-            },
-        )
-
-    full_history_for_openai = await _build_history_for_openai(
-        session,
-        conversation_id,
-        model_name=request.model,
-    )
-    history_for_openai = full_history_for_openai
-    fallback_history_for_openai: Optional[list[dict[str, Any]]] = None
-    chain_context_fingerprint = build_chain_context_fingerprint(
-        model=request.model,
-        system_prompt=system_prompt,
-        ledger_tool_choice=ledger_tool_choice,
-        image_model=image_model,
-        image_quality=image_quality,
-        image_size=image_size,
-        tools=tools,
-        extract_tool_type=_extract_tool_type,
-    )
-    provider = get_text_model_provider(request.model)
-    previous_response_id: str | None = None
-    previous_interaction_id: str | None = None
-    if provider == "google":
-        previous_interaction_id, chain_reason = resolve_previous_interaction_id_for_chain(
-            conversation,
-            current_fingerprint=chain_context_fingerprint,
-            chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
-            max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
-        )
-    else:
-        previous_response_id, chain_reason = resolve_previous_response_id_for_chain(
-            conversation,
-            current_fingerprint=chain_context_fingerprint,
-            chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED,
-            max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
-        )
-    if chain_reason in INVALIDATING_CHAIN_REASONS:
-        invalidate_openai_chain_state(conversation)
-        invalidate_google_chain_state(conversation)
-        session.add(conversation)
-        await session.commit()
-    if previous_response_id or previous_interaction_id:
-        current_turn_history = await _build_history_for_message(
+        await reserve_request(
             session,
-            message_id=user_msg.id,
+            user_id=current_user.id,
+            conversation_id=conversation_id,
+            assistant_message_id=assistant_msg.id,
+            request_id=idempotency_key,
+            model_name=request.model,
+            feature="text",
+            cost=1.0,
+            tool_choice=ledger_tool_choice,
+            tier_id=text_entitlement.tier_id,
+            usage_pack_id=text_entitlement.usage_pack_id,
+            access_path=text_access_path,
+            workflow_kind=request.workflow_kind,
         )
-        if current_turn_history:
-            history_for_openai = current_turn_history
-            fallback_history_for_openai = full_history_for_openai
+        if text_access_path and text_access_path.startswith("premium_sample:"):
+            background_tasks.add_task(
+                track_event,
+                "premium_sample_sent",
+                str(current_user.id),
+                {
+                    "campaign": current_user.campaign or "organic",
+                    "kind": text_access_path.split("premium_sample:", 1)[-1],
+                    "model": request.model,
+                },
+            )
+
+        full_history_for_openai = await _build_history_for_openai(
+            session,
+            conversation_id,
+            model_name=request.model,
+        )
+        history_for_openai = full_history_for_openai
+        fallback_history_for_openai: Optional[list[dict[str, Any]]] = None
+        chain_context_fingerprint = build_chain_context_fingerprint(
+            model=request.model,
+            system_prompt=system_prompt,
+            ledger_tool_choice=ledger_tool_choice,
+            image_model=image_model,
+            image_quality=image_quality,
+            image_size=image_size,
+            tools=tools,
+            extract_tool_type=_extract_tool_type,
+        )
+        provider = get_text_model_provider(request.model)
+        previous_response_id: str | None = None
+        previous_interaction_id: str | None = None
+        if provider == "google":
+            previous_interaction_id, chain_reason = resolve_previous_interaction_id_for_chain(
+                conversation,
+                current_fingerprint=chain_context_fingerprint,
+                chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED and not allowance.enabled(current_user.id),
+                max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
+            )
         else:
-            previous_response_id = None
-            previous_interaction_id = None
-            chain_reason = "missing_current_turn_payload"
-    if previous_response_id or previous_interaction_id:
-        background_tasks.add_task(
-            track_event,
-            "openai.chain.attempted",
-            str(current_user.id),
-            {"model": request.model},
+            previous_response_id, chain_reason = resolve_previous_response_id_for_chain(
+                conversation,
+                current_fingerprint=chain_context_fingerprint,
+                chaining_enabled=app_settings.OPENAI_CHAINING_ENABLED and not allowance.enabled(current_user.id),
+                max_inactivity_days=app_settings.OPENAI_CHAIN_MAX_INACTIVITY_DAYS,
+            )
+        if chain_reason in INVALIDATING_CHAIN_REASONS:
+            invalidate_openai_chain_state(conversation)
+            invalidate_google_chain_state(conversation)
+            session.add(conversation)
+            await session.commit()
+        if previous_response_id or previous_interaction_id:
+            current_turn_history = await _build_history_for_message(
+                session,
+                message_id=user_msg.id,
+            )
+            if current_turn_history:
+                history_for_openai = current_turn_history
+                fallback_history_for_openai = full_history_for_openai
+            else:
+                previous_response_id = None
+                previous_interaction_id = None
+                chain_reason = "missing_current_turn_payload"
+        if previous_response_id or previous_interaction_id:
+            background_tasks.add_task(
+                track_event,
+                "openai.chain.attempted",
+                str(current_user.id),
+                {"model": request.model},
+            )
+        elif app_settings.OPENAI_CHAINING_ENABLED:
+            background_tasks.add_task(
+                track_event,
+                "openai.chain.not_used",
+                str(current_user.id),
+                {"model": request.model, "reason": chain_reason or "unknown"},
+            )
+        await bus.set(
+            _conversation_current_stream_key(conversation_id),
+            str(assistant_msg.id),
+            ex=redis_settings.STREAM_TTL_SECONDS,
         )
-    elif app_settings.OPENAI_CHAINING_ENABLED:
-        background_tasks.add_task(
-            track_event,
-            "openai.chain.not_used",
-            str(current_user.id),
-            {"model": request.model, "reason": chain_reason or "unknown"},
+        redis_bus = RedisEventBus(bus)
+
+        _queue_generation(
+            background_tasks,
+            conversation_id=conversation_id,
+            assistant_message_id=assistant_msg.id,
+            generation_started_at=assistant_msg.created_at,
+            user_id=current_user.id,
+            history_for_openai=history_for_openai,
+            fallback_history_for_openai=fallback_history_for_openai,
+            bus=redis_bus,
+            instructions=system_prompt,
+            model=request.model,
+            tool_choice=request_tool_choice,
+            tools=tools,
+            request_id=idempotency_key,
+            previous_response_id=previous_response_id,
+            previous_interaction_id=previous_interaction_id,
+            chain_context_fingerprint=chain_context_fingerprint,
+            image_entitlement_tier_id=image_entitlement.tier_id,
+            image_entitlement_pack_id=image_entitlement.usage_pack_id,
+            thinking_enabled=request.thinking if request.thinking is not None else conversation.thinking,
+            reasoning_effort=request.reasoning_effort,
+            search_mode=request.search_mode,
         )
-    await bus.set(
-        _conversation_current_stream_key(conversation_id),
-        str(assistant_msg.id),
-        ex=redis_settings.STREAM_TTL_SECONDS,
-    )
-    redis_bus = RedisEventBus(bus)
+        await _track_message_metrics(session, background_tasks, current_user, request.model)
 
-    _queue_generation(
-        background_tasks,
-        conversation_id=conversation_id,
-        assistant_message_id=assistant_msg.id,
-        generation_started_at=assistant_msg.created_at,
-        user_id=current_user.id,
-        history_for_openai=history_for_openai,
-        fallback_history_for_openai=fallback_history_for_openai,
-        bus=redis_bus,
-        instructions=system_prompt,
-        model=request.model,
-        tool_choice=request_tool_choice,
-        tools=tools,
-        request_id=idempotency_key,
-        previous_response_id=previous_response_id,
-        previous_interaction_id=previous_interaction_id,
-        chain_context_fingerprint=chain_context_fingerprint,
-        image_entitlement_tier_id=image_entitlement.tier_id,
-        image_entitlement_pack_id=image_entitlement.usage_pack_id,
-        thinking_enabled=request.thinking if request.thinking is not None else conversation.thinking,
-        reasoning_effort=request.reasoning_effort,
-        search_mode=request.search_mode,
-    )
-    await _track_message_metrics(session, background_tasks, current_user, request.model)
-
-    return MessageCreated(
-        user_message_id=user_msg.id,
-        assistant_message_id=assistant_msg.id,
-        message_id=assistant_msg.id,
-        stream_url=f"/api/v1/conversations/{conversation_id}/messages/{assistant_msg.id}/stream",
-    )
+        return MessageCreated(
+            user_message_id=user_msg.id,
+            assistant_message_id=assistant_msg.id,
+            message_id=assistant_msg.id,
+            stream_url=f"/api/v1/conversations/{conversation_id}/messages/{assistant_msg.id}/stream",
+        )
+    except BaseException:
+        if allowance.enabled(current_user.id):
+            await session.rollback()
+            await allowance.settle(session, current_user.id, idempotency_key, success=False)
+        raise
 
 
 async def handle_stream_message(
@@ -527,6 +537,9 @@ async def handle_delete_message(
 
     invalidate_openai_chain_state(conversation)
     invalidate_google_chain_state(conversation)
+    conversation.history_summary = None
+    conversation.history_summary_up_to_message_id = None
+    conversation.history_summary_updated_at = None
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await queue_conversation_reindex(session, conversation_id=conversation_id)
@@ -582,6 +595,9 @@ async def handle_edit_message(
 
     invalidate_openai_chain_state(conversation)
     invalidate_google_chain_state(conversation)
+    conversation.history_summary = None
+    conversation.history_summary_up_to_message_id = None
+    conversation.history_summary_updated_at = None
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     session.add(conversation)
     await queue_conversation_reindex(session, conversation_id=conversation_id)
@@ -621,6 +637,11 @@ async def handle_create_conversation(
         folder_id=folder_id,
         thinking=bool(getattr(user, "default_thinking", True)),
     )
+    from app.services.allowance import enabled
+    if enabled(user.id):
+        new_conversation.model = "gpt-5.6-terra"
+        new_conversation.image_model = "gpt-image-2.5-flare"
+        new_conversation.image_quality = "medium"
     session.add(new_conversation)
     await session.flush()
     if folder_id is not None:
@@ -644,8 +665,26 @@ async def handle_get_conversations(
         .where(models.Conversation.user_id == current_user.id)
         .order_by(desc(func.coalesce(models.Conversation.updated_at)).nulls_last())
     )
-    conversations = await session.exec(query)
-    return conversations.all()
+    conversations = (await session.exec(query)).all()
+    if any([_align_shared_conversation(c) for c in conversations]):
+        await session.commit()
+    return conversations
+
+
+def _align_shared_conversation(conversation):
+    from app.services.allowance import enabled
+    from app.services.allowance_policy import MODELS, FLARE
+    if not enabled(conversation.user_id):
+        return False
+    changed = False
+    if conversation.model not in MODELS:
+        conversation.model = "gpt-5.6-terra"
+        changed = True
+    if conversation.image_model != FLARE:
+        conversation.image_model = FLARE
+        conversation.image_quality = "medium"
+        changed = True
+    return changed
 
 
 async def handle_get_conversation_messages(
@@ -810,6 +849,15 @@ async def handle_update_conversation_settings(
     if not conversation or conversation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    from app.services import allowance
+    if allowance.enabled(current_user.id):
+        a = await allowance.account(session, current_user.id)
+        if request.model and request.model not in allowance.model_access(a.plan):
+            raise HTTPException(403, detail={"error":"model_not_in_plan"})
+        if request.image_model and request.image_model != "gpt-image-2.5-flare":
+            raise HTTPException(400, detail={"error":"image_model_unavailable"})
+        _align_shared_conversation(conversation)
+
     req_data = request.model_dump(exclude_unset=True)
     if "folder_id" in req_data:
         folder_id = req_data["folder_id"]
@@ -926,6 +974,9 @@ async def _check_entitlements(
     request: NewMessageRequest,
     conversation: Conversation,
 ) -> tuple[TextEntitlementSelection, ImageEntitlementSelection, list, str, str, str, str | None]:
+    from app.services import allowance
+    if allowance.enabled(user.id):
+        return await _shared_entitlements(session, user, request, conversation)
     text_entitlement = await _require_text_entitlement(
         session,
         user,
@@ -1341,6 +1392,8 @@ async def _load_conversation_for_user(
             status_code=403,
             detail="Not authorized to send messages to this conversation",
         )
+    if _align_shared_conversation(conversation):
+        await session.commit()
     return conversation
 
 
@@ -1674,7 +1727,12 @@ async def _create_user_message(
                 conversation_id=conversation.id,
             )
         if part.type == "text":
-            background_tasks.add_task(generate_and_save_title, conversation.id, part.value)
+            from app.services.allowance import enabled
+            if enabled(conversation.user_id):
+                if conversation.title == "New Chat":
+                    conversation.title = " ".join(part.value.split())[:80] or "New Chat"
+            else:
+                background_tasks.add_task(generate_and_save_title, conversation.id, part.value)
 
     if getattr(conversation, "model", None) != request.model:
         conversation.model = request.model
@@ -1722,6 +1780,16 @@ async def _build_history_for_openai(
     if not candidates:
         return []
 
+    from app.services import allowance
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation and allowance.enabled(conversation.user_id):
+        history = []
+        for candidate in candidates:
+            payload = await _finalize_history_payload(session, candidate, skip_unavailable_images=candidate.message_id != candidates[-1].message_id)
+            if payload:
+                payload["_message_id"] = str(candidate.message_id)
+                history.append(payload)
+        return history
     context_window = await _resolve_context_window_tokens(session, model_name)
     history_budget = _compute_history_budget_tokens(context_window)
 
@@ -2073,6 +2141,8 @@ async def handle_get_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    if _align_shared_conversation(conversation):
+        await session.commit()
     return ConversationInfo(
         name=conversation.title,
         folder_id=conversation.folder_id,
@@ -2112,3 +2182,36 @@ async def handle_cancel_generation(*, conversation_id, message_id, session, curr
     # Message ID scope makes retries safe even after a newer reply has started.
     await bus.r.set(cancellation_key(str(message_id)), "1", ex=86400)
     return {"status": "requested"}
+
+
+async def _shared_entitlements(session, user, request, conversation):
+    from app.services.allowance import account, model_access, available
+    from app.services.allowance_policy import FLARE
+    a = await account(session, user.id)
+    if request.model not in model_access(a.plan):
+        raise HTTPException(403, detail={"error": "model_not_in_plan", "model": request.model})
+    if request.image_model and request.image_model != FLARE:
+        raise HTTPException(409, detail={"error": "image_model_unavailable", "image_model": FLARE})
+    if request.reasoning_effort and request.reasoning_effort not in {"none", "low", "medium", "high"}:
+        raise HTTPException(400, detail={"error": "reasoning_effort_not_supported_for_model"})
+    if request.model == "claude-fable-5-1" and (request.thinking is False or request.reasoning_effort == "none"):
+        raise HTTPException(400, detail={"error": "thinking_required_for_model"})
+    pending = await count_conversation_pending_indexing_documents(session, conversation.id, user=user)
+    if pending:
+        raise HTTPException(409, detail={"error": "documents_indexing_in_progress"})
+    stores = await list_conversation_ready_vector_store_ids(session, conversation.id, user=user)
+    requires_files = request.required_tool == "file_search" or request.tool_choice == "file_search"
+    if requires_files and not stores:
+        raise HTTPException(409, detail={"error": "file_search_requires_documents"})
+    quality = request.image_quality or "medium"
+    if quality not in {"low", "medium", "high"}:
+        raise HTTPException(400, detail={"error": "image_quality_unavailable"})
+    tools = [{"type": "web_search"}]
+    if stores:
+        tools.append({"type": "file_search", "vector_store_ids": stores})
+    if available(a) > 0:
+        tools.append({"type": "image_generation", "model": FLARE, "quality": quality})
+    await session.commit()
+    return (TextEntitlementSelection(remaining=-1, tier_id=None, usage_pack_id=None, access_path="shared_allowance"),
+        ImageEntitlementSelection(allowed=available(a)>0, tier_id=None, usage_pack_id=None, cost=0, throttle_reason=None, wait_time=None),
+        tools, FLARE, quality, "", "shared_allowance")
