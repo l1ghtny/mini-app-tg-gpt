@@ -11,6 +11,7 @@ from jose import JWTError, jwt
 from redis.asyncio import Redis
 
 from app.core.config import settings
+from app.api.browser_origins import resolve_browser_origin, telegram_callback
 
 
 _STATE_PREFIX = "telegram:oidc:state"
@@ -22,6 +23,7 @@ class TelegramOidcIdentity:
     telegram_id: int
     profile: dict[str, str | None]
     return_to: str
+    frontend_origin: str | None = None
 
 
 def normalize_return_to(value: str | None) -> str:
@@ -38,8 +40,8 @@ def normalize_return_to(value: str | None) -> str:
     return urlunsplit(("", "", parsed.path, parsed.query, ""))
 
 
-def frontend_redirect(return_to: str, result: str) -> str:
-    base = settings.WEBAPP_URL.rstrip("/")
+def frontend_redirect(return_to: str, result: str, origin: str | None = None) -> str:
+    base = resolve_browser_origin(origin)
     if not base:
         raise RuntimeError("WEBAPP_URL must be configured")
     target = f"{base}{normalize_return_to(return_to)}"
@@ -63,8 +65,12 @@ def _state_key(state: str) -> str:
     return f"{_STATE_PREFIX}:{state}"
 
 
-async def begin_telegram_oidc(redis: Redis, *, return_to: str | None = None) -> str:
+async def begin_telegram_oidc(
+    redis: Redis, *, return_to: str | None = None, origin: str | None = None
+) -> str:
     _require_config()
+    frontend_origin = resolve_browser_origin(origin)
+    redirect_uri = telegram_callback(frontend_origin)
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
     code_verifier = secrets.token_urlsafe(64)
@@ -77,6 +83,8 @@ async def begin_telegram_oidc(redis: Redis, *, return_to: str | None = None) -> 
         "nonce": nonce,
         "code_verifier": code_verifier,
         "return_to": normalize_return_to(return_to),
+        "frontend_origin": frontend_origin,
+        "redirect_uri": redirect_uri,
     }
     await redis.set(
         _state_key(state),
@@ -86,7 +94,7 @@ async def begin_telegram_oidc(redis: Redis, *, return_to: str | None = None) -> 
     query = urlencode(
         {
             "client_id": settings.TELEGRAM_OIDC_CLIENT_ID,
-            "redirect_uri": settings.TELEGRAM_OIDC_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": settings.TELEGRAM_OIDC_SCOPES,
             "state": state,
@@ -113,10 +121,15 @@ async def _consume_state(redis: Redis, state: str) -> dict[str, str]:
         for key in ("nonce", "code_verifier", "return_to")
     ):
         raise HTTPException(status_code=400, detail="telegram_login_state_invalid")
+    if any(key in payload and not isinstance(payload[key], str)
+           for key in ("frontend_origin", "redirect_uri")):
+        raise HTTPException(status_code=400, detail="telegram_login_state_invalid")
     return payload
 
 
-async def _exchange_code(code: str, code_verifier: str) -> str:
+async def _exchange_code(
+    code: str, code_verifier: str, redirect_uri: str | None = None
+) -> str:
     try:
         async with httpx.AsyncClient(
             timeout=settings.TELEGRAM_OIDC_HTTP_TIMEOUT_SECONDS
@@ -130,7 +143,7 @@ async def _exchange_code(code: str, code_verifier: str) -> str:
                 data={
                     "grant_type": "authorization_code",
                     "code": code,
-                    "redirect_uri": settings.TELEGRAM_OIDC_REDIRECT_URI,
+                    "redirect_uri": redirect_uri or settings.TELEGRAM_OIDC_REDIRECT_URI,
                     "client_id": settings.TELEGRAM_OIDC_CLIENT_ID,
                     "code_verifier": code_verifier,
                 },
@@ -209,7 +222,11 @@ async def complete_telegram_oidc(
 ) -> TelegramOidcIdentity:
     _require_config()
     saved = await _consume_state(redis, state)
-    id_token = await _exchange_code(code, saved["code_verifier"])
+    origin = resolve_browser_origin(saved.get("frontend_origin"))
+    redirect_uri = saved.get("redirect_uri", settings.TELEGRAM_OIDC_REDIRECT_URI)
+    if redirect_uri != telegram_callback(origin):
+        raise HTTPException(status_code=400, detail="telegram_login_state_invalid")
+    id_token = await _exchange_code(code, saved["code_verifier"], redirect_uri)
     claims = await _verify_id_token(redis, id_token, saved["nonce"])
     try:
         telegram_id = int(claims["id"])
@@ -228,4 +245,17 @@ async def complete_telegram_oidc(
             "photo_url": claims.get("picture"),
         },
         return_to=saved["return_to"],
+        frontend_origin=origin,
     )
+
+
+async def oidc_return_origin(redis: Redis, state: str | None, *, consume: bool = False) -> str:
+    """Recover only an allowlisted destination, including provider cancellation."""
+    if state:
+        raw = await (redis.getdel(_state_key(state)) if consume else redis.get(_state_key(state)))
+        try:
+            saved = json.loads(raw) if raw else {}
+            return resolve_browser_origin(saved.get("frontend_origin"))
+        except (ValueError, TypeError, AttributeError, HTTPException):
+            pass
+    return resolve_browser_origin()

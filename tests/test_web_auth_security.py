@@ -177,6 +177,7 @@ async def test_explicit_email_routes_do_not_infer_login_or_link_intent(monkeypat
         email="person@example.com",
         target_user=None,
         debug_delivery=False,
+        origin=None,
     )
 
     issue_link.reset_mock()
@@ -195,6 +196,7 @@ async def test_explicit_email_routes_do_not_infer_login_or_link_intent(monkeypat
         email="person@example.com",
         target_user=current_user,
         debug_delivery=False,
+        origin=None,
     )
 
 
