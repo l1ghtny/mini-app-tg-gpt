@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from fastapi import HTTPException
 from sqlalchemy import func
+from uuid import uuid4
+from app.db.subscription_tiers import SubscriptionTier, UserSubscription, SubscriptionStatus
 from sqlmodel import select
 from app.core.config import settings
 from app.db.models import AppUser
@@ -12,6 +14,7 @@ from app.db.allowance import (
 )
 from app.services.allowance_policy import (
     BASE_GRANT,
+    PRIVATE_PLANS,
     IMAGE_OUTPUT_TOKENS,
     RATE_VERSION,
     PLANS,
@@ -24,6 +27,8 @@ from app.services.allowance_policy import (
 def enabled(user_id=None) -> bool:
     if not settings.SHARED_ALLOWANCE_ENABLED:
         return False
+    if settings.DEPLOYMENT_CHANNEL == "production":
+        return str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS
     if settings.DEPLOYMENT_CHANNEL == "beta":
         return (
             user_id is not None
@@ -32,6 +37,43 @@ def enabled(user_id=None) -> bool:
     return settings.DEPLOYMENT_CHANNEL == "local" and (
         settings.DEBUG_MODE or settings.TEST_ENV
     )
+
+
+def accounting_scope():
+    return settings.SHARED_ALLOWANCE_SCOPE or settings.DEPLOYMENT_CHANNEL
+
+
+async def private_entitlement(session, user_id, *, now=None):
+    """No starter grants, expired subscriptions, or overlapping-tier stacking."""
+    if str(user_id).lower() not in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS:
+        return None
+    now = now or datetime.now(UTC).replace(tzinfo=None)
+    tiers = (await session.exec(
+        select(SubscriptionTier).join(UserSubscription)
+        .where(UserSubscription.user_id == user_id,
+               UserSubscription.status == SubscriptionStatus.active,
+               UserSubscription.started_at <= now,
+               (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > now),
+               SubscriptionTier.is_active.is_(True),
+               SubscriptionTier.name.in_(list(PRIVATE_PLANS)))
+    )).all()
+    if not tiers:
+        raise HTTPException(403, detail={"error": "private_allowance_inactive"})
+    tier = max(tiers, key=lambda t: (PLANS[PRIVATE_PLANS[t.name]]["multiple"], t.name))
+    return PRIVATE_PLANS[tier.name], tier.name
+
+
+def adjust_private_grant(session, row, plan):
+    """Replace capacity, never refill spent usage. Retain already committed holds."""
+    policy = PLANS[plan]
+    grant = max(BASE_GRANT * policy["multiple"], row.spent + row.reserved)
+    luna = max(policy["luna_units"], row.luna_spent + row.luna_reserved)
+    if (row.plan, row.granted, row.luna_granted) == (plan, grant, luna):
+        return
+    session.add(AllowanceEvent(account_id=row.id, event_key=f"adjust:{row.id}:{uuid4()}",
+        kind="plan_adjustment", units=grant-row.granted, luna_units=luna-row.luna_granted))
+    row.plan, row.granted, row.luna_granted = plan, grant, luna
+    session.add(row)
 
 
 def require_enabled(user_id):
@@ -55,7 +97,8 @@ async def account(session, user_id, *, now=None):
     # Serializes first-grant creation and all request admissions for a user.
     await session.exec(select(AppUser).where(AppUser.id == user_id).with_for_update())
     start, end = period(now)
-    scope = settings.DEPLOYMENT_CHANNEL
+    scope = accounting_scope()
+    entitlement = await private_entitlement(session, user_id, now=now)
     row = (
         await session.exec(
             select(AllowanceAccount)
@@ -68,7 +111,7 @@ async def account(session, user_id, *, now=None):
         )
     ).first()
     if row is None:
-        plan = settings.SHARED_ALLOWANCE_BETA_PLAN
+        plan = entitlement[0] if entitlement else settings.SHARED_ALLOWANCE_BETA_PLAN
         if plan not in PLANS:
             raise HTTPException(503, detail="Invalid allowance configuration")
         p = PLANS[plan]
@@ -93,6 +136,8 @@ async def account(session, user_id, *, now=None):
                 luna_units=row.luna_granted,
             )
         )
+    elif entitlement:
+        adjust_private_grant(session, row, entitlement[0])
     return row
 
 
@@ -100,12 +145,15 @@ async def current_plan(session, user_id):
     """Read the cohort's current grant without creating a billing account."""
     if not enabled(user_id):
         return None
+    entitlement = await private_entitlement(session, user_id)
+    if entitlement:
+        return entitlement[0]
     start, _ = period()
     row = (
         await session.exec(
             select(AllowanceAccount).where(
                 AllowanceAccount.user_id == user_id,
-                AllowanceAccount.scope == settings.DEPLOYMENT_CHANNEL,
+                AllowanceAccount.scope == accounting_scope(),
                 AllowanceAccount.period_start == start,
             )
         )
@@ -165,7 +213,8 @@ async def snapshot(session, user_id):
             kinds.add("file_search")
     result = dict(
         enabled=True,
-        mode="beta",
+        mode="shared" if str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS else "beta",
+        tier_name=(await private_entitlement(session, user_id) or (None, None))[1],
         plan=a.plan,
         multiple=PLANS[a.plan]["multiple"],
         granted_units=a.granted,
@@ -265,7 +314,7 @@ async def reserve(
 async def request_row(session, user_id, request_id, lock=False):
     q = select(AllowanceRequest).where(
         AllowanceRequest.user_id == user_id,
-        AllowanceRequest.scope == settings.DEPLOYMENT_CHANNEL,
+        AllowanceRequest.scope == accounting_scope(),
         AllowanceRequest.request_id == request_id,
     )
     if lock:
@@ -465,7 +514,7 @@ async def settle(session, user_id, request_id, *, success, release_unknown=False
 async def release_stale_requests(session, *, cutoff, user_id=None):
     """Release abandoned customer holds; unknown supplier exposure stays in the spend guard."""
     query = select(AllowanceRequest).where(
-        AllowanceRequest.scope == settings.DEPLOYMENT_CHANNEL,
+        AllowanceRequest.scope == accounting_scope(),
         AllowanceRequest.status.in_(["reserved", "pending"]),
         AllowanceRequest.created_at < cutoff,
     )
