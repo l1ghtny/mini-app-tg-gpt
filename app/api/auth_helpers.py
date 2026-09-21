@@ -115,6 +115,11 @@ async def process_login(
 
 
 async def ensure_starter_bundle(session: AsyncSession, user: models.AppUser) -> bool:
+    from app.services import allowance
+    if settings.SHARED_ALLOWANCE_TRIAL_ENABLED and allowance.enabled(user.id):
+        await allowance.account(session, user.id)
+        await session.commit()
+        return False
     active_sub = await get_current_subscription(session, user.id)
     bonus_granted = False
 

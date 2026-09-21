@@ -1,10 +1,14 @@
 from datetime import datetime
+from uuid import UUID
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 OnboardingItemId = Literal[
+    "personalisation_v2",
+    "folders_v2",
+    "install_v2",
     "welcome",
     "first_chat_guide",
     "first_chat_workflow",
@@ -66,3 +70,11 @@ class UpdateUserSettingsRequest(BaseModel):
     default_document_provider: Optional[str] = None
     default_thinking: Optional[bool] = None
     onboarding_events: list[OnboardingEvent] = Field(default_factory=list, max_length=8)
+
+
+class OnboardingVisitRequest(BaseModel):
+    session_id: UUID
+
+
+class OnboardingClaimRequest(BaseModel):
+    item: Literal["personalisation_v2", "folders_v2", "install_v2"]

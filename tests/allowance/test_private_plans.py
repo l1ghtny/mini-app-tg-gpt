@@ -14,7 +14,7 @@ async def enroll(db, monkeypatch, names):
     engine, session, user = db
     async with engine.begin() as conn:
         for table in (SubscriptionTier.__table__, UserSubscription.__table__):
-            await conn.run_sync(lambda connection, t=table: t.create(connection))
+            await conn.run_sync(lambda connection, t=table: t.create(connection, checkfirst=True))
     subscriptions = []
     for name in names:
         tier = SubscriptionTier(name=name, is_public=False)
@@ -111,3 +111,12 @@ def test_production_rollout_is_explicit_and_beta_access_unchanged(monkeypatch):
     monkeypatch.setattr(a.settings, "DEPLOYMENT_CHANNEL", "beta")
     monkeypatch.setattr(a.settings, "BETA_ALLOWED_USER_IDS", {"beta-user"})
     assert not a.enabled("private") and a.enabled("beta-user")
+
+
+@pytest.mark.asyncio
+async def test_enabling_starter_trials_keeps_private_capacity(db, monkeypatch):
+    s, user, _ = await enroll(db, monkeypatch, ["Close Friends Tier"])
+    monkeypatch.setattr(a.settings, "SHARED_ALLOWANCE_TRIAL_ENABLED", True)
+    state = await a.snapshot(s, user.id)
+    assert state["plan"] == "premium" and state["granted_units"] == 6_250_000
+    assert state["trial"] is None and state["mode"] == "shared"

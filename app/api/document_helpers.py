@@ -415,6 +415,9 @@ async def _document_limits_for_user(session: AsyncSession, user: AppUser) -> _Do
     from app.services.allowance import current_plan
 
     plan = await current_plan(session, user.id)
+    if plan == "starter":
+        return _DocLimits(tier_name="starter", max_active_docs=5, max_storage_bytes=25 * 1024 * 1024,
+                          max_file_size_bytes=10 * 1024 * 1024, max_pinned_docs=0, doc_retention_hours=24 * 7)
     if plan:
         # Reuse established paid capacities; Max expands AI capacity, not file storage.
         legacy_name = {"start": "basic", "plus": "advanced", "premium": "premium", "max": "premium"}[plan]
@@ -713,6 +716,11 @@ async def upload_document(
     upload: UploadFile,
     provider_override: str | None = None,
 ) -> UserDocumentResponse:
+    from app.services import allowance
+    if allowance.enabled(user.id):
+        account = await allowance.account(session, user.id)
+        allowance.require_active(account)
+        await session.commit()
     original_filename = (upload.filename or "document").strip() or "document"
     _validate_extension(original_filename)
     filename = _build_display_filename(

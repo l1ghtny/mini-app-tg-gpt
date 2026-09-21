@@ -126,10 +126,6 @@ async def generate_and_publish(
                     )
                     async with aclosing(cancellable_events(source, bus, assistant_message_id_str)) as events:
                         async for ev in events:
-                            if ev.get("type") == "done" and request_id:
-                                from app.services import allowance
-                                if allowance.enabled(user_id):
-                                    await allowance.settle(session, user_id, request_id, success=not lifecycle["stream_failed"])
                             await _record_and_publish_activity(
                                 session=session,
                                 bus=bus,
@@ -139,6 +135,7 @@ async def generate_and_publish(
                             )
 
                             if ev.get("type") not in {
+                                "done",
                                 "image.partial",
                                 "image.ready",
                                 "response.meta",
@@ -165,6 +162,11 @@ async def generate_and_publish(
                                 lifecycle=lifecycle,
                                 chain_context_fingerprint=chain_context_fingerprint,
                             )
+                            if ev.get("type") == "done":
+                                # Persist the result before charging or starting a trial clock.
+                                if request_id and allowance.enabled(user_id):
+                                    await allowance.settle(session, user_id, request_id, success=not lifecycle["stream_failed"])
+                                await bus.publish(assistant_message_id_str, ev)
 
                     allowance_success = not lifecycle["stream_failed"]
                     if request_id and not lifecycle["text_request_finalized"]:

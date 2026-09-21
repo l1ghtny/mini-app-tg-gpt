@@ -33,6 +33,7 @@ _normalize_proxy_env_aliases()
 
 
 class Settings:
+    SHARED_ALLOWANCE_TRIAL_ENABLED = os.getenv("SHARED_ALLOWANCE_TRIAL_ENABLED", "false").lower() in ("true", "1")
     SHARED_ALLOWANCE_ENABLED = os.getenv("SHARED_ALLOWANCE_ENABLED", "false").lower() in ("true", "1")
     # Explicit rollout membership; active subscriptions remain authoritative for grants.
     SHARED_ALLOWANCE_PRIVATE_USER_IDS = {

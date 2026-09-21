@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, UTC
 import re
 
 from dateutil.relativedelta import relativedelta
@@ -79,7 +79,7 @@ async def fetch_access_code_by_id_for_update(session: AsyncSession, code_id: str
 
 
 def ensure_access_code_valid(access_code: AccessCode, now: datetime | None = None) -> None:
-    now = now or datetime.now()
+    now = now or datetime.now(UTC).replace(tzinfo=None)
     if access_code.expires_at and access_code.expires_at < now:
         raise HTTPException(status_code=400, detail="Access code has expired")
     if access_code.max_uses is not None and access_code.used_count >= access_code.max_uses:
@@ -183,7 +183,7 @@ def build_access_code_response(access_code: AccessCode) -> AccessCodeResponse:
         usage_pack=pack_out,
         discounts=discounts_out,
         max_uses=access_code.max_uses,
-        expires_at=datetime.now() + relativedelta(days=access_code.tier_expires_in_days),
+        expires_at=datetime.now(UTC).replace(tzinfo=None) + relativedelta(days=access_code.tier_expires_in_days),
     )
 
 
@@ -192,7 +192,18 @@ async def redeem_access_code_for_user(
     user,
     access_code: AccessCode,
 ) -> AccessCodeRedeemResponse:
-    now = datetime.now()
+    from app.services import allowance
+    from app.services.allowance_policy import PRIVATE_PLANS
+
+    if allowance.enabled(user.id):
+        tier = await session.get(SubscriptionTier, access_code.tier_id) if access_code.tier_id else None
+        if access_code.usage_pack_id or (access_code.tier_id and (
+            not tier or not tier.is_active or tier.name not in PRIVATE_PLANS
+        )):
+            # Do not consume a legacy grant that the shared ledger cannot honour.
+            raise HTTPException(409, detail="access_code_legacy_grant")
+    now = datetime.now(UTC).replace(tzinfo=None)
+    changed = False
 
     if access_code.tier_id:
         existing_sub_result = await session.exec(
@@ -215,9 +226,16 @@ async def redeem_access_code_for_user(
                 user_id=user.id,
                 tier_id=access_code.tier_id,
                 status="active",
+                started_at=now,
                 expires_at=expires_at,
             )
             session.add(subscription_for_user)
+            changed = True
+        elif existing_sub.expires_at and existing_sub.expires_at <= now:
+            existing_sub.started_at = now
+            existing_sub.expires_at = expires_at
+            session.add(existing_sub)
+            changed = True
 
     if access_code.usage_pack_id:
         pack = await session.get(UsagePack, access_code.usage_pack_id)
@@ -236,8 +254,17 @@ async def redeem_access_code_for_user(
                 note=f"Access code {access_code.code}",
             )
             session.add(pack_purchase)
+            changed = True
 
     for discount in access_code.discounts:
+        existing_discount = (await session.exec(select(UserTierDiscount).where(
+            UserTierDiscount.user_id == user.id,
+            UserTierDiscount.access_code_id == access_code.id,
+            UserTierDiscount.tier_id == discount.tier_id,
+            UserTierDiscount.valid_until > now,
+        ))).first()
+        if existing_discount:
+            continue
         months = discount.duration_months or 0
         if months > 0:
             valid_until = now + relativedelta(months=months)
@@ -252,8 +279,10 @@ async def redeem_access_code_for_user(
             access_code_id=access_code.id,
         )
         session.add(user_discount)
+        changed = True
 
-    access_code.used_count += 1
+    if changed:
+        access_code.used_count += 1
     await session.commit()
     return AccessCodeRedeemResponse(status="ok")
 

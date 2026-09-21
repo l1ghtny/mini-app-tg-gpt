@@ -28,7 +28,7 @@ def enabled(user_id=None) -> bool:
     if not settings.SHARED_ALLOWANCE_ENABLED:
         return False
     if settings.DEPLOYMENT_CHANNEL == "production":
-        return str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS
+        return user_id is not None and (settings.SHARED_ALLOWANCE_TRIAL_ENABLED or str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS)
     if settings.DEPLOYMENT_CHANNEL == "beta":
         return (
             user_id is not None
@@ -45,7 +45,8 @@ def accounting_scope():
 
 async def private_entitlement(session, user_id, *, now=None):
     """No starter grants, expired subscriptions, or overlapping-tier stacking."""
-    if str(user_id).lower() not in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS:
+    rollout_member = str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS
+    if not rollout_member and not settings.SHARED_ALLOWANCE_TRIAL_ENABLED:
         return None
     now = now or datetime.now(UTC).replace(tzinfo=None)
     tiers = (await session.exec(
@@ -58,7 +59,9 @@ async def private_entitlement(session, user_id, *, now=None):
                SubscriptionTier.name.in_(list(PRIVATE_PLANS)))
     )).all()
     if not tiers:
-        raise HTTPException(403, detail={"error": "private_allowance_inactive"})
+        if rollout_member:
+            raise HTTPException(403, detail={"error": "private_allowance_inactive"})
+        return None
     tier = max(tiers, key=lambda t: (PLANS[PRIVATE_PLANS[t.name]]["multiple"], t.name))
     return PRIVATE_PLANS[tier.name], tier.name
 
@@ -99,19 +102,22 @@ async def account(session, user_id, *, now=None):
     start, end = period(now)
     scope = accounting_scope()
     entitlement = await private_entitlement(session, user_id, now=now)
+    trial = settings.SHARED_ALLOWANCE_TRIAL_ENABLED and not entitlement
+    if trial:
+        # One lifetime grant, shared across environments and calendar months.
+        start, end = datetime(1970, 1, 1), datetime(9999, 1, 1)
+    account_filter = (AllowanceAccount.plan == "starter") if trial else (
+        (AllowanceAccount.scope == scope) & (AllowanceAccount.period_start == start)
+    )
     row = (
         await session.exec(
             select(AllowanceAccount)
-            .where(
-                AllowanceAccount.user_id == user_id,
-                AllowanceAccount.scope == scope,
-                AllowanceAccount.period_start == start,
-            )
-            .with_for_update()
+            .where(AllowanceAccount.user_id == user_id, account_filter)
+            .with_for_update().execution_options(populate_existing=True)
         )
     ).first()
     if row is None:
-        plan = entitlement[0] if entitlement else settings.SHARED_ALLOWANCE_BETA_PLAN
+        plan = entitlement[0] if entitlement else ("starter" if trial else settings.SHARED_ALLOWANCE_BETA_PLAN)
         if plan not in PLANS:
             raise HTTPException(503, detail="Invalid allowance configuration")
         p = PLANS[plan]
@@ -122,7 +128,7 @@ async def account(session, user_id, *, now=None):
             period_end=end,
             plan=plan,
             rate_version=RATE_VERSION,
-            granted=BASE_GRANT * p["multiple"],
+            granted=int(BASE_GRANT * p["multiple"]),
             luna_granted=p["luna_units"],
         )
         session.add(row)
@@ -148,6 +154,8 @@ async def current_plan(session, user_id):
     entitlement = await private_entitlement(session, user_id)
     if entitlement:
         return entitlement[0]
+    if settings.SHARED_ALLOWANCE_TRIAL_ENABLED:
+        return "starter"
     start, _ = period()
     row = (
         await session.exec(
@@ -164,8 +172,18 @@ async def current_plan(session, user_id):
     return plan
 
 
+def trial_expired(a, now=None):
+    now = now or datetime.now(UTC).replace(tzinfo=None)
+    return a.plan == "starter" and a.trial_started_at is not None and now >= a.period_end
+
+
+def require_active(a):
+    if trial_expired(a):
+        raise HTTPException(402, detail={"error": "trial_expired", "expires_at": a.period_end.replace(tzinfo=UTC).isoformat()})
+
+
 def available(a):
-    return a.granted - a.spent - a.reserved
+    return 0 if trial_expired(a) else a.granted - a.spent - a.reserved
 
 
 async def snapshot(session, user_id):
@@ -211,9 +229,17 @@ async def snapshot(session, user_id):
             kinds.add("web_search")
         if attempt.file_calls:
             kinds.add("file_search")
+    trial = a.plan == "starter"
     result = dict(
+        trial=(dict(
+            state="expired" if trial_expired(a) else ("active" if a.trial_started_at else "ready"),
+            duration_days=7,
+            started_at=a.trial_started_at.replace(tzinfo=UTC).isoformat() if a.trial_started_at else None,
+            expires_at=a.period_end.replace(tzinfo=UTC).isoformat() if a.trial_started_at else None,
+            luna_remaining_percent=round(100 * max(0, a.luna_granted-a.luna_spent-a.luna_reserved) / a.luna_granted, 2),
+        ) if trial else None),
         enabled=True,
-        mode="shared" if str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS else "beta",
+        mode="trial" if trial else "shared" if str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS else "beta",
         tier_name=(await private_entitlement(session, user_id) or (None, None))[1],
         plan=a.plan,
         multiple=PLANS[a.plan]["multiple"],
@@ -222,12 +248,12 @@ async def snapshot(session, user_id):
         reserved_units=a.reserved,
         available_units=available(a),
         remaining_percent=round(100 * available(a) / a.granted, 2) if a.granted else 0,
-        resets_at=a.period_end.replace(tzinfo=UTC).isoformat(),
+        resets_at=None if trial else a.period_end.replace(tzinfo=UTC).isoformat(),
         rate_version=a.rate_version,
         models=model_access(a.plan),
-        default_model="gpt-5.6-terra",
+        default_model="claude-sonnet-5" if trial else "gpt-5.6-terra",
         image_model="gpt-image-2.5-flare",
-        luna_available=a.luna_granted - a.luna_spent - a.luna_reserved > 0,
+        luna_available=not trial_expired(a) and a.luna_granted - a.luna_spent - a.luna_reserved > 0,
         image_output_units={k: v * 30 for k, v in IMAGE_OUTPUT_TOKENS.items()},
         catalog=catalog(),
         plans=public_plans(),
@@ -251,6 +277,7 @@ async def reserve(
     session, *, user_id, conversation_id, request_id, model, ceiling, luna_ceiling=0
 ):
     a = await account(session, user_id)
+    require_active(a)
     old = (
         await session.exec(
             select(AllowanceRequest).where(
@@ -312,13 +339,13 @@ async def reserve(
 
 
 async def request_row(session, user_id, request_id, lock=False):
-    q = select(AllowanceRequest).where(
+    q = select(AllowanceRequest).join(AllowanceAccount, AllowanceAccount.id == AllowanceRequest.account_id).where(
         AllowanceRequest.user_id == user_id,
-        AllowanceRequest.scope == accounting_scope(),
+        (AllowanceRequest.scope == accounting_scope()) | (AllowanceAccount.plan == "starter"),
         AllowanceRequest.request_id == request_id,
     )
     if lock:
-        q = q.with_for_update()
+        q = q.with_for_update(of=AllowanceRequest).execution_options(populate_existing=True)
     return (await session.exec(q)).first()
 
 
@@ -412,7 +439,7 @@ async def finish_attempt(
         await session.exec(
             select(ProviderAttempt)
             .where(ProviderAttempt.id == attempt_id)
-            .with_for_update()
+            .with_for_update().execution_options(populate_existing=True)
         )
     ).one()
     if p.status in {"complete", "failed"}:
@@ -456,7 +483,7 @@ async def settle(session, user_id, request_id, *, success, release_unknown=False
         await session.exec(
             select(AllowanceAccount)
             .where(AllowanceAccount.id == r.account_id)
-            .with_for_update()
+            .with_for_update().execution_options(populate_existing=True)
         )
     ).one()
     attempts = (
@@ -464,6 +491,12 @@ async def settle(session, user_id, request_id, *, success, release_unknown=False
             select(ProviderAttempt).where(ProviderAttempt.request_id == r.id)
         )
     ).all()
+    if success and not release_unknown and a.plan == "starter" and a.trial_started_at is None:
+        # Account row lock makes simultaneous successes activate exactly once.
+        a.trial_started_at = datetime.now(UTC).replace(tzinfo=None)
+        a.period_end = a.trial_started_at + timedelta(days=7)
+        session.add(a)
+        session.add(AllowanceEvent(account_id=a.id, request_id=r.id, event_key=f"trial_start:{a.id}", kind="trial_start", units=0, luna_units=0))
     if any(p.supplier_units is None for p in attempts) and not release_unknown:
         r.status = "pending"
         session.add(r)
@@ -487,6 +520,8 @@ async def settle(session, user_id, request_id, *, success, release_unknown=False
             if p.included
         ),
     )
+    if not success:
+        luna = 0
     a.reserved -= r.ceiling
     a.luna_reserved -= r.luna_ceiling
     a.spent += charged
