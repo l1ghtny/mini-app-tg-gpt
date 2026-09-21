@@ -1,3 +1,14 @@
+# Lightny AI dual-domain compatibility — September 21, 2026
+
+In progress in an isolated migration clone. Added explicit browser origins,
+state-bound Telegram/email callbacks, RP metadata and domain-specific passkey
+ceremonies. Paired frontend resolves API/SSE/images/help/share/install URLs locally.
+No app or DB is moving to Moscow. Tests and CI release verification in progress;
+public entry-point switch and real-device acceptance remain pending.
+See docs/operations/lightnyai-domain-migration.md.
+
+---
+
 # Private tier cutover in progress — 21 September 2026
 
 Approved: Close Friends = Premium, Katush = Max, Smooth = Premium initially. Implemented subscription-backed monthly private grants, shared production/beta ledger scope retaining beta spend, audited capacity adjustments, and private plan labels. Starter onboarding and sharing remain unchanged pending owner review. Explicit cohort prevents unapproved starter grants. Tests pass; deployment and live verification are next. Details: backend docs/operations/2026-09-21-private-allowance-cutover.md.

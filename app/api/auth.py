@@ -26,6 +26,7 @@ from app.api.telegram_oidc import (
     begin_telegram_oidc,
     complete_telegram_oidc,
     frontend_redirect,
+    oidc_return_origin,
 )
 from app.api.identity_helpers import issue_telegram_link
 from app.api.passkey_helpers import (
@@ -311,9 +312,10 @@ async def login_telegram(
 @auth.get("/telegram/oidc/start")
 async def start_telegram_oidc_login(
     return_to: str = "/",
+    origin: str | None = None,
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
-    authorization_url = await begin_telegram_oidc(redis, return_to=return_to)
+    authorization_url = await begin_telegram_oidc(redis, return_to=return_to, origin=origin)
     return RedirectResponse(authorization_url, status_code=status.HTTP_302_FOUND)
 
 
@@ -326,9 +328,10 @@ async def finish_telegram_oidc_login(
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
+    return_origin = await oidc_return_origin(redis, state, consume=bool(error or not code))
     if error or not code or not state:
         return RedirectResponse(
-            frontend_redirect("/", "cancelled" if error else "error"),
+            frontend_redirect("/", "cancelled" if error else "error", return_origin),
             status_code=status.HTTP_302_FOUND,
         )
     try:
@@ -350,12 +353,12 @@ async def finish_telegram_oidc_login(
     except HTTPException:
         settings.custom_logger.warning("Telegram browser login failed", exc_info=True)
         return RedirectResponse(
-            frontend_redirect("/", "error"),
+            frontend_redirect("/", "error", return_origin),
             status_code=status.HTTP_302_FOUND,
         )
 
     response = RedirectResponse(
-        frontend_redirect(identity.return_to, "success"),
+        frontend_redirect(identity.return_to, "success", identity.frontend_origin),
         status_code=status.HTTP_302_FOUND,
     )
     set_session_cookie(response, await create_browser_session(session, user, request))
@@ -407,6 +410,7 @@ async def _request_email_challenge(
             email=email,
             target_user=target_user,
             debug_delivery=_allow_debug_magic_link(request),
+            origin=request.headers.get("origin"),
         )
     except (RuntimeError, OSError, smtplib.SMTPException) as exc:
         settings.custom_logger.exception("Web login email delivery is unavailable")
@@ -482,7 +486,7 @@ async def verify_email_magic_link(
         raise HTTPException(status_code=404, detail="Not Found")
 
     access_token, bonus_granted, user = await consume_magic_link(
-        session, token=payload.token
+        session, token=payload.token, origin=request.headers.get("origin")
     )
     ensure_deployment_user_allowed(user)
     set_session_cookie(response, await create_browser_session(session, user, request))
@@ -538,6 +542,7 @@ async def passkey_registration_verify(
         ceremony_id=payload.ceremony_id,
         credential=payload.credential,
         name=payload.name,
+        origin=resolve_passkey_context(request)[0],
     )
     return _passkey_view(passkey)
 
@@ -581,6 +586,7 @@ async def passkey_authentication_verify(
         redis,
         ceremony_id=payload.ceremony_id,
         credential=payload.credential,
+        origin=resolve_passkey_context(request)[0],
     )
     ensure_deployment_user_allowed(user)
     access_token = create_access_token(data={"sub": str(user.id)})

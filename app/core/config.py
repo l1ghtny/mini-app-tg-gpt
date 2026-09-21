@@ -143,6 +143,12 @@ class Settings:
         "1",
     )
     WEB_AUTH_LINK_TTL_MINUTES: int = int(os.getenv("WEB_AUTH_LINK_TTL_MINUTES", "15"))
+    # Additional exact HTTPS app origins; each uses same-origin auth callbacks.
+    WEB_AUTH_ADDITIONAL_ORIGINS: tuple[str, ...] = tuple(
+        origin.strip().rstrip("/")
+        for origin in os.getenv("WEB_AUTH_ADDITIONAL_ORIGINS", "").split(",")
+        if origin.strip()
+    )
     WEB_AUTH_CALLBACK_URL: str = os.getenv("WEB_AUTH_CALLBACK_URL", "")
     WEB_AUTH_FROM_EMAIL: str = os.getenv("WEB_AUTH_FROM_EMAIL", "")
     TELEGRAM_OIDC_ENABLED: bool = os.getenv(
