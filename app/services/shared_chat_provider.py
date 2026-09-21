@@ -219,7 +219,7 @@ class ChatRun:
             if exc.status_code in {400, 401, 403, 404, 422, 429}:
                 await self.finish(attempt, model, {}, success=False, units=0)
             raise
-        outputs = [x.model_dump() for x in r.output]
+        outputs = [x.model_dump(exclude_none=True) for x in r.output]
         usage = normalize_openai_usage(r.usage, outputs)
         cost = usage_units(model, usage)
         await self.finish(
@@ -282,7 +282,8 @@ async def openai_turn(
                 complete = ev.response
         if complete is None:
             raise RuntimeError("Provider stream ended without final usage")
-        output = [x.model_dump() for x in complete.output]
+        # Omit absent SDK fields when replaying output as input after a tool call.
+        output = [x.model_dump(exclude_none=True) for x in complete.output]
         usage = normalize_openai_usage(complete.usage, output)
         await run.finish(
             attempt, model, usage, complete.id, success=complete.status == "completed"
@@ -424,11 +425,13 @@ async def claude_turn(
         blocks[i]["input"] = json.loads(fragment)
     output = [blocks[i] for i in sorted(blocks)]
     success = stop in {"end_turn", "tool_use", "stop_sequence"}
+    normalized_usage = normalize_claude_usage(usage)
+    normalized_usage["stop_reason"] = stop
     await run.finish(
-        attempt, model, normalize_claude_usage(usage), response_id, success=success
+        attempt, model, normalized_usage, response_id, success=success
     )
     if not success:
-        raise RuntimeError("Claude did not finish the answer; try a smaller task")
+        raise RuntimeError(f"Claude did not finish the answer (stop_reason={stop})")
     yield {
         "type": "turn.result",
         "output": output,
