@@ -345,8 +345,8 @@ async def history(
         used_units=int(charged),
         used_percent=round(100 * int(charged) / a.granted, 3) if a.granted else 0,
         next_offset=offset + len(items) if offset + len(items) < total else None,
-        period_start=a.period_start.replace(tzinfo=UTC).isoformat(),
-        period_end=a.period_end.replace(tzinfo=UTC).isoformat(),
+        period_start=(a.trial_started_at.replace(tzinfo=UTC).isoformat() if a.trial_started_at else None) if a.plan == "starter" else a.period_start.replace(tzinfo=UTC).isoformat(),
+        period_end=None if a.plan == "starter" and a.trial_started_at is None else a.period_end.replace(tzinfo=UTC).isoformat(),
         chats=[
             dict(id=str(cid), title=title, folder_id=str(fid) if fid else None)
             for cid, title, fid, _ in facets

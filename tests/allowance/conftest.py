@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.models import AppUser
+from app.db.subscription_tiers import SubscriptionTier, UserSubscription
 from app.db.allowance import (
     AllowanceAccount,
     AllowanceRequest,
@@ -34,6 +35,8 @@ async def db(monkeypatch):
         m.__table__
         for m in (
             AppUser,
+            SubscriptionTier,
+            UserSubscription,
             AllowanceAccount,
             AllowanceRequest,
             AllowanceEvent,

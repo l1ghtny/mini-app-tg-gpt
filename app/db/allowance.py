@@ -9,6 +9,8 @@ from sqlalchemy import (
     UniqueConstraint,
     CheckConstraint,
     JSON,
+    Index,
+    text,
 )
 from sqlmodel import SQLModel, Field
 from app.db.models import utcnow_naive
@@ -21,6 +23,7 @@ class AllowanceAccount(SQLModel, table=True):
     scope: str = Field(index=True)
     period_start: datetime = Field(sa_column=Column(DateTime, nullable=False))
     period_end: datetime = Field(sa_column=Column(DateTime, nullable=False))
+    trial_started_at: datetime | None = Field(default=None, sa_column=Column(DateTime, nullable=True))
     plan: str
     rate_version: str
     granted: int = Field(sa_column=Column(BigInteger, nullable=False))
@@ -30,6 +33,7 @@ class AllowanceAccount(SQLModel, table=True):
     luna_spent: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     luna_reserved: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     __table_args__ = (
+        Index("uq_allowance_trial_user", "user_id", unique=True, postgresql_where=text("plan = 'starter'")),
         UniqueConstraint(
             "user_id", "scope", "period_start", name="uq_allowance_period"
         ),

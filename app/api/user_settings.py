@@ -6,7 +6,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.api.dependencies import get_current_user
 from app.db.database import get_session
 from app.db.models import AppUser
-from app.schemas.user_settings import UserSettingsResponse, UpdateUserSettingsRequest
+from app.core.config import settings
+from sqlmodel import select
+from app.schemas.user_settings import (UserSettingsResponse, UpdateUserSettingsRequest, OnboardingVisitRequest, OnboardingClaimRequest)
 from app.services.model_registry import (
     get_text_model_provider,
     get_image_model_provider,
@@ -68,9 +70,14 @@ def _provider_mismatch_detail(*, model: str, image_model: str) -> dict[str, str]
 async def get_user_settings(
     current_user: AppUser = Depends(get_current_user),
 ):
+    from app.services import allowance
+    from app.services.allowance_policy import MODELS
+    default_text = canonicalize_text_model(current_user.default_text_model or "gpt-5.4-nano")
+    if allowance.enabled(current_user.id) and settings.SHARED_ALLOWANCE_TRIAL_ENABLED and str(current_user.id).lower() not in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS and default_text not in MODELS:
+        default_text = "claude-sonnet-5"
     return UserSettingsResponse(
         language=getattr(current_user, "preferred_language", None),
-        default_text_model=canonicalize_text_model(current_user.default_text_model or "gpt-5.4-nano"),
+        default_text_model=default_text,
         default_image_model=canonicalize_image_model(
             current_user.default_image_model or "gpt-image-1.5"
         ),
@@ -86,6 +93,8 @@ async def update_user_settings(
     session: AsyncSession = Depends(get_session),
     current_user: AppUser = Depends(get_current_user),
 ):
+    # Merge account-level onboarding events against the latest locked state.
+    current_user = (await session.exec(select(AppUser).where(AppUser.id == current_user.id).with_for_update().execution_options(populate_existing=True))).one()
     text_model = canonicalize_text_model(request.default_text_model or current_user.default_text_model or "gpt-5.4-nano")
     image_model = canonicalize_image_model(
         request.default_image_model or current_user.default_image_model or "gpt-image-1.5"
@@ -131,3 +140,15 @@ async def update_user_settings(
         default_thinking=bool(getattr(current_user, "default_thinking", True)),
         onboarding_state=_onboarding_state(current_user),
     )
+
+
+@user_settings.post("/onboarding/visit")
+async def onboarding_visit(request: OnboardingVisitRequest, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+    from app.services.onboarding import progress
+    return await progress(session, current_user.id, request.session_id)
+
+
+@user_settings.post("/onboarding/claim")
+async def onboarding_claim(request: OnboardingClaimRequest, session: AsyncSession = Depends(get_session), current_user: AppUser = Depends(get_current_user)):
+    from app.services.onboarding import claim_nudge
+    return {"claimed": await claim_nudge(session, current_user.id, request.item)}

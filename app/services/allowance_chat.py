@@ -30,6 +30,7 @@ def tool_names(choice):
 async def estimate(session, user, conversation, request):
     allowance.require_enabled(user.id)
     a = await allowance.account(session, user.id)
+    allowance.require_active(a)
     if request.model not in allowance.model_access(a.plan):
         raise HTTPException(403, detail={"error": "model_not_in_plan"})
     rows = (
