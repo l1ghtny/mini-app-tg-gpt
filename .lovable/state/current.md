@@ -1,3 +1,19 @@
+# Private tier cutover in progress — 21 September 2026
+
+Approved: Close Friends = Premium, Katush = Max, Smooth = Premium initially. Implemented subscription-backed monthly private grants, shared production/beta ledger scope retaining beta spend, audited capacity adjustments, and private plan labels. Starter onboarding and sharing remain unchanged pending owner review. Explicit cohort prevents unapproved starter grants. Tests pass; deployment and live verification are next. Details: backend docs/operations/2026-09-21-private-allowance-cutover.md.
+
+---
+
+# Beta released — 21 September 2026
+
+User authorized beta deployment and production schema preparation. All missing production commits were merged while preserving beta Work. Backend beta 459814d and frontend beta 8cfedc0 are pushed. TeamCity flow 174 / 8984 passed all four jobs and reused successful flow-173 children; live API, Work worker and frontend run beta-173 with available replicas. Production received only additive allowance schema head xt7b8c9d0e1f via flow 63; legacy production entitlement behavior remains active.
+
+Live beta acceptance: all seven chat models returned successful replies; Luna web search and final continuation, Sonnet document retrieval/citations, Flare generation and same-chat editing, usage settlement and desktop/mobile plans passed. Final accounting has zero outstanding reservations. Existing Work history loaded; no new Work task, fresh Telegram login or paid checkout was tested. Public checkout stays disabled and the existing two-account beta cohort is unchanged. Follow-up fixes removed old image-energy/retired-model UI leaks and null SDK tool-continuation fields. Backend 41 isolated tests, full frontend 361 tests, follow-up UI 15 tests, TypeScript/build and focused checks passed.
+
+Next: gather beta feedback; obtain owner agreement on private capacities (Close Friends 10× Start, Katush 20×, Smooth 40×; proposal only). Then implement production grants/renewal/audited adjustments and one shared prod/beta entitlement without duplicate grants; validate and deploy the final production cutover. No private-tier changes have been applied. Release report and proposal are in /private/tmp/lightny-allowance-20260920/release-2026-09-21.md and private-tier-proposal.md. This entry supersedes the historical no-deployment next steps below.
+
+---
+
 # UX/UI follow-up complete — 21 September 2026
 
 Rewrote EN/RU plan cards around access/capacity differences; fixed preference draft loss, document expiry/deletion clarity, mobile drawer close/scroll controls, project save recovery and form labels. Mirrored across feature and beta-integration frontend worktrees. No deployment or push.

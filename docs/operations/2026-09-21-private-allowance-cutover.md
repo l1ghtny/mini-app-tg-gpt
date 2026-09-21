@@ -1,0 +1,13 @@
+# Private allowance cutover — 21 September 2026
+
+Owner-approved capacities: Close Friends Tier = Premium (5× Start, 6,250,000 shared units and 1,000,000 Luna units/month); Katush Tier = Max (20× Start, 25,000,000 shared and 3,330,000 Luna/month); Smooth tier = Premium initially, to review after actual usage. All seven chat models and Flare are included. Private tier names stay intact.
+
+Rollout membership is explicit in SHARED_ALLOWANCE_PRIVATE_USER_IDS. This selects which existing accounts use the new pipeline; active, started, unexpired subscriptions to the three named private tiers independently authorize each grant. Adding a new private account also requires adding its ID to both deployment secrets until general onboarding migration replaces this rollout gate. Overlapping subscriptions select the highest capacity once. Expiry prevents new grants or admissions; in-flight accounting can still settle.
+
+SHARED_ALLOWANCE_SCOPE=beta is intentional on both production and beta: it reuses the existing beta ledger namespace, preserving all previous spend, provider attempts and idempotency keys. It is not a second beta bonus. Calendar-month renewal creates one grant per user and period. Plan changes replace capacity with an audited signed adjustment, preserve spent units and reservations, and never refill the balance. A downgrade below committed usage blocks further spend until enough capacity is available or the month renews.
+
+The private-only rollout leaves existing starter entitlements and onboarding unchanged. Public plan purchases remain unavailable in the new allowance UI; no new public offer or starter capacity is authorized by this release. Existing beta access restrictions remain intact. No new migration is needed beyond xt7b8c9d0e1f.
+
+Operator release sequence: deploy code to production and beta with the same explicit cohort and namespace; carry over the existing provider credentials without printing them; configure the same aggregate supplier exposure guard on both; verify exact revisions, live images, readiness, every private account's plan/grant, unchanged beta spend, and a real authenticated request. Do not reset legacy counters or delete historical grants. Rollback the feature flag if needed; preserve all ledger data for reconciliation.
+
+Validation before release: 48 isolated-schema allowance tests passed in both backend branches; production frontend 330 tests, targeted beta UI eight tests, TypeScript and both frontend builds passed. Checks cover plan capacities, monthly renewal, expiry, overlap, downgrade, cross-environment idempotency and private-plan UI copy. Ruff passed. Live rollout verification is recorded separately after deployment.

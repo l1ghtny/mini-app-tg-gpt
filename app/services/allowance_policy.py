@@ -51,6 +51,8 @@ MODELS = {
         ),
     )
 }
+PRIVATE_PLANS = {"Close Friends Tier": "premium", "Katush Tier": "max", "Smooth tier": "premium"}
+
 PLANS = {
     "start": dict(name="Start", price_rub=490, multiple=1, luna_units=290_000),
     "plus": dict(name="Plus", price_rub=990, multiple=2, luna_units=500_000),

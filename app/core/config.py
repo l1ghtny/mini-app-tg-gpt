@@ -34,6 +34,12 @@ _normalize_proxy_env_aliases()
 
 class Settings:
     SHARED_ALLOWANCE_ENABLED = os.getenv("SHARED_ALLOWANCE_ENABLED", "false").lower() in ("true", "1")
+    # Explicit rollout membership; active subscriptions remain authoritative for grants.
+    SHARED_ALLOWANCE_PRIVATE_USER_IDS = {
+        value.strip().lower() for value in os.getenv("SHARED_ALLOWANCE_PRIVATE_USER_IDS", "").split(",") if value.strip()
+    }
+    # Production and beta deliberately reuse the existing beta accounting namespace.
+    SHARED_ALLOWANCE_SCOPE = os.getenv("SHARED_ALLOWANCE_SCOPE", "").strip()
     SHARED_ALLOWANCE_BETA_PLAN = os.getenv("SHARED_ALLOWANCE_BETA_PLAN", "premium")
     SHARED_ALLOWANCE_PROVIDER_BUDGET_UNITS = int(os.getenv("SHARED_ALLOWANCE_PROVIDER_BUDGET_UNITS", "25000000"))
     SHARED_ALLOWANCE_HISTORY_TOKENS = int(os.getenv("SHARED_ALLOWANCE_HISTORY_TOKENS", "8000"))
