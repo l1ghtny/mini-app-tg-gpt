@@ -44,6 +44,8 @@ async def test_redeeming_private_code_exits_trial_without_rollout_membership(db,
     state = await a.snapshot(s, user.id)
     assert state['plan'] == 'premium' and state['tier_name'] == 'Close Friends Tier'
     assert state['granted_units'] == 6_250_000 and state['trial'] is None
+    sub = (await s.exec(select(UserSubscription).where(UserSubscription.user_id == user.id))).one()
+    assert sub.auto_renew_enabled is False
     await s.refresh(original)
     assert original.spent == 100 and original.plan == 'starter'
     monkeypatch.setattr(a.settings, 'DEPLOYMENT_CHANNEL', 'beta')
@@ -61,6 +63,7 @@ async def test_expired_private_membership_can_be_renewed_by_a_new_code(db, monke
     assert response.status_code == 202
     await s.refresh(sub)
     assert sub.expires_at > datetime.now()
+    assert sub.auto_renew_enabled is False
     assert (await a.snapshot(s, user.id))['plan'] == 'premium'
 
 

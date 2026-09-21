@@ -227,6 +227,7 @@ async def redeem_access_code_for_user(
                 tier_id=access_code.tier_id,
                 status="active",
                 started_at=now,
+                auto_renew_enabled=False,
                 expires_at=expires_at,
             )
             session.add(subscription_for_user)
@@ -234,6 +235,7 @@ async def redeem_access_code_for_user(
         elif existing_sub.expires_at and existing_sub.expires_at <= now:
             existing_sub.started_at = now
             existing_sub.expires_at = expires_at
+            existing_sub.auto_renew_enabled = False
             session.add(existing_sub)
             changed = True
 
