@@ -4,7 +4,7 @@ import os
 import re
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -411,12 +411,23 @@ def _active_documents_query(user_id: uuid.UUID):
     )
 
 
+async def _document_limits_for_user(session: AsyncSession, user: AppUser) -> _DocLimits:
+    from app.services.allowance import current_plan
+
+    plan = await current_plan(session, user.id)
+    if plan:
+        # Reuse established paid capacities; Max expands AI capacity, not file storage.
+        legacy_name = {"start": "basic", "plus": "advanced", "premium": "premium", "max": "premium"}[plan]
+        limits = _default_limits_for_tier_name(legacy_name)
+        return replace(limits, tier_name=plan.title())
+    return _tier_doc_limits(await get_active_tier(session, user.id))
+
+
 async def get_document_capabilities(
     session: AsyncSession,
     user: AppUser,
 ) -> DocumentCapabilitiesResponse:
-    tier = await get_active_tier(session, user.id)
-    limits = _tier_doc_limits(tier)
+    limits = await _document_limits_for_user(session, user)
 
     active_count, pinned_count, used_storage = (
         await session.exec(

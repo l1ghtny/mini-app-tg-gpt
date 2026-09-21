@@ -96,6 +96,26 @@ async def account(session, user_id, *, now=None):
     return row
 
 
+async def current_plan(session, user_id):
+    """Read the cohort's current grant without creating a billing account."""
+    if not enabled(user_id):
+        return None
+    start, _ = period()
+    row = (
+        await session.exec(
+            select(AllowanceAccount).where(
+                AllowanceAccount.user_id == user_id,
+                AllowanceAccount.scope == settings.DEPLOYMENT_CHANNEL,
+                AllowanceAccount.period_start == start,
+            )
+        )
+    ).first()
+    plan = row.plan if row else settings.SHARED_ALLOWANCE_BETA_PLAN
+    if plan not in PLANS:
+        raise HTTPException(503, detail="Invalid allowance configuration")
+    return plan
+
+
 def available(a):
     return a.granted - a.spent - a.reserved
 
@@ -469,7 +489,33 @@ def catalog():
         "claude-opus-5": "Claude Opus 5",
         "claude-fable-5-1": "Claude Fable 5.1",
     }
-    ranks = {"everyday": 0, "standard": 1, "advanced": 2, "flagship": 3}
+    descriptions = {
+        "gpt-5.6-luna": (
+            "Everyday questions and quick rewrites",
+            "Повседневные вопросы и быстрые правки",
+        ),
+        "gpt-5.6-terra": (
+            "Writing, study and everyday reasoning",
+            "Тексты, учёба и повседневные задачи",
+        ),
+        "gpt-5.6-sol": (
+            "Deeper analysis and complex reasoning",
+            "Глубокий анализ и сложные рассуждения",
+        ),
+        "gpt-6-astra": (
+            "Demanding analysis and difficult problems",
+            "Подробный анализ и трудные задачи",
+        ),
+        "claude-sonnet-5": ("Writing, research and code", "Тексты, исследования и код"),
+        "claude-opus-5": (
+            "Complex writing, analysis and code",
+            "Сложные тексты, анализ и код",
+        ),
+        "claude-fable-5-1": (
+            "Demanding research and complex projects",
+            "Глубокие исследования и сложные проекты",
+        ),
+    }
     return dict(
         text_models=[
             dict(
@@ -489,7 +535,10 @@ def catalog():
                 not_great_for=[],
                 not_great_for_ru=[],
                 badges=[],
-                intelligence=ranks[p.group],
+                group=p.group,
+                intelligence=None,
+                description=descriptions[name][0],
+                description_ru=descriptions[name][1],
                 tier_required=None,
                 supports=dict(
                     vision=True,
@@ -507,6 +556,8 @@ def catalog():
                 model_name="gpt-image-2.5-flare",
                 display_name="Flare",
                 display_name_ru="Flare",
+                description="Create images or edit images from this chat. Higher quality uses more of your shared allowance.",
+                description_ru="Создавайте изображения и редактируйте картинки из этого чата. Чем выше качество, тем больше расход общего лимита.",
                 provider="openai",
                 best_for=[],
                 best_for_ru=[],

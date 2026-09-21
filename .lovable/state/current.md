@@ -1,3 +1,53 @@
+# UX/UI follow-up complete — 21 September 2026
+
+Rewrote EN/RU plan cards around access/capacity differences; fixed preference draft loss, document expiry/deletion clarity, mobile drawer close/scroll controls, project save recovery and form labels. Mirrored across feature and beta-integration frontend worktrees. No deployment or push.
+
+Validation: feature frontend 328 tests, beta 355 tests; both TypeScript/build/focused lint passed. Live review at 1440x1000, 1280x800, 390x844 and 360x800, EN/light and RU/dark. No new provider calls or production data changes. Preview created one empty synthetic project while reviewing New project. EN/light restored; viewport reset; review tab left on Plans.
+
+Coverage limitations: Work reports unavailable in local beta integration, so execution is not verified; real-device keyboard/Telegram checks and target-environment auth/streaming smoke checks remain. Purchases are disabled. Existing bundle-size warning remains. Full coverage/findings: docs/product-strategy/2026-09-21-ui-followup-review.md in backend worktrees.
+
+Next: user review and feedback; then explicitly decide beta rollout. Do not deploy automatically. Prices/allowances remain unchanged and provisional.
+
+---
+
+# Desktop UI refinement implemented — 20 September 2026
+
+Implemented locally on production-based feature and beta-integration worktrees. Nothing deployed or pushed.
+
+- Direct desktop model picker with all seven choices, neighboring conversation controls, consistent names and bilingual task descriptions. Navigation groups are no longer presented as intelligence scores; capability aliases are normalized.
+- Desktop Settings has General, AI preferences, Documents, Plan & usage, Account & security and Help navigation. Documents and personalization render within the content panel; mobile drawers remain.
+- Balance opens Usage; upgrade actions open Plans. All four plan cards compare side by side when space permits, with 2/1-column fallbacks. Usage summary is constrained to 840px; task history has desktop columns and visible filters, with mobile disclosure/stacking.
+- Resizable desktop sidebar (240–420px, persisted locally, keyboard accessible), labeled New chat action, composer aligned to the reading column, secondary chat actions grouped in a menu. Beta Work handoff remains available.
+- Image settings lead directly to quality when Flare is the only image model. Tool overrides are disclosed on demand. Project terminology and document action labels improved.
+- Shared-cohort document capacities follow the existing monthly allowance grant: Start = legacy Basic (50 docs / 200 MiB / 100 MiB file / 25 pinned); Plus = Advanced (100 / 500 MiB / 250 MiB / 50); Premium and Max = Premium (200 / 1 GiB / 512 MiB / 100). Existing five-day unpinned retention retained. Legacy users outside the cohort unchanged. No plan prices or AI grants rebalanced.
+
+Validation: 40 isolated-schema backend tests passed in each backend worktree; feature frontend full suite 323 tests and beta full suite 350 tests passed, then a new picker-switch regression increased its focused suite to 7 passing tests. TypeScript and both production builds passed; final beta build also passed after accessibility labels and picker-switch fix. Focused lint has no errors (existing hook/fast-refresh warnings). No new paid model calls were needed.
+
+Visual/interaction checks: 1440×1000, 1280×800 and 390×844; EN/RU and light/dark; direct picker, model details, separate controls, image qualities, allowance entry routing, four-card plans, model/task usage, settings navigation, embedded documents and actual 200-doc/1-GiB Premium capacity. Sidebar keyboard resize verified and reset; language/theme restored to EN/light. Browser viewport override reset at handoff.
+
+Beta capability tests use dummy storage configuration for existing Work imports; no storage requests or real credentials are needed.
+
+Next: user review of the local preview at http://127.0.0.1:5197/. Resolve feedback before deciding whether to deploy beta. Deployment remains explicitly withheld. Prices and allowances remain provisional.
+
+---
+
+## 2026-09-20 UI review before beta — review only
+
+- Reviewed local desktop/mobile chat, picker/details, image options, settings, personalization, documents, history management, plans and usage. No application code changed or deployment performed.
+- Confirmed blockers: catalog group ranks appear as misleading intelligence scores; new capability keys leak untranslated in model details. Shared allowance entry routing always opens Plans, including the percentage badge.
+- Desktop priorities: direct compact model picker, appropriately bounded usage overview with desktop detail columns, category navigation for Settings, four-tier comparison at wide widths. Keep mobile drawers and existing visual identity.
+- Verify document grants for the real beta cohort: synthetic Premium allowance currently coexists with legacy free-tier document limits. This is a release check, not proof of a production defect.
+- Full review: backend docs/product-strategy/2026-09-20-ui-release-review.md. Next: agree implementation scope, then carry out the prioritized polish before beta; do not deploy without the user's instruction.
+
+## 2026-09-20 model usage summary and subscription clarity
+
+- Added current-period usage history API with model summaries (distinct chats and whole-task allowance), model drill-down, text/image, provider, owned chat/folder filters and pagination. Deleted chat costs remain accounted without retaining deleted titles/snippets.
+- Usage now defaults to model rows; details stay behind a row click or All tasks. Search/document tools stay with the selected chat model. Flare image costs now have their own Images section and are subtracted from chat-model costs.
+- Subscription cards lead with capability/access descriptions. Exact included models expand by provider. Prices and capacity unchanged.
+- Verified 34 isolated backend allowance tests, 349 beta frontend tests, TypeScript, build and changed-file lint. Reviewed model summary, drill-down and tier disclosure at desktop/mobile sizes in the local synthetic preview.
+- Implemented separate Chat models and Images sections. Flare counts successful image calls from completed tasks (current image API uses n=1); its row opens image-only costs. Chat model rows open chat-only costs. The history API accepts cost_scope=all/chat/images. Image allocation uses actual customer charges, proportionally applies request caps, leaves integer rounding remainder in chat, and keeps failed/pending costs at zero. Exact reconciliation and page-independent totals are tested, including included Luna text and multiple image calls. No billing mutations or migration changes.
+- Next: user reviews the updated local UI. No push, production mutation or beta deployment performed. Pricing/capacity changes remain separate follow-up decisions.
+
 ## 2026-09-20 local beta integration complete
 
 - Production-based feature branch: `codex/shared-allowance-20260920` (backend 729ff3b / frontend e9a41cd before docs). Separate local beta-integration branch: `codex/shared-allowance-beta-20260920` (backend 1359a1e / frontend dd99504 before docs), carrying only the allowance commits and preserving beta Work. Both remain unpushed.

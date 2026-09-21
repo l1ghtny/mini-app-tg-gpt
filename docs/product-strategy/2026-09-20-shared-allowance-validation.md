@@ -156,3 +156,12 @@ Prepared an additional local beta-based branch without pushing. Its 343 frontend
 tests, app TypeScript and Vite build pass; backend 32 allowance and 11 selected
 existing tests pass. Real Fable text and signed-estimate smoke checks passed on
 the integrated local runtime. See the rollout runbook for branch/revision details.
+
+## 2026-09-20 model usage summary and subscription clarity
+
+- Added current-period usage history API with model summaries (distinct chats and whole-task allowance), model drill-down, text/image, provider, owned chat/folder filters and pagination. Deleted chat costs remain accounted without retaining deleted titles/snippets.
+- Usage now defaults to model rows; details stay behind a row click or All tasks. Search/document tools stay with the selected chat model. Flare image costs now have their own Images section and are subtracted from chat-model costs.
+- Subscription cards lead with capability/access descriptions. Exact included models expand by provider. Prices and capacity unchanged.
+- Verified 34 isolated backend allowance tests, 349 beta frontend tests, TypeScript, build and changed-file lint. Reviewed model summary, drill-down and tier disclosure at desktop/mobile sizes in the local synthetic preview.
+- Implemented separate Chat models and Images sections. Flare counts successful image calls from completed tasks (current image API uses n=1); its row opens image-only costs. Chat model rows open chat-only costs. The history API accepts cost_scope=all/chat/images. Image allocation uses actual customer charges, proportionally applies request caps, leaves integer rounding remainder in chat, and keeps failed/pending costs at zero. Exact reconciliation and page-independent totals are tested, including included Luna text and multiple image calls. No billing mutations or migration changes.
+- Next: user reviews the updated local UI. No push, production mutation or beta deployment performed. Pricing/capacity changes remain separate follow-up decisions.

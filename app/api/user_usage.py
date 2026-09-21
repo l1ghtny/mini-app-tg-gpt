@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends
+import uuid
+from typing import Literal
+from fastapi import APIRouter, Depends, Query
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import user_usage_helpers
@@ -47,6 +49,38 @@ async def my_image_energy_usage(
 
 
 @user_usage.get("/me/allowance")
-async def my_allowance(session: AsyncSession = Depends(get_session), user=Depends(get_current_user)):
+async def my_allowance(
+    session: AsyncSession = Depends(get_session), user=Depends(get_current_user)
+):
     from app.services.allowance import snapshot
+
     return await snapshot(session, user.id)
+
+
+@user_usage.get("/me/allowance/history")
+async def my_allowance_history(
+    kind: Literal["all", "text", "images"] = "all",
+    cost_scope: Literal["all", "chat", "images"] = "all",
+    provider: Literal["openai", "anthropic"] | None = None,
+    model: str | None = Query(None, max_length=100),
+    conversation_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=50),
+    session: AsyncSession = Depends(get_session),
+    user=Depends(get_current_user),
+):
+    from app.services.allowance_history import history
+
+    return await history(
+        session,
+        user.id,
+        kind=kind,
+        cost_scope=cost_scope,
+        provider=provider,
+        model=model,
+        conversation_id=conversation_id,
+        folder_id=folder_id,
+        offset=offset,
+        limit=limit,
+    )
