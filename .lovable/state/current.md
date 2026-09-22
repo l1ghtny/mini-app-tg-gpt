@@ -1398,3 +1398,6 @@ Ship server-backed chat drafts and Favorites together with the matching frontend
 
 1. Obtain the separate immediate production-release approval before pushing the prepared default-branch commits that trigger `LightnyReleaseFlow`.
 2. Verify the production migration no-op, workloads, images, public health, and the same user-visible behaviors independently of CI success.
+# 2026-09-21 Passkey management implemented locally
+
+Prepared isolated paired worktrees at /private/tmp/lightny-passkey-management/{backend,frontend}, branch codex/passkey-management-20260921. Localized legacy default names; added owner-only renaming, creation/last-use browser context, dates and selected-key deletion confirmation. Exposes existing RP metadata without changing domain handling. Nullable migration xw0e1f2a3b4c must precede backend deployment. Frontend contracts and evidence: docs/operations/2026-09-21-passkey-management.md. Release to production and beta authorized on 22 September, after the usage-efficiency release completes. Next: integrate both branch pairs, production migration/release, beta release, and live version checks; real registration/sign-in remains a user-device check.

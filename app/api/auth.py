@@ -114,6 +114,15 @@ class PasskeyView(BaseModel):
     transports: list[str]
     created_at: str
     last_used_at: str | None
+    rp_id: str | None = None
+    created_browser: str | None = None
+    created_os: str | None = None
+    last_used_browser: str | None = None
+    last_used_os: str | None = None
+
+
+class PasskeyRename(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
 
 
 class BrowserSessionView(BaseModel):
@@ -141,6 +150,11 @@ def _passkey_view(passkey: models.PasskeyCredential) -> PasskeyView:
         transports=passkey.transports,
         created_at=passkey.created_at.isoformat(),
         last_used_at=passkey.last_used_at.isoformat() if passkey.last_used_at else None,
+        rp_id=passkey.rp_id,
+        created_browser=passkey.created_browser,
+        created_os=passkey.created_os,
+        last_used_browser=passkey.last_used_browser,
+        last_used_os=passkey.last_used_os,
     )
 
 
@@ -543,6 +557,7 @@ async def passkey_registration_verify(
         credential=payload.credential,
         name=payload.name,
         origin=resolve_passkey_context(request)[0],
+        user_agent=request.headers.get("user-agent"),
     )
     return _passkey_view(passkey)
 
@@ -587,6 +602,7 @@ async def passkey_authentication_verify(
         ceremony_id=payload.ceremony_id,
         credential=payload.credential,
         origin=resolve_passkey_context(request)[0],
+        user_agent=request.headers.get("user-agent"),
     )
     ensure_deployment_user_allowed(user)
     access_token = create_access_token(data={"sub": str(user.id)})
@@ -611,6 +627,26 @@ async def list_passkeys(
         )
     ).all()
     return [_passkey_view(passkey) for passkey in passkeys]
+
+
+@auth.patch("/passkeys/{passkey_id}", response_model=PasskeyView)
+async def rename_passkey(
+    passkey_id: uuid.UUID,
+    payload: PasskeyRename,
+    current_user: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PasskeyView:
+    passkey = await session.get(models.PasskeyCredential, passkey_id)
+    if not passkey or passkey.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="passkey_not_found")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="passkey_name_required")
+    passkey.name = name
+    session.add(passkey)
+    await session.commit()
+    await session.refresh(passkey)
+    return _passkey_view(passkey)
 
 
 @auth.delete("/passkeys/{passkey_id}", status_code=status.HTTP_204_NO_CONTENT)

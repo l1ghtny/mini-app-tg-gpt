@@ -32,6 +32,7 @@ from webauthn.helpers.structs import (
 from app.core.config import settings
 from app.api.browser_origins import resolve_browser_origin
 from app.db import models
+from app.api.passkey_metadata import passkey_client
 
 _PASSKEY_PREFIX = "passkey:ceremony"
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -188,6 +189,7 @@ async def finish_passkey_registration(
     credential: dict,
     name: str | None,
     origin: str | None = None,
+    user_agent: str | None = None,
 ) -> models.PasskeyCredential:
     state = await _consume_ceremony(redis, kind="registration", ceremony_id=ceremony_id)
     if origin is not None and origin != state.get("origin"):
@@ -223,7 +225,8 @@ async def finish_passkey_registration(
     response = credential.get("response") if isinstance(credential, dict) else None
     raw_transports = response.get("transports") if isinstance(response, dict) else []
     transports = [item.value for item in _transports(raw_transports)]
-    label = (name or "").strip()[:80] or "Passkey"
+    label = (name or "").strip()[:80]
+    browser, platform = passkey_client(user_agent)
     passkey = models.PasskeyCredential(
         user_id=user.id,
         credential_id=credential_id,
@@ -234,6 +237,8 @@ async def finish_passkey_registration(
         device_type=verification.credential_device_type.value,
         backed_up=verification.credential_backed_up,
         name=label,
+        created_browser=browser,
+        created_os=platform,
     )
     session.add(passkey)
     try:
@@ -273,6 +278,7 @@ async def finish_passkey_authentication(
     *,
     ceremony_id: str,
     credential: dict,
+    user_agent: str | None = None,
     origin: str | None = None,
 ) -> tuple[models.AppUser, models.PasskeyCredential]:
     state = await _consume_ceremony(
@@ -323,6 +329,7 @@ async def finish_passkey_authentication(
     passkey.device_type = verification.credential_device_type.value
     passkey.backed_up = verification.credential_backed_up
     passkey.last_used_at = _utcnow_naive()
+    passkey.last_used_browser, passkey.last_used_os = passkey_client(user_agent)
     session.add(passkey)
     await session.commit()
     await session.refresh(passkey)
