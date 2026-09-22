@@ -164,7 +164,8 @@ def step_budget(
     return ceil_units(
         Decimal(input_upper_bound(messages, instructions, model=model))
         * max(Decimal(p.input_rate), Decimal(p.write_rate))
-        + Decimal(max_output or p.max_output) * Decimal(p.output_rate)
+        + Decimal(p.max_output if max_output is None else max_output)
+        * Decimal(p.output_rate)
         + search_calls * 10_000
         + file_calls * 2_500
     )
@@ -217,7 +218,8 @@ def output_target(model, effort="medium", required_tool=None):
 
 
 def affordable_output(model, messages, instructions, budget, *, target):
-    base = step_budget(model, messages, instructions, max_output=1)
-    base -= ceil_units(Decimal(MODELS[model].output_rate))
+    # Rounding a one-token total then subtracting a rounded token price can
+    # understate input cost by one unit, rejecting an otherwise valid last turn.
+    base = step_budget(model, messages, instructions, max_output=0)
     remaining = Decimal(max(0, budget - base)) / Decimal(MODELS[model].output_rate)
     return min(target, int(remaining))

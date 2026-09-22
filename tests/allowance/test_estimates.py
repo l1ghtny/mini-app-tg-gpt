@@ -72,6 +72,17 @@ def test_reference_images_increase_budget_and_quality_changes_output():
     assert image_budget("low", reference_tokens=1024) > image_budget("low")
 
 
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"])
+def test_fractional_token_rates_never_exceed_remaining_budget(model):
+    messages = [
+        {"role": "user", "content": [{"type": "input_text", "text": "Edit complete."}]}
+    ]
+    base = step_budget(model, messages, "Helpful", max_output=0)
+    for remaining in range(base, base + 100):
+        maximum = affordable_output(model, messages, "Helpful", remaining, target=4096)
+        assert step_budget(model, messages, "Helpful", max_output=maximum) <= remaining
+
+
 @pytest.mark.asyncio
 async def test_explicit_edit_quote_covers_decoded_reference_dimensions(
     estimate_case, monkeypatch
