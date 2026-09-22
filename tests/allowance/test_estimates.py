@@ -70,3 +70,39 @@ def test_output_cap_fits_remaining_budget_and_preserves_provider_maximum():
 def test_reference_images_increase_budget_and_quality_changes_output():
     assert image_budget("low") < image_budget("medium") < image_budget("high") < 100000
     assert image_budget("low", reference_tokens=1024) > image_budget("low")
+
+
+@pytest.mark.asyncio
+async def test_explicit_edit_quote_covers_decoded_reference_dimensions(
+    estimate_case, monkeypatch
+):
+    from io import BytesIO
+    from types import SimpleNamespace
+    from PIL import Image
+    from app.services import allowance_images
+
+    s, u, c, r = estimate_case
+    r.model = "gpt-5.6-luna"
+    r.required_tool = "image_generation"
+    r.tool_choice = ["image_generation"]
+    r.image_quality = "low"
+    s.exec.return_value = SimpleNamespace(
+        all=lambda: [("image_url", "https://owned.invalid/label.png")]
+    )
+    raw = BytesIO()
+    Image.new("RGB", (1600, 2000)).save(raw, "PNG")
+    files = [("label.png", raw.getvalue(), "image/png")]
+    fetch = AsyncMock(return_value=files)
+    monkeypatch.setattr(allowance_images, "image_files", fetch)
+    quote = await estimates.estimate(s, u, c, r)
+    needed = image_budget(
+        "low", reference_tokens=allowance_images.image_reference_tokens(files)
+    )
+    assert quote["ceiling_units"] == needed
+    assert needed > image_budget("low", reference_tokens=1024)
+    assert fetch.call_args.args[1].user_id == u.id
+    fetch.reset_mock()
+    r.required_tool = None
+    r.tool_choice = "auto"
+    await estimates.estimate(s, u, c, r)
+    fetch.assert_not_called()
