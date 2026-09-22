@@ -1,6 +1,8 @@
 import logging
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from dateutil.relativedelta import relativedelta
 from fastapi import HTTPException
 from sqlalchemy import func
 from uuid import uuid4
@@ -45,14 +47,22 @@ def accounting_scope():
     return settings.SHARED_ALLOWANCE_SCOPE or settings.DEPLOYMENT_CHANNEL
 
 
-async def private_entitlement(session, user_id, *, now=None):
+@dataclass(frozen=True)
+class PrivateAccess:
+    plan: str
+    tier_name: str
+    started_at: datetime
+    expires_at: datetime | None
+
+
+async def private_access(session, user_id, *, now=None):
     """No starter grants, expired subscriptions, or overlapping-tier stacking."""
     rollout_member = str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS
     if not rollout_member and not settings.SHARED_ALLOWANCE_TRIAL_ENABLED:
         return None
     now = now or datetime.now(UTC).replace(tzinfo=None)
-    tiers = (await session.exec(
-        select(SubscriptionTier).join(UserSubscription)
+    rows = (await session.exec(
+        select(SubscriptionTier, UserSubscription).join(UserSubscription)
         .where(UserSubscription.user_id == user_id,
                UserSubscription.status == SubscriptionStatus.active,
                UserSubscription.started_at <= now,
@@ -60,12 +70,20 @@ async def private_entitlement(session, user_id, *, now=None):
                SubscriptionTier.is_active.is_(True),
                SubscriptionTier.name.in_(list(PRIVATE_PLANS)))
     )).all()
-    if not tiers:
+    if not rows:
         if rollout_member:
             raise HTTPException(403, detail={"error": "private_allowance_inactive"})
         return None
-    tier = max(tiers, key=lambda t: (PLANS[PRIVATE_PLANS[t.name]]["multiple"], t.name))
-    return PRIVATE_PLANS[tier.name], tier.name
+    tier, _ = max(rows, key=lambda pair: (PLANS[PRIVATE_PLANS[pair[0].name]]["multiple"], pair[0].name))
+    # Capacity follows the highest tier; overlapping grants share one clock.
+    expiry = None if any(sub.expires_at is None for _, sub in rows) else max(sub.expires_at for _, sub in rows)
+    return PrivateAccess(PRIVATE_PLANS[tier.name], tier.name,
+                         min(sub.started_at for _, sub in rows), expiry)
+
+
+async def private_entitlement(session, user_id, *, now=None):
+    access = await private_access(session, user_id, now=now)
+    return (access.plan, access.tier_name) if access else None
 
 
 def adjust_private_grant(session, row, plan):
@@ -87,6 +105,7 @@ def require_enabled(user_id):
 
 
 def period(now=None):
+    """Calendar window for the platform supplier-spend guard and legacy preview."""
     now = now or datetime.now(UTC).replace(tzinfo=None)
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     end = (
@@ -97,29 +116,90 @@ def period(now=None):
     return start, end
 
 
+def subscription_period(anchor, expires_at, now):
+    """One grant for a short invitation; anniversary months for ongoing access."""
+    if expires_at is not None and expires_at - anchor <= timedelta(days=31):
+        return anchor, expires_at
+    months = (now.year - anchor.year) * 12 + now.month - anchor.month
+    start = anchor + relativedelta(months=months)
+    if start > now:
+        months -= 1
+        start = anchor + relativedelta(months=months)
+    # Calculate from the original anchor so January 31 does not drift to the 28th.
+    end = anchor + relativedelta(months=months + 1)
+    return start, min(end, expires_at) if expires_at else end
+
+
+async def subscription_account(session, user_id, scope, access, now):
+    """Reuse an open cycle across tier changes; align legacy spend in place."""
+    rows = (await session.exec(
+        select(AllowanceAccount).where(
+            AllowanceAccount.user_id == user_id,
+            AllowanceAccount.scope == scope,
+            AllowanceAccount.plan != "starter",
+            AllowanceAccount.period_start <= now,
+        ).order_by(AllowanceAccount.period_start.desc())
+        .with_for_update().execution_options(populate_existing=True)
+    )).all()
+    aligned = next((row for row in rows if row.subscription_anchor is not None), None)
+    if aligned and aligned.period_end > now:
+        return aligned, aligned.period_start, aligned.period_end, aligned.subscription_anchor
+    anchor = access.started_at
+    if aligned and access.started_at <= aligned.period_end:
+        # An uninterrupted renewal or overlapping tier retains its anniversary.
+        anchor = aligned.subscription_anchor
+    start, end = subscription_period(anchor, access.expires_at, now)
+    # A short fixed-term cycle can have been extended before expiration. Its
+    # original allowance must end before the next funded period begins.
+    if aligned and start < aligned.period_end <= now:
+        start = aligned.period_end
+        end = min(start + relativedelta(months=1), access.expires_at) if access.expires_at else start + relativedelta(months=1)
+    legacy = [row for row in rows if row.subscription_anchor is None and row.period_end > start]
+    if len(legacy) > 1:
+        # Never silently discard or double-grant two pre-cutover balances.
+        raise HTTPException(503, detail={"error": "allowance_period_reconciliation_required"})
+    if legacy:
+        row = legacy[0]
+        old_start, old_end = row.period_start, row.period_end
+        row.period_start, row.period_end, row.subscription_anchor = start, end, anchor
+        session.add(row)
+        session.add(AllowanceEvent(
+            account_id=row.id,
+            event_key=f"period_alignment:{row.id}:{old_start.isoformat()}:{old_end.isoformat()}:{start.isoformat()}:{end.isoformat()}",
+            kind="period_alignment", units=0, luna_units=0,
+        ))
+        return row, start, end, anchor
+    return None, start, end, anchor
+
+
 async def account(session, user_id, *, now=None):
     require_enabled(user_id)
     # Serializes first-grant creation and all request admissions for a user.
     await session.exec(select(AppUser).where(AppUser.id == user_id).with_for_update())
+    now = now or datetime.now(UTC).replace(tzinfo=None)
     start, end = period(now)
     scope = accounting_scope()
-    entitlement = await private_entitlement(session, user_id, now=now)
-    trial = settings.SHARED_ALLOWANCE_TRIAL_ENABLED and not entitlement
+    access = await private_access(session, user_id, now=now)
+    trial = settings.SHARED_ALLOWANCE_TRIAL_ENABLED and not access
+    anchor = None
     if trial:
         # One lifetime grant, shared across environments and calendar months.
         start, end = datetime(1970, 1, 1), datetime(9999, 1, 1)
     account_filter = (AllowanceAccount.plan == "starter") if trial else (
         (AllowanceAccount.scope == scope) & (AllowanceAccount.period_start == start)
     )
-    row = (
-        await session.exec(
-            select(AllowanceAccount)
-            .where(AllowanceAccount.user_id == user_id, account_filter)
-            .with_for_update().execution_options(populate_existing=True)
-        )
-    ).first()
+    if access:
+        row, start, end, anchor = await subscription_account(session, user_id, scope, access, now)
+    else:
+        row = (
+            await session.exec(
+                select(AllowanceAccount)
+                .where(AllowanceAccount.user_id == user_id, account_filter)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+        ).first()
     if row is None:
-        plan = entitlement[0] if entitlement else ("starter" if trial else settings.SHARED_ALLOWANCE_BETA_PLAN)
+        plan = access.plan if access else ("starter" if trial else settings.SHARED_ALLOWANCE_BETA_PLAN)
         if plan not in PLANS:
             raise HTTPException(503, detail="Invalid allowance configuration")
         p = PLANS[plan]
@@ -128,6 +208,7 @@ async def account(session, user_id, *, now=None):
             scope=scope,
             period_start=start,
             period_end=end,
+            subscription_anchor=anchor,
             plan=plan,
             rate_version=RATE_VERSION,
             granted=int(BASE_GRANT * p["multiple"]),
@@ -144,8 +225,8 @@ async def account(session, user_id, *, now=None):
                 luna_units=row.luna_granted,
             )
         )
-    elif entitlement:
-        adjust_private_grant(session, row, entitlement[0])
+    elif access:
+        adjust_private_grant(session, row, access.plan)
     return row
 
 
@@ -198,6 +279,7 @@ async def snapshot(session, user_id):
         - timedelta(seconds=settings.SHARED_ALLOWANCE_REQUEST_SECONDS + 300),
     )
     a = await account(session, user_id)
+    access = await private_access(session, user_id)
     requests = (
         await session.exec(
             select(AllowanceRequest)
@@ -232,6 +314,9 @@ async def snapshot(session, user_id):
         if attempt.file_calls:
             kinds.add("file_search")
     trial = a.plan == "starter"
+    access_ends = access.expires_at if access else None
+    period_ends = min(a.period_end, access_ends) if access_ends else a.period_end
+    ends_with_access = access_ends is not None and access_ends <= a.period_end
     result = dict(
         trial=(dict(
             state="expired" if trial_expired(a) else ("active" if a.trial_started_at else "ready"),
@@ -242,7 +327,7 @@ async def snapshot(session, user_id):
         ) if trial else None),
         enabled=True,
         mode="trial" if trial else "shared" if str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS else "beta",
-        tier_name=(await private_entitlement(session, user_id) or (None, None))[1],
+        tier_name=access.tier_name if access else None,
         plan=a.plan,
         multiple=PLANS[a.plan]["multiple"],
         granted_units=a.granted,
@@ -250,7 +335,10 @@ async def snapshot(session, user_id):
         reserved_units=a.reserved,
         available_units=available(a),
         remaining_percent=round(100 * available(a) / a.granted, 2) if a.granted else 0,
-        resets_at=None if trial else a.period_end.replace(tzinfo=UTC).isoformat(),
+        resets_at=None if trial or ends_with_access else a.period_end.replace(tzinfo=UTC).isoformat(),
+        period_ends_at=None if trial and not a.trial_started_at else period_ends.replace(tzinfo=UTC).isoformat(),
+        period_end_kind="trial_expiry" if trial else "access_expiry" if ends_with_access else "reset",
+        access_expires_at=access_ends.replace(tzinfo=UTC).isoformat() if access_ends else None,
         rate_version=a.rate_version,
         models=model_access(a.plan),
         default_model="claude-sonnet-5" if trial else "gpt-5.6-terra",

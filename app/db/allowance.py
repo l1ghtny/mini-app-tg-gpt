@@ -23,6 +23,7 @@ class AllowanceAccount(SQLModel, table=True):
     scope: str = Field(index=True)
     period_start: datetime = Field(sa_column=Column(DateTime, nullable=False))
     period_end: datetime = Field(sa_column=Column(DateTime, nullable=False))
+    subscription_anchor: datetime | None = Field(default=None, sa_column=Column(DateTime, nullable=True))
     trial_started_at: datetime | None = Field(default=None, sa_column=Column(DateTime, nullable=True))
     plan: str
     rate_version: str
