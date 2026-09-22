@@ -1,65 +1,8 @@
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 from app.services import allowance_chat as estimates
 from app.services.allowance_policy import image_budget, affordable_output, step_budget
-
-
-@pytest.fixture
-def estimate_case(monkeypatch):
-    for key in ("R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"):
-        monkeypatch.setenv(key, "unused-test-value")
-    monkeypatch.setenv("R2_ENDPOINT", "https://storage.invalid")
-    from app.api import chat_helpers
-
-    monkeypatch.setattr(estimates.allowance, "require_enabled", lambda _: None)
-    monkeypatch.setattr(
-        estimates.allowance,
-        "account",
-        AsyncMock(
-            return_value=SimpleNamespace(
-                plan="start",
-                granted=1250000,
-                spent=0,
-                reserved=0,
-                luna_granted=290000,
-                luna_spent=0,
-                luna_reserved=0,
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        chat_helpers, "_build_history_for_openai", AsyncMock(return_value=[])
-    )
-    monkeypatch.setattr(
-        chat_helpers, "_resolve_system_prompt", lambda *args: "Be helpful."
-    )
-    session = SimpleNamespace(
-        exec=AsyncMock(return_value=SimpleNamespace(all=lambda: [])), commit=AsyncMock()
-    )
-    user = SimpleNamespace(id="owned-user")
-    conv = SimpleNamespace(
-        id="owned-chat", history_summary=None, image_quality="medium"
-    )
-    req = SimpleNamespace(
-        model="gpt-5.6-terra",
-        content=[
-            SimpleNamespace(
-                type="text",
-                value="Draw a cup.",
-                model_dump=lambda: {"type": "text", "value": "Draw a cup."},
-            )
-        ],
-        tool_choice=["image_generation"],
-        required_tool="image_generation",
-        reasoning_effort="low",
-        thinking=True,
-        image_quality="low",
-        spend_limit_units=None,
-        estimate_reference=None,
-    )
-    return session, user, conv, req
 
 
 @pytest.mark.asyncio
@@ -127,3 +70,50 @@ def test_output_cap_fits_remaining_budget_and_preserves_provider_maximum():
 def test_reference_images_increase_budget_and_quality_changes_output():
     assert image_budget("low") < image_budget("medium") < image_budget("high") < 100000
     assert image_budget("low", reference_tokens=1024) > image_budget("low")
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"])
+def test_fractional_token_rates_never_exceed_remaining_budget(model):
+    messages = [
+        {"role": "user", "content": [{"type": "input_text", "text": "Edit complete."}]}
+    ]
+    base = step_budget(model, messages, "Helpful", max_output=0)
+    for remaining in range(base, base + 100):
+        maximum = affordable_output(model, messages, "Helpful", remaining, target=4096)
+        assert step_budget(model, messages, "Helpful", max_output=maximum) <= remaining
+
+
+@pytest.mark.asyncio
+async def test_explicit_edit_quote_covers_decoded_reference_dimensions(
+    estimate_case, monkeypatch
+):
+    from io import BytesIO
+    from types import SimpleNamespace
+    from PIL import Image
+    from app.services import allowance_images
+
+    s, u, c, r = estimate_case
+    r.model = "gpt-5.6-luna"
+    r.required_tool = "image_generation"
+    r.tool_choice = ["image_generation"]
+    r.image_quality = "low"
+    s.exec.return_value = SimpleNamespace(
+        all=lambda: [("image_url", "https://owned.invalid/label.png")]
+    )
+    raw = BytesIO()
+    Image.new("RGB", (1600, 2000)).save(raw, "PNG")
+    files = [("label.png", raw.getvalue(), "image/png")]
+    fetch = AsyncMock(return_value=files)
+    monkeypatch.setattr(allowance_images, "image_files", fetch)
+    quote = await estimates.estimate(s, u, c, r)
+    needed = image_budget(
+        "low", reference_tokens=allowance_images.image_reference_tokens(files)
+    )
+    assert quote["ceiling_units"] == needed
+    assert needed > image_budget("low", reference_tokens=1024)
+    assert fetch.call_args.args[1].user_id == u.id
+    fetch.reset_mock()
+    r.required_tool = None
+    r.tool_choice = "auto"
+    await estimates.estimate(s, u, c, r)
+    fetch.assert_not_called()

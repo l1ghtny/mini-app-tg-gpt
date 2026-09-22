@@ -2,7 +2,11 @@
 
 import os
 import uuid
+import pytest
 import pytest_asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from app.services import allowance_chat as estimates
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
@@ -60,3 +64,59 @@ async def db(monkeypatch):
     async with admin.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
     await admin.dispose()
+
+
+@pytest.fixture
+def estimate_case(monkeypatch):
+    for key in ("R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"):
+        monkeypatch.setenv(key, "unused-test-value")
+    monkeypatch.setenv("R2_ENDPOINT", "https://storage.invalid")
+    from app.api import chat_helpers
+
+    monkeypatch.setattr(estimates.allowance, "require_enabled", lambda _: None)
+    monkeypatch.setattr(
+        estimates.allowance,
+        "account",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                plan="start",
+                granted=1250000,
+                spent=0,
+                reserved=0,
+                luna_granted=290000,
+                luna_spent=0,
+                luna_reserved=0,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        chat_helpers, "_build_history_for_openai", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        chat_helpers, "_resolve_system_prompt", lambda *args: "Be helpful."
+    )
+    session = SimpleNamespace(
+        exec=AsyncMock(return_value=SimpleNamespace(all=lambda: [])), commit=AsyncMock()
+    )
+    user = SimpleNamespace(id="owned-user")
+    conv = SimpleNamespace(
+        id="owned-chat", history_summary=None, image_quality="medium"
+    )
+    req = SimpleNamespace(
+        model="gpt-5.6-terra",
+        content=[
+            SimpleNamespace(
+                type="text",
+                value="Draw a cup.",
+                model_dump=lambda: {"type": "text", "value": "Draw a cup."},
+            )
+        ],
+        tool_choice=["image_generation"],
+        required_tool="image_generation",
+        reasoning_effort="low",
+        thinking=True,
+        image_quality="low",
+        spend_limit_units=None,
+        estimate_reference=None,
+    )
+    return session, user, conv, req

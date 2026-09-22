@@ -90,6 +90,14 @@ async def image_files(refs, run):
     return files
 
 
+def image_reference_tokens(files):
+    total = 0
+    for _, data, _ in files:
+        with Image.open(BytesIO(data)) as image:
+            total += math.ceil(image.width / 32) * math.ceil(image.height / 32)
+    return total
+
+
 async def generate_image(run, query, refs, quality, reference_mode="none"):
     from app.services.openai_service import client
 
@@ -125,12 +133,7 @@ async def generate_image(run, query, refs, quality, reference_mode="none"):
             raise ValueError("No available image to edit; attach an image first")
     files = await image_files(refs, run) if refs else []
     # A conservative reservation; actual counters settle the request afterward.
-    reference_tokens = 0
-    for _, data, _ in files:
-        with Image.open(BytesIO(data)) as image:
-            reference_tokens += math.ceil(image.width / 32) * math.ceil(
-                image.height / 32
-            )
+    reference_tokens = image_reference_tokens(files)
     budget = image_budget(quality, len(query.encode("utf-8")), reference_tokens)
     attempt = await run.start(FLARE, budget)
     params = dict(

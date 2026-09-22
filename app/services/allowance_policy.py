@@ -3,6 +3,9 @@
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING
 import json
+import math
+from functools import lru_cache
+import tiktoken
 
 RATE_VERSION = "2026-09-18-v1"
 BASE_GRANT = 1_250_000
@@ -51,7 +54,11 @@ MODELS = {
         ),
     )
 }
-PRIVATE_PLANS = {"Close Friends Tier": "premium", "Katush Tier": "max", "Smooth tier": "premium"}
+PRIVATE_PLANS = {
+    "Close Friends Tier": "premium",
+    "Katush Tier": "max",
+    "Smooth tier": "premium",
+}
 
 PLANS = {
     "starter": dict(name="Free trial", price_rub=0, multiple=0.4, luna_units=100_000),
@@ -101,8 +108,20 @@ def usage_units(model: str, usage: dict) -> int:
     )
 
 
-def input_upper_bound(messages: list[dict], instructions: str = "") -> int:
-    # UTF-8 bytes conservatively bound text tokens; image budget is explicit.
+@lru_cache(maxsize=1)
+def text_encoding():
+    return tiktoken.get_encoding("o200k_base")
+
+
+def text_tokens(value):
+    return len(text_encoding().encode(value, disallowed_special=()))
+
+
+def input_upper_bound(
+    messages: list[dict], instructions: str = "", *, model: str | None = None
+) -> int:
+    # Text tokenizer plus provider/schema margin; images are bounded by detail.
+    # The same count feeds admission and each provider attempt, including Claude.
     images = 0
     sanitized = []
     for message in messages:
@@ -115,14 +134,20 @@ def input_upper_bound(messages: list[dict], instructions: str = "") -> int:
                     "input_image",
                     "image",
                 }:
-                    images += 1
+                    images += (
+                        4784
+                        if model and MODELS[model].provider == "anthropic"
+                        else 3000
+                        if part.get("detail") == "high"
+                        else 36000
+                    )
                     parts.append({"type": "image"})
                 else:
                     parts.append(part)
             item["content"] = parts
         sanitized.append(item)
     text = json.dumps(sanitized, ensure_ascii=False)
-    return len((text + instructions).encode("utf-8")) + images * 16384 + 2048
+    return math.ceil(text_tokens(text + instructions) * 1.25) + images + 1024
 
 
 def step_budget(
@@ -137,9 +162,10 @@ def step_budget(
     p = MODELS[model]
     # Cache writes can cost more than uncached input.
     return ceil_units(
-        Decimal(input_upper_bound(messages, instructions))
+        Decimal(input_upper_bound(messages, instructions, model=model))
         * max(Decimal(p.input_rate), Decimal(p.write_rate))
-        + Decimal(max_output or p.max_output) * Decimal(p.output_rate)
+        + Decimal(p.max_output if max_output is None else max_output)
+        * Decimal(p.output_rate)
         + search_calls * 10_000
         + file_calls * 2_500
     )
@@ -156,7 +182,8 @@ def public_plans() -> list[dict]:
             models=model_access(key),
             purchase_available=False,
         )
-        for key, p in PLANS.items() if key != "starter"
+        for key, p in PLANS.items()
+        if key != "starter"
     ]
 
 
@@ -191,7 +218,8 @@ def output_target(model, effort="medium", required_tool=None):
 
 
 def affordable_output(model, messages, instructions, budget, *, target):
-    base = step_budget(model, messages, instructions, max_output=1)
-    base -= ceil_units(Decimal(MODELS[model].output_rate))
+    # Rounding a one-token total then subtracting a rounded token price can
+    # understate input cost by one unit, rejecting an otherwise valid last turn.
+    base = step_budget(model, messages, instructions, max_output=0)
     remaining = Decimal(max(0, budget - base)) / Decimal(MODELS[model].output_rate)
     return min(target, int(remaining))

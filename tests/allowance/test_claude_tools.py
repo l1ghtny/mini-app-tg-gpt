@@ -78,6 +78,7 @@ async def test_fable_required_tool_uses_auto_and_preserves_call(monkeypatch):
         )
     ]
     assert captured["tool_choice"] == {"type": "auto"}
+    assert captured["cache_control"] == {"type": "ephemeral"}
     assert [tool["name"] for tool in captured["tools"]] == ["web_search"]
     assert "Call this tool before" in captured["system"][0]["text"]
     assert result[-1]["calls"][0]["name"] == "web_search"
