@@ -30,6 +30,7 @@ from webauthn.helpers.structs import (
 )
 
 from app.core.config import settings
+from app.api.browser_origins import resolve_browser_origin
 from app.db import models
 
 _PASSKEY_PREFIX = "passkey:ceremony"
@@ -48,6 +49,9 @@ def resolve_passkey_context(request: Request) -> tuple[str, str]:
         )
 
     hostname = (urlsplit(origin).hostname or "").lower()
+    if origin in settings.WEB_AUTH_ADDITIONAL_ORIGINS:
+        resolve_browser_origin(origin)
+        return origin, hostname
     configured_rp_id = settings.PASSKEY_RP_ID
     if configured_rp_id:
         if hostname != configured_rp_id and not hostname.endswith(
@@ -161,6 +165,7 @@ async def begin_passkey_registration(
                 transports=_transports(item.transports),
             )
             for item in existing
+            if item.rp_id is None or item.rp_id == rp_id
         ],
     )
     ceremony_id = await _store_ceremony(
@@ -182,8 +187,11 @@ async def finish_passkey_registration(
     ceremony_id: str,
     credential: dict,
     name: str | None,
+    origin: str | None = None,
 ) -> models.PasskeyCredential:
     state = await _consume_ceremony(redis, kind="registration", ceremony_id=ceremony_id)
+    if origin is not None and origin != state.get("origin"):
+        raise HTTPException(status_code=403, detail="passkey_origin_mismatch")
     if state.get("user_id") != str(user.id):
         raise HTTPException(
             status_code=403, detail="passkey_registration_user_mismatch"
@@ -220,6 +228,7 @@ async def finish_passkey_registration(
         user_id=user.id,
         credential_id=credential_id,
         public_key=verification.credential_public_key,
+        rp_id=state["rp_id"],
         sign_count=verification.sign_count,
         transports=transports,
         device_type=verification.credential_device_type.value,
@@ -264,10 +273,13 @@ async def finish_passkey_authentication(
     *,
     ceremony_id: str,
     credential: dict,
+    origin: str | None = None,
 ) -> tuple[models.AppUser, models.PasskeyCredential]:
     state = await _consume_ceremony(
         redis, kind="authentication", ceremony_id=ceremony_id
     )
+    if origin is not None and origin != state.get("origin"):
+        raise HTTPException(status_code=403, detail="passkey_origin_mismatch")
     credential_id = credential.get("id") if isinstance(credential, dict) else None
     if not isinstance(credential_id, str) or not credential_id:
         raise HTTPException(status_code=400, detail="passkey_authentication_invalid")
@@ -278,7 +290,7 @@ async def finish_passkey_authentication(
             )
         )
     ).first()
-    if not passkey:
+    if not passkey or (passkey.rp_id is not None and passkey.rp_id != state.get("rp_id")):
         raise HTTPException(status_code=400, detail="passkey_authentication_invalid")
 
     response = credential.get("response")
@@ -306,6 +318,7 @@ async def finish_passkey_authentication(
     if not user or user.deleted_at is not None:
         raise HTTPException(status_code=400, detail="passkey_authentication_invalid")
 
+    passkey.rp_id = state["rp_id"]
     passkey.sign_count = verification.new_sign_count
     passkey.device_type = verification.credential_device_type.value
     passkey.backed_up = verification.credential_backed_up
