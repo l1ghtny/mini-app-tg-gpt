@@ -14,7 +14,7 @@ def message(text, identifier=None, role="user"):
 
 def test_partition_preserves_recent_turns_and_internal_ids_never_reach_provider():
     old, recent = context.context_partition(
-        [message("a" * 100, "old"), message("new", "new")], 20
+        [message("older " * 100, "old"), message("new", "new")], 20
     )
     assert len(old) == 1 and recent[0]["content"][0]["text"] == "new"
     assert "_message_id" not in context.clean_messages(recent)[0]
@@ -35,7 +35,7 @@ async def test_existing_summary_reused_without_another_provider_call(monkeypatch
     monkeypatch.setattr(context, "AsyncSession", lambda *a, **kw: session)
     run = SimpleNamespace(conversation_id="chat", user_id="owner", response=AsyncMock())
     result = await context.compress_context(
-        run, [message("a" * 100, "old"), message("new", "new")]
+        run, [message("older " * 100, "old"), message("new", "new")]
     )
     run.response.assert_not_called()
     assert "42" in result[0]["content"][0]["text"]

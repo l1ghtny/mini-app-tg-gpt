@@ -1,3 +1,5 @@
+import logging
+
 from datetime import UTC, datetime, timedelta
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -445,6 +447,11 @@ async def finish_attempt(
     if p.status in {"complete", "failed"}:
         return
     p.supplier_units = max(0, int(units))
+    if p.supplier_units > p.budget:
+        logging.getLogger(__name__).warning(
+            "allowance_attempt_over_budget model=%s budget=%s actual=%s",
+            p.model, p.budget, p.supplier_units,
+        )
     p.customer_units = p.supplier_units if success else 0
     p.status = "complete" if success else "failed"
     p.provider_id = provider_id

@@ -13,7 +13,6 @@ from app.services.allowance_policy import (
     LUNA,
     RATE_VERSION,
     step_budget,
-    usage_units,
     image_budget,
     output_target,
 )
@@ -42,37 +41,29 @@ async def estimate(session, user, conversation, request):
             .limit(100)
         )
     ).all()
-    text = "\n".join(value for kind, value in rows if kind == "text")
-    # Bound the retained history, matching the shared-provider summary strategy.
-    text = text[-settings.SHARED_ALLOWANCE_HISTORY_TOKENS * 4 :]
-    content = [{"type": "input_text", "text": text}] + [
-        {"type": "input_image", "image_url": p.value}
-        if p.type == "image_url"
-        else {"type": "input_text", "text": p.value}
-        for p in request.content
-    ]
-    from app.api.chat_helpers import _build_history_for_openai
-    from app.services.allowance_context import context_partition, clean_messages
+    from app.api.chat_helpers import _build_history_for_openai, _resolve_system_prompt
+    from app.services.allowance_context import estimate_context
+    from app.services.shared_chat_provider import shared_instructions
 
     history = await _build_history_for_openai(
         session, conversation.id, model_name=request.model
     )
-    current = {"role": "user", "content": content[1:]}
-    older, recent = context_partition(
-        history + [current], settings.SHARED_ALLOWANCE_HISTORY_TOKENS * 4
+    current = {
+        "role": "user",
+        "content": [
+            {"type": "input_image", "image_url": p.value}
+            if p.type == "image_url"
+            else {"type": "input_text", "text": p.value}
+            for p in request.content
+        ],
+    }
+    messages, needs_summary, references = estimate_context(
+        history + [current], conversation
     )
-    messages = clean_messages(recent)
-    if older:
-        # Reserve the bounded summary's possible size before it is generated.
-        messages.insert(
-            0,
-            {"role": "user", "content": [{"type": "input_text", "text": " " * 12288}]},
-        )
     tools = tool_names(request.tool_choice)
-    from app.api.chat_helpers import _resolve_system_prompt
-    from app.services.openai_service import _instructions_for_openai
-
-    instructions = _instructions_for_openai(
+    if references:
+        tools.add("inspect_image")
+    instructions = shared_instructions(
         request.model, _resolve_system_prompt(conversation, user)
     )
     effort = request.reasoning_effort or (
@@ -80,12 +71,8 @@ async def estimate(session, user, conversation, request):
     )
     quality = request.image_quality or conversation.image_quality or "medium"
     target = output_target(request.model, effort, request.required_tool)
-    upper = step_budget(
-        request.model, messages, instructions + " " * 512, max_output=target
-    )
-    minimum = step_budget(
-        request.model, messages, instructions + " " * 512, max_output=256
-    )
+    upper = step_budget(request.model, messages, instructions, max_output=target)
+    minimum = step_budget(request.model, messages, instructions, max_output=256)
     included = request.model == LUNA
     refs = min(
         4,
@@ -93,47 +80,41 @@ async def estimate(session, user, conversation, request):
         + sum(p.type == "image_url" for p in request.content),
     )
     image_reserve = image_budget(quality, reference_tokens=refs * 1024)
-    paid_upper = 0 if included else upper
-    if tools:
-        paid_upper += upper if not included else 0
-        if "web_search" in tools:
-            paid_upper += 30_000
-        if "file_search" in tools:
-            paid_upper += 10_000
-    if "image_generation" in tools:
-        paid_upper += image_reserve
+    # Expected usage and admission use the exact same compacted multimodal context.
+    # Do not promise cache hits; unused output/tool capacity is never a charge.
     lower = (
         0
         if included
-        else usage_units(
-            request.model,
-            {
-                "input_tokens": min(len(text) // 3 + 1024, 10000),
-                "output_tokens": 200,
-            },
-        )
+        else step_budget(request.model, messages, instructions, max_output=256)
     )
     typical = (
         0
         if included
-        else usage_units(
+        else step_budget(
             request.model,
-            {
-                "input_tokens": min(len(text) // 3 + 2048, 14000),
-                "output_tokens": 1200,
-            },
+            messages,
+            instructions,
+            max_output=2400 if effort == "high" else 1200,
         )
     )
+    paid_upper = 0 if included else upper
+    tool_budget = 0
     if request.required_tool == "image_generation":
-        from app.services.allowance_policy import IMAGE_OUTPUT_TOKENS
-
-        lower += IMAGE_OUTPUT_TOKENS[quality] * 30
-        typical += image_reserve
-    if request.required_tool == "web_search":
-        lower += 10_000
-        typical += 30_000
-    # Automatic tools share a small preauthorized ceiling. Expensive potential
-    # image calls require confirmation even when the model chooses the tool.
+        tool_budget = image_reserve
+    elif request.required_tool == "web_search":
+        tool_budget = 40_000
+    elif request.required_tool == "file_search":
+        tool_budget = 10_000
+    if request.required_tool:
+        # A short routing response, tool, and final answer, not two max-length answers.
+        continuation = 0 if included else minimum
+        paid_upper += continuation + tool_budget
+        lower += continuation + tool_budget
+        typical += continuation + tool_budget
+    elif tools:
+        # Optional tools use bounded headroom, not a second full-context reservation.
+        # Every actual tool/continuation still passes begin_attempt before spending.
+        paid_upper += 40_000
     threshold = max(1, a.granted * 5 // 100)
     needs_confirmation = (
         typical >= threshold
@@ -141,16 +122,19 @@ async def estimate(session, user, conversation, request):
         or request.required_tool == "image_generation"
         or ("image_generation" in tools and image_reserve >= threshold)
     )
+    if "image_generation" in tools and image_reserve >= threshold:
+        paid_upper = max(
+            paid_upper,
+            upper + minimum + image_reserve if not included else image_reserve,
+        )
     if not needs_confirmation:
         paid_upper = min(paid_upper, threshold)
     ceiling = min(paid_upper, allowance.available(a))
     if request.spend_limit_units is not None:
         ceiling = min(ceiling, request.spend_limit_units)
-    minimum_ceiling = 0 if included else minimum
-    if request.required_tool == "image_generation":
-        minimum_ceiling += image_reserve + (minimum if not included else 0)
-    elif request.required_tool == "web_search":
-        minimum_ceiling += 30_000
+    minimum_ceiling = (0 if included else minimum) + tool_budget
+    if request.required_tool and not included:
+        minimum_ceiling += minimum
     fingerprint = hashlib.sha256(
         json.dumps(
             dict(
@@ -169,6 +153,7 @@ async def estimate(session, user, conversation, request):
                     json.dumps(history, sort_keys=True).encode()
                 ).hexdigest(),
                 rate=RATE_VERSION,
+                context_policy="multimodal-v2",
             ),
             sort_keys=True,
             ensure_ascii=False,
@@ -202,8 +187,8 @@ async def estimate(session, user, conversation, request):
         estimate_reference=token,
         expires_at=expires,
         rate_version=RATE_VERSION,
-        estimated_min_percent=round(lower * 100 / a.granted, 2),
-        estimated_max_percent=round(typical * 100 / a.granted, 2),
+        estimated_min_percent=round(min(lower, ceiling) * 100 / a.granted, 2),
+        estimated_max_percent=round(min(typical, ceiling) * 100 / a.granted, 2),
         ceiling_units=ceiling,
         minimum_ceiling_units=minimum_ceiling,
         ceiling_percent=round(ceiling * 100 / a.granted, 2),
@@ -214,7 +199,7 @@ async def estimate(session, user, conversation, request):
         else None,
         luna_minimum=minimum if included else 0,
         luna_ceiling=min(
-            (upper * 2 if included else 0) + (50_000 if older else 0),
+            (upper * 2 if included else 0) + (50_000 if needs_summary else 0),
             max(0, a.luna_granted - a.luna_spent - a.luna_reserved),
         ),
     )
