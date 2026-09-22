@@ -14,6 +14,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.models import AppUser
 from app.db.subscription_tiers import SubscriptionTier, UserSubscription
 from app.db.allowance import (
+    AllowanceControl,
     AllowanceAccount,
     AllowanceRequest,
     AllowanceEvent,
@@ -41,6 +42,7 @@ async def db(monkeypatch):
             AppUser,
             SubscriptionTier,
             UserSubscription,
+            AllowanceControl,
             AllowanceAccount,
             AllowanceRequest,
             AllowanceEvent,
@@ -58,6 +60,7 @@ async def db(monkeypatch):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         user = AppUser(default_prompt="Test assistant")
         session.add(user)
+        session.add(AllowanceControl(id="subscription_periods", period_mode="subscription"))
         await session.commit()
         yield engine, session, user
     await engine.dispose()

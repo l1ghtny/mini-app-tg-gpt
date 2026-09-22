@@ -16,6 +16,18 @@ from sqlmodel import SQLModel, Field
 from app.db.models import utcnow_naive
 
 
+class AllowanceControl(SQLModel, table=True):
+    """Shared deployment gate; reads lock this row until admission commits."""
+
+    __tablename__ = "allowance_control"
+    id: str = Field(primary_key=True)
+    period_mode: str = "calendar"
+    updated_at: datetime = Field(default_factory=utcnow_naive)
+    __table_args__ = (
+        CheckConstraint("period_mode IN ('calendar', 'paused', 'subscription')", name="ck_allowance_period_mode"),
+    )
+
+
 class AllowanceAccount(SQLModel, table=True):
     __tablename__ = "allowance_account"
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -23,6 +35,7 @@ class AllowanceAccount(SQLModel, table=True):
     scope: str = Field(index=True)
     period_start: datetime = Field(sa_column=Column(DateTime, nullable=False))
     period_end: datetime = Field(sa_column=Column(DateTime, nullable=False))
+    subscription_anchor: datetime | None = Field(default=None, sa_column=Column(DateTime, nullable=True))
     trial_started_at: datetime | None = Field(default=None, sa_column=Column(DateTime, nullable=True))
     plan: str
     rate_version: str
