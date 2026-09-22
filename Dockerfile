@@ -22,7 +22,10 @@ RUN pip install --no-cache-dir "poetry==1.8.3" && \
 # ---- Deps layer (leverages Docker cache) ----
 FROM base AS deps
 COPY pyproject.toml poetry.lock* ./
-RUN poetry install --only main --no-interaction --no-ansi
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
+RUN poetry install --only main --no-interaction --no-ansi && \
+    python -c "import tiktoken; tiktoken.get_encoding('o200k_base')" && \
+    chmod -R a+rX /opt/tiktoken-cache
 
 # ---- Runtime (copy code only after deps) ----
 FROM deps AS runtime
