@@ -1,6 +1,6 @@
 # Subscription-aligned allowance periods
 
-Status: implemented and tested on `codex/subscription-allowance-periods-20260922`. Feature-branch publication is authorized; production/beta merges and deployment are held while the passkey/settings task completes its paired release. No live allowance changes.
+Status: coordinated production/beta release authorized after the completed passkey/settings rollout. The shared deployment gate starts in calendar compatibility mode; subscription periods remain inactive until all writers are updated and the explicit cutover completes.
 
 ## Behaviour
 
@@ -12,7 +12,7 @@ Status: implemented and tested on `codex/subscription-allowance-periods-20260922
 
 ## Ledger transition
 
-Migration `xw0e1f2a3b4d`, after the passkey migration `xw0e1f2a3b4c`, adds nullable `allowance_account.subscription_anchor`. It is repeat-safe and retains the column on downgrade. No migration creates a grant or resets a balance.
+Migration `xw0e1f2a3b4d`, after the passkey migration `xw0e1f2a3b4c`, adds nullable `allowance_account.subscription_anchor` and the singleton `allowance_control` row, initially in `calendar` mode. It is repeat-safe and retains financial metadata on downgrade; retries never overwrite the current gate mode. No migration creates a grant or resets a balance.
 
 On first access, one overlapping legacy calendar account is aligned in place. Its ID, request links, spend, pending reservations, Luna balance and provider attempts remain unchanged. A zero-unit `period_alignment` event records old and new boundaries in its event key. This also preserves usage when the first post-release access happens after the calendar month changes. Multiple overlapping legacy accounts fail closed with `allowance_period_reconciliation_required`, requiring audited reconciliation rather than silently discarding spend or granting another balance.
 
@@ -20,7 +20,7 @@ On first access, one overlapping legacy calendar account is aligned in place. It
 
 The allowance snapshot adds `period_ends_at`, `period_end_kind` (`reset`, `access_expiry`, `trial_expiry`) and `access_expires_at`. `resets_at` is null when access ends without another grant. Trial nullability remains supported.
 
-Paired frontend worktree: `/private/tmp/lightny-subscription-periods-frontend`, same branch name. Synced with the passkey task's production commits: backend `b3746a8`, frontend `4563fed`. The passkey task owns release 9088/#70 and its subsequent beta release; this task must not modify or overlap them.
+Paired frontend worktree: `/private/tmp/lightny-subscription-periods-frontend`, same branch name. Synced with the passkey task's production commits: backend `b3746a8`, frontend `4563fed`. Its releases 9088/#70 and 9093/#185 completed before this release began.
 
 - `src/lib/allowance.ts`: optional typed period metadata, compatible with old responses.
 - `src/components/AllowancePlans.tsx`: distinguish “Allowance resets on” from “Access ends on”; never format null as Invalid Date; remove unconditional renewal promises from exhaustion guidance.
@@ -41,10 +41,13 @@ Deploy the matching frontend before switching backend semantics: the previous co
 
 1. Rebase/merge current production changes and ensure one Alembic head, including any concurrent passkey migration. Carry identical migration history to beta.
 2. Read-only preflight: inspect current active subscriptions and overlapping allowance periods, including both shared ledger scope users and recently redeemed invitations. Resolve ambiguous historical balances explicitly before rollout; do not reset them.
-3. Deploy the backward-compatible frontend. Apply the additive schema migration.
-4. Briefly quiesce generation admissions and allowance-writing reads across BOTH production and beta. Drain existing requests and roll both backends/workers to the new version before reopening. Never run calendar-account writers concurrently with subscription-account writers against the same scope: an old instance can recreate a calendar grant after alignment. Plan this cutover with the existing release controls; no infrastructure changes are part of this patch.
-5. Verify exact deployed revisions, unchanged spent/reserved totals, anniversary/expiry dates and authenticated UI on both domains. Verify admission after expiry is denied and in-flight accounting still settles.
-6. Application rollback after alignment must keep the subscription-period account selector or keep shared allowance admissions paused. Do not restore an old DB snapshot, drop period provenance or resume calendar-grant writers against aligned accounts.
+3. Apply the additive schema migration and release both frontend/backend pairs. The gate remains `calendar` throughout canary rollout: updated and old processes use the same accounting semantics. Ensure the compatible frontend is live before enabling subscription semantics.
+4. Verify exact revisions of EVERY live API/worker/bot and scheduled-job template on both channels, with no old writer pods remaining. Run `python scripts/release/allowance_period_cutover.py status` inside an updated backend. Do not pause until this verification completes.
+5. Run the operator's `pause` command. Every allowance account lookup takes a shared transaction lock on the gate row; the operator takes an exclusive lock. This waits for admitted account transactions and then durably blocks all new allowance-writing reads/admissions on both channels with 503/Retry-After. Existing requests can continue and settle without that gate.
+6. Poll `status` until active requests, shared holds and Luna holds are zero. Bound draining at five minutes. If it does not drain, use `resume-calendar` (allowed only while no accounts are aligned) and investigate; do not fail requests or erase holds to force deployment through.
+7. Run `enable`. Under the exclusive gate lock, this checks that draining is complete, aligns existing accounts without creating new grants, verifies every financial balance is unchanged, and changes the mode to `subscription` in the same commit. Failed checks roll back, leaving the pause in place for safe retry or resume-calendar. Repeated enable is idempotent.
+8. Verify exact deployed revisions, unchanged spent/reserved totals, anniversary/expiry dates and authenticated UI on both domains. Verify expiry rejection and in-flight settlement in isolated tests; do not modify a real subscription to manufacture this condition.
+9. Application rollback after enable must retain the subscription-period selector or pause admissions. The operator rejects resume-calendar after any alignment. Never restore an old DB snapshot or drop period provenance.
 
 ## What's New gate
 

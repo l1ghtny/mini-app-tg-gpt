@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.db.models import AppUser
 from app.db.allowance import (
     AllowanceAccount,
+    AllowanceControl,
     AllowanceRequest,
     AllowanceEvent,
     ProviderAttempt,
@@ -174,6 +175,15 @@ async def subscription_account(session, user_id, scope, access, now):
 
 async def account(session, user_id, *, now=None):
     require_enabled(user_id)
+    # All updated writers share this durable gate. A cutover takes an exclusive
+    # row lock, waiting for admitted transactions before pausing both channels.
+    control = (await session.exec(
+        select(AllowanceControl).where(AllowanceControl.id == "subscription_periods")
+        .with_for_update(read=True).execution_options(populate_existing=True)
+    )).one_or_none()
+    if control is None or control.period_mode == "paused":
+        raise HTTPException(503, detail={"error": "allowance_maintenance"}, headers={"Retry-After": "30"})
+    period_mode = control.period_mode
     # Serializes first-grant creation and all request admissions for a user.
     await session.exec(select(AppUser).where(AppUser.id == user_id).with_for_update())
     now = now or datetime.now(UTC).replace(tzinfo=None)
@@ -188,7 +198,7 @@ async def account(session, user_id, *, now=None):
     account_filter = (AllowanceAccount.plan == "starter") if trial else (
         (AllowanceAccount.scope == scope) & (AllowanceAccount.period_start == start)
     )
-    if access:
+    if access and period_mode == "subscription":
         row, start, end, anchor = await subscription_account(session, user_id, scope, access, now)
     else:
         row = (
@@ -316,7 +326,7 @@ async def snapshot(session, user_id):
     trial = a.plan == "starter"
     access_ends = access.expires_at if access else None
     period_ends = min(a.period_end, access_ends) if access_ends else a.period_end
-    ends_with_access = access_ends is not None and access_ends <= a.period_end
+    ends_with_access = a.subscription_anchor is not None and access_ends is not None and access_ends <= a.period_end
     result = dict(
         trial=(dict(
             state="expired" if trial_expired(a) else ("active" if a.trial_started_at else "ready"),
