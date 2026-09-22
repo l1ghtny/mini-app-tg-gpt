@@ -1,13 +1,14 @@
-"""Pending Alembic data migration; move to versions only after production acceptance.
-
-Before promotion, assign the revision and the then-current down_revision. Keeping
-this outside migrations/versions prevents publishing an unreleased feature.
-"""
+"""Publish subscription-period release notes after live acceptance."""
 
 from datetime import UTC, datetime
 
 from alembic import op
 import sqlalchemy as sa
+
+revision = "xw0e1f2a3b4e"
+down_revision = "xw0e1f2a3b4d"
+branch_labels = None
+depends_on = None
 
 ITEM_ID = "2026-09-22-subscription-allowance-periods"
 TITLE_EN = "Allowance dates follow your subscription"

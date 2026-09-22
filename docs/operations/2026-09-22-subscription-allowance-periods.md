@@ -1,6 +1,6 @@
 # Subscription-aligned allowance periods
 
-Status: coordinated production/beta release authorized after the completed passkey/settings rollout. The shared deployment gate starts in calendar compatibility mode; subscription periods remain inactive until all writers are updated and the explicit cutover completes.
+Status: live and verified on production and beta at 2026-09-22 12:29 UTC. The shared gate is subscription; do not restore calendar-only writers.
 
 ## Behaviour
 
@@ -51,8 +51,17 @@ Deploy the matching frontend before switching backend semantics: the previous co
 
 ## What's New gate
 
-What's New: required. Users will see changed refill dates and a distinction between access expiry and allowance reset. The idempotent data migration is prepared in `docs/operations/pending_subscription_periods_announcement.py`, outside the active Alembic path. Assign its revision/parent and promote it only after production is verified; do not insert planned content into the shared feed or bundle it into the schema migration that runs first.
+What's New: required. Users will see changed refill dates and a distinction between access expiry and allowance reset. After live acceptance, the prepared note was promoted into migration `xw0e1f2a3b4e`, following `xw0e1f2a3b4d`. Publish via the normal production migration pipeline and carry identical history to beta.
 
 - Stable proposed ID: `2026-09-22-subscription-allowance-periods`.
 - English title: “Allowance dates follow your subscription”. Body: “Your allowance now follows your subscription period. A 30-day invitation includes one allowance for those 30 days. In Subscription, you can see when your allowance resets or your access ends.”
 - Russian title: «Даты обновления лимита привязаны к подписке». Body: «Лимит теперь действует в течение периода подписки. Приглашение на 30 дней даёт один лимит на весь этот срок. В разделе «Подписка» указано, когда лимит обновится или закончится доступ.»
+
+## Live release acceptance
+
+- Production 9098/#71 and beta 9103/#186 passed all four TeamCity stages. Child build revisions: production backend `01222fb149e0fdb0090daff45121ab4d34a5d193`, frontend `ea4a89bdfc48641bf946754b86757a5cb7cfad98`; beta backend `1117693502fd4d00c90d1de6c4cf62f119b0af0f`, frontend `c09fe90365446afae6c61ae43ea41176003fc92a`.
+- Both production Rollouts Healthy; all live APIs, frontends, workers and bot use 71 / beta-186, and both application CronJob templates use 71 with no active old jobs. Public production readiness and beta local readiness passed with database and Redis OK.
+- At 12:29:11 UTC admissions paused. Zero active requests and zero holds. At 12:29:37 UTC the atomic operator aligned 12 private accounts and enabled subscription mode. All 13 account IDs and financial balances preserved: shared spent 624432, Luna spent 5110, no reservations. No grants, resets, user creations or redemption fixtures.
+- Authenticated checks through app.lightnyai.ru and beta.app.lightny.ru returned identical existing Smooth allowance and September 29 anniversary. Existing browser sessions on production and beta both display the other Smooth account at unchanged 96.7% with its actual October 4 reset, replacing October 1.
+- Expiry without refill and in-flight settlement were verified in isolated tests, not by changing live subscriptions. Paid checkout remains outside this release.
+- Follow-up announcement migration xw0e1f2a3b4e is published only after the above live acceptance.
