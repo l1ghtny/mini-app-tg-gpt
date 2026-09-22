@@ -1,3 +1,14 @@
+# Lightny AI dual-domain compatibility — September 21, 2026
+
+In progress in an isolated migration clone. Added explicit browser origins,
+state-bound Telegram/email callbacks, RP metadata and domain-specific passkey
+ceremonies. Paired frontend resolves API/SSE/images/help/share/install URLs locally.
+No app or DB is moving to Moscow. Tests and CI release verification in progress;
+public entry-point switch and real-device acceptance remain pending.
+See docs/operations/lightnyai-domain-migration.md.
+
+---
+
 # Private tier cutover in progress — 21 September 2026
 
 Approved: Close Friends = Premium, Katush = Max, Smooth = Premium initially. Implemented subscription-backed monthly private grants, shared production/beta ledger scope retaining beta spend, audited capacity adjustments, and private plan labels. Starter onboarding and sharing remain unchanged pending owner review. Explicit cohort prevents unapproved starter grants. Tests pass; deployment and live verification are next. Details: backend docs/operations/2026-09-21-private-allowance-cutover.md.
@@ -1764,3 +1775,7 @@ Ship server-backed chat drafts and Favorites together with the matching frontend
 - Validation: 31 isolated provider/prompt tests pass, Ruff and diff checks pass. Two existing Google tests need external resources; one revealed the separate test database lacks conversation.tool_choice, so no schema-reset fixture or migration was run for them. Real provider acceptance uses the already-migrated local API/test account.
 - Frontend follow-up: no API/schema change. Ship with the already-verified document picker/accessibility and private-tier identity fixes. Production is outside this beta release.
 - Next: verify beta pipeline revisions, browser picker and real short response after release.
+
+# 2026-09-21 Passkey management implemented locally
+
+Prepared isolated paired worktrees at /private/tmp/lightny-passkey-management/{backend,frontend}, branch codex/passkey-management-20260921. Localized legacy default names; added owner-only renaming, creation/last-use browser context, dates and selected-key deletion confirmation. Exposes existing RP metadata without changing domain handling. Nullable migration xw0e1f2a3b4c must precede backend deployment. Frontend contracts and evidence: docs/operations/2026-09-21-passkey-management.md. Release to production and beta authorized on 22 September, after the usage-efficiency release completes. Next: integrate both branch pairs, production migration/release, beta release, and live version checks; real registration/sign-in remains a user-device check.

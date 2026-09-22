@@ -10,6 +10,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.auth_helpers import ensure_starter_bundle
 from app.core.config import settings
+from app.api.browser_origins import resolve_browser_origin
 from app.core.security import create_access_token
 from app.db import models
 from app.services.email_service import send_web_login_link
@@ -33,8 +34,11 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _callback_url(token: str) -> str:
+def _callback_url(token: str, origin: str | None = None) -> str:
+    selected = resolve_browser_origin(origin) if origin else None
     base = settings.WEB_AUTH_CALLBACK_URL.strip()
+    if selected and selected != (settings.WEBAPP_URL or "").rstrip("/"):
+        base = f"{selected}/auth/callback"
     if not base:
         webapp = (settings.WEBAPP_URL or "").rstrip("/")
         base = f"{webapp}/auth/callback" if webapp else ""
@@ -58,11 +62,14 @@ async def issue_magic_link(
     email: str,
     target_user: models.AppUser | None,
     debug_delivery: bool | None = None,
+    origin: str | None = None,
 ) -> str | None:
+    selected = resolve_browser_origin(origin) if origin else None
     normalized = normalize_email(email)
     token = secrets.token_urlsafe(32)
     challenge = models.WebAuthChallenge(
         token_hash=_token_hash(token),
+        browser_origin=selected,
         email=normalized,
         target_user_id=target_user.id if target_user else None,
         expires_at=_utcnow_naive()
@@ -77,7 +84,7 @@ async def issue_magic_link(
         return token
 
     try:
-        await send_web_login_link(normalized, _callback_url(token))
+        await send_web_login_link(normalized, _callback_url(token, selected))
     except Exception:
         await session.delete(challenge)
         await session.commit()
@@ -89,6 +96,7 @@ async def consume_magic_link(
     session: AsyncSession,
     *,
     token: str,
+    origin: str | None = None,
 ) -> tuple[str, bool, models.AppUser]:
     now = _utcnow_naive()
     challenge = (
@@ -104,6 +112,9 @@ async def consume_magic_link(
     ).first()
     if not challenge:
         raise HTTPException(status_code=400, detail="invalid_or_expired_login_link")
+
+    if challenge.browser_origin and resolve_browser_origin(origin) != challenge.browser_origin:
+        raise HTTPException(status_code=403, detail="web_login_origin_mismatch")
 
     identity = (
         await session.exec(

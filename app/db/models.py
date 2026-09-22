@@ -105,6 +105,7 @@ class WebAuthChallenge(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     token_hash: str = Field(unique=True, index=True)
+    browser_origin: Optional[str] = Field(default=None)
     email: str = Field(index=True)
     target_user_id: Optional[uuid.UUID] = Field(
         default=None,
@@ -154,6 +155,7 @@ class PasskeyCredential(SQLModel, table=True):
         )
     )
     credential_id: str = Field(unique=True, index=True)
+    rp_id: Optional[str] = Field(default=None)
     public_key: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
     sign_count: int = Field(default=0)
     transports: list[str] = Field(
@@ -162,6 +164,10 @@ class PasskeyCredential(SQLModel, table=True):
     device_type: Optional[str] = Field(default=None)
     backed_up: bool = Field(default=False)
     name: str = Field(default="Passkey")
+    created_browser: Optional[str] = Field(default=None)
+    created_os: Optional[str] = Field(default=None)
+    last_used_browser: Optional[str] = Field(default=None)
+    last_used_os: Optional[str] = Field(default=None)
     created_at: datetime = Field(
         default_factory=utcnow_naive,
         sa_column=Column(DateTime, nullable=False, index=True),
