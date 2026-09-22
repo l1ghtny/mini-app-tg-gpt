@@ -79,7 +79,26 @@ async def estimate(session, user, conversation, request):
         sum(kind in {"image", "image_url"} for kind, _ in rows)
         + sum(p.type == "image_url" for p in request.content),
     )
-    image_reserve = image_budget(quality, reference_tokens=refs * 1024)
+    reference_tokens = refs * 1024
+    if request.required_tool == "image_generation" and refs:
+        from types import SimpleNamespace
+        from app.services.allowance_images import image_files, image_reference_tokens
+
+        # Match the edit endpoint's owned-source decoding and dimensions. Only an
+        # explicit generation/edit quote reads files, never ordinary chat quotes.
+        sources = [v for k, v in reversed(rows) if k in {"image", "image_url"}]
+        sources += [p.value for p in request.content if p.type == "image_url"]
+        try:
+            files = await image_files(
+                [{"type": "input_image", "image_url": url} for url in sources[-4:]],
+                SimpleNamespace(user_id=user.id),
+            )
+            reference_tokens = image_reference_tokens(files)
+        except (HTTPException, ValueError):
+            # Unavailable historical sources must not block unrelated generation.
+            # Editing still checks availability before any image-provider spend.
+            reference_tokens = refs * 120 * 120  # 3840px decoder bound.
+    image_reserve = image_budget(quality, reference_tokens=reference_tokens)
     # Expected usage and admission use the exact same compacted multimodal context.
     # Do not promise cache hits; unused output/tool capacity is never a charge.
     lower = (
