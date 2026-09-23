@@ -170,6 +170,7 @@ async def test_mark_seen_updates_watermark():
 @pytest.mark.parametrize("module_name", [
     "migrations.versions.xo2c3d4e5f6a_add_image_resizing_whats_new",
     "migrations.versions.xp3d4e5f6a7b_add_error_toast_whats_new",
+    "migrations.versions.xw0e1f2a3b4f_announce_code_block_recovery",
 ])
 async def test_release_notice_migration_replay_and_localized_feed(module_name):
     from importlib import import_module

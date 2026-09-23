@@ -1,3 +1,11 @@
+## 2026-09-23 Code-block fix deployed; release note ready
+
+Sentry FRONTEND-52 reproduced exactly and fixed in frontend 3851785 (production) / 03a70c0 (beta). Beta flow 9184 and production flow 9195 passed; frontend images beta-190 / 75 deployed, all production canary analyses successful. Both production domains and beta passed desktop/mobile code rendering and copy checks with healthy and failed downloads, using synthetic intercepted browser data. Frontend tests: 366 production / 399 beta.
+
+What's New: required for this visible recovery fix. Production availability verified before publishing migration xw0e1f2a3b4f. Idempotence, EN/RU localized feed, scoped downgrade, offline SQL, Alembic single head and Ruff pass. DB validation used a transaction-scoped temporary table and left public data unchanged. No API contract changes.
+
+Next: deploy this notice through backend master, carry the migration to beta, verify one localized feed item through each public origin. Full evidence: docs/operations/2026-09-23-code-block-recovery.md. No scheduled follow-up.
+
 # Lightny AI dual-domain compatibility — September 21, 2026
 
 In progress in an isolated migration clone. Added explicit browser origins,
