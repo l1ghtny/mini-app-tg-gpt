@@ -3,6 +3,7 @@
 import json
 import logging
 from app.services.allowance_context import compress_context
+from app.services.provider_errors import ProviderResponseError
 from datetime import UTC, datetime
 import httpx
 from openai import APIStatusError
@@ -244,12 +245,16 @@ class ChatRun:
             raise
         outputs = [x.model_dump(exclude_none=True) for x in r.output]
         usage = normalize_openai_usage(r.usage, outputs)
+        reason = getattr(getattr(r, "incomplete_details", None), "reason", None)
+        usage["response_status"] = r.status
+        if reason:
+            usage["incomplete_reason"] = reason
         cost = usage_units(model, usage)
         await self.finish(
             attempt, model, usage, r.id, success=r.status == "completed", units=cost
         )
         if r.status != "completed":
-            raise RuntimeError("The model did not complete its response")
+            raise ProviderResponseError(status=r.status, reason=reason or "unknown")
         return r, outputs
 
 
