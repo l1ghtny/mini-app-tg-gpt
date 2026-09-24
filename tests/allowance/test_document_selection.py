@@ -45,6 +45,15 @@ def test_new_conversations_and_messages_default_to_auto():
     assert request.tool_choice == 'auto'
 
 
+@pytest.mark.parametrize('choice,enabled', [('auto', True), (['auto'], True), ([], False)])
+def test_auto_allows_attached_search_but_explicit_none_still_disables_it(choice, enabled):
+    from app.api.chat_helpers import _resolve_openai_tooling
+    available = [{'type': 'file_search', 'vector_store_ids': ['vs-doc']}]
+    tools, resolved, _ = _resolve_openai_tooling(choice, available)
+    assert tools == (available if enabled else [])
+    assert resolved == ('auto' if enabled else 'none')
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('model', ['gpt-5.6-luna', 'claude-fable-5-1'])
 @pytest.mark.parametrize('mode,expected', [('auto', None), ('required', 'file_search')])
