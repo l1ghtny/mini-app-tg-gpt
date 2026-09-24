@@ -862,13 +862,18 @@ async def _ingest_openai_artifact(
     tmp_path: str,
 ) -> None:
     vector_store = await _openai_client.vector_stores.create(name=f"user-document-{document.id}")
+    artifact.external_index_id = vector_store.id
     vector_file = await _openai_client.vector_stores.files.upload_and_poll(
         vector_store_id=vector_store.id,
         file=Path(tmp_path),
     )
+    artifact.external_file_id = vector_file.id
+    if vector_file.status != "completed":
+        error = getattr(vector_file, "last_error", None)
+        raise RuntimeError(
+            getattr(error, "message", None) or f"Document indexing {vector_file.status}"
+        )
     artifact.status = DocumentProviderArtifactStatus.ready.value
-    artifact.external_index_id = vector_store.id
-    artifact.external_file_id = getattr(vector_file, "file_id", None)
     artifact.error_code = None
     artifact.error_message = None
     artifact.indexed_at = _utcnow_naive()
