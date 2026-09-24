@@ -1,3 +1,7 @@
+## 2026-09-24 Startup improvement verified in production; notice publication next
+
+HTTP/2 enabled on app.lightnyai.ru. Frontend f3d5eaf/flow9291/#87 fully promoted; public mobile/desktop startup/reload/resume counts and h2 asset delivery pass. Frontend385 tests/build/lint pass; beta merge418 tests/build pass. Publishing required single EN/RU startup notice via migration53 after production feature verification. Next: validate localized feed, release frontend/backend beta and verify exact runtime. No upstream-reuse or UI-stall changes. Report: docs/operations/2026-09-24-startup-loading-release.md.
+
 ## 2026-09-24 Document generation recovery in progress
 
 Fixing successful document retrieval followed by answer-capacity failure and Fable excess-tool batch aborts. Changes in isolated checkout `/private/tmp/lightny-document-generation`: bounded evidence, one document retrieval round, graceful excess-call results, document-aware estimates and precise completion metadata. Nine focused regressions pass; full accounting tests running. Production release and a tiny two-document Terra acceptance check precede beta. No new announcement or schema change; existing document notice covers restored behavior. Frontend compatibility preserved; richer error presentation remains a follow-up.
