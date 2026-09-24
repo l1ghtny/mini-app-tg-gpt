@@ -26,3 +26,13 @@ Draft RU: **Документы прикрепляются и доступны в
 ## Next
 
 Release production, verify real upload/index/select/two-document retrieval/deselect and settlement, publish announcement, then integrate and verify beta. No customer documents or conversations are to be changed by acceptance tests.
+
+## Production acceptance
+
+- Owner explicitly approved one small document and a cheaper Terra model. Test used exactly one temporary text file and one synthetic owner chat on production. No paid beta test was authorized.
+- Upload/indexing, default Auto, preserving Auto on attachment, first attach/detach/reattach and permission sync all passed through the public API.
+- Terra returned a randomly generated verification code and warehouse that existed only in the file. The ledger confirms two Terra text steps and one document search; successful settlement charged 7,048 of the 50,000-unit cap, zero Luna pool usage. Idempotent retry returned the same assistant message and resume returned 204.
+- File and conversation cleanup both returned 204. No existing customer documents or chats were modified.
+- Deployed `app.lightnyai.ru` browser assets pass phone/desktop selection, two-file badge, reopening, and deselection with browser-only synthetic API fixtures. The same check failed against the old frontend before rollout, reproducing the stale badge.
+- New-user browser and backend defaults are Auto. Regression tests cover keeping both `auto` and legacy `['auto']` unchanged on attachment. Explicitly saved no-tools preferences remain explicit.
+- Beta integration tests: 406 frontend tests and production build pass; backend suite in progress. Beta has not yet been pushed.
