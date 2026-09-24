@@ -95,6 +95,7 @@ jobs:
             --build-arg VITE_SENTRY_REPLAY_ENABLED="true" \
             --build-arg VITE_SENTRY_FEEDBACK_SCREENSHOT="true" \
             --build-arg VITE_APP_VERSION="tg-mini-frontend@$TAG" \
+            --build-arg VITE_VOICE_TRANSCRIPTION_ENABLED="true" \
             --build-arg VITE_TEST="false" \
             --build-arg VITE_BOT_USERNAME="AIwithUIbot" \
             "${SENTRY_ARGS[@]}" \

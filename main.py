@@ -9,6 +9,7 @@ import os
 from app.api.access_codes import access_codes
 from app.api.admin_broadcast import admin_broadcast
 from app.api.auth import auth
+from app.api.audio import audio
 from app.api.account import account
 from app.api.health import health
 from app.api.chat_folders import router as chat_folders_router
@@ -148,6 +149,7 @@ app.include_router(health)
 app.include_router(chat_router, prefix="/api/v1", tags=["conversations"])
 app.include_router(chat_folders_router, prefix="/api/v1", tags=["chat-folders"])
 app.include_router(auth, prefix="/api/v1")
+app.include_router(audio, prefix="/api/v1")
 app.include_router(account, prefix="/api/v1")
 app.include_router(images, prefix="/api/v1")
 app.include_router(documents, prefix="/api/v1")

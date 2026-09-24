@@ -139,6 +139,9 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
                 tier_description_ru=sub.tier.description_ru,
                 tier_price=sub.tier.price_cents,
                 tier_id=str(sub.tier.id),
+                tier_monthly_transcription_minutes=int(
+                    getattr(sub.tier, "monthly_transcription_minutes", 0) or 0
+                ),
             )
         )
 

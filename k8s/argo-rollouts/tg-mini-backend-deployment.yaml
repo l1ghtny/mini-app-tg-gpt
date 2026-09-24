@@ -56,6 +56,38 @@ spec:
           value: socks5://warp-proxy:1080
         - name: HTTP_PROXY
           value: socks5://warp-proxy:1080
+        - name: DEPLOYMENT_CHANNEL
+          value: production
+        - name: VOICE_TRANSCRIPTION_ENABLED
+          value: 'true'
+        - name: VOICE_TRANSCRIPTION_MODEL
+          value: gpt-transcribe
+        - name: VOICE_TRANSCRIPTION_UPLOAD_MAX_BYTES
+          value: '20971520'
+        - name: VOICE_TRANSCRIPTION_UPLOAD_MAX_DURATION_SECONDS
+          value: '1800'
+        - name: VOICE_TRANSCRIPTION_COST_PER_MINUTE_USD
+          value: '0.0045'
+        - name: AUDIO_TRANSCRIPTION_R2_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: tg-mini-beta-work-runs-r2
+              key: R2_PRIVATE_DOCUMENTS_BUCKET
+        - name: AUDIO_TRANSCRIPTION_R2_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: tg-mini-beta-work-runs-r2
+              key: R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID
+        - name: AUDIO_TRANSCRIPTION_R2_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: tg-mini-beta-work-runs-r2
+              key: R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
+        - name: AUDIO_TRANSCRIPTION_R2_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: backend-env
+              key: R2_ENDPOINT
         envFrom:
         - secretRef:
             name: backend-env

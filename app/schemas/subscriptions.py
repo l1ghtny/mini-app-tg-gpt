@@ -26,6 +26,7 @@ class SubscriptionResponse(BaseModel):
     tier_description_ru: str
     tier_price: int
     tier_id: str
+    tier_monthly_transcription_minutes: int = 0
 
 
 class SubscriptionDiscountResponse(BaseModel):
@@ -79,6 +80,7 @@ class SubscriptionTierResponse(BaseModel):
     price_cents: int
     monthly_images: int
     monthly_docs: int = 0
+    monthly_transcription_minutes: int = 0
     max_active_docs: int = 0
     max_storage_bytes: int = 0
     max_file_size_bytes: int = 0
