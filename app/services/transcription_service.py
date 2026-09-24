@@ -22,14 +22,15 @@ async def transcribe_audio(
     audio: bytes,
     filename: str,
     model: str,
+    timeout_seconds: float | None = None,
 ) -> TranscriptionResult:
     upload = BytesIO(audio)
     upload.name = filename
-    response = await _client.audio.transcriptions.create(
+    response = await _client.with_options(max_retries=0).audio.transcriptions.create(
         file=upload,
         model=model,
         response_format="json",
-        timeout=settings.VOICE_TRANSCRIPTION_TIMEOUT_SECONDS,
+        timeout=timeout_seconds or settings.VOICE_TRANSCRIPTION_TIMEOUT_SECONDS,
     )
 
     usage = getattr(response, "usage", None)

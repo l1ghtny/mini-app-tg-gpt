@@ -50,6 +50,9 @@ sed \
   -e "s/__FRONTEND_TAG__/${FRONTEND_TAG}/g" \
   "${repo_root}/k8s/beta/lightny-beta.yaml.tpl" >"${rendered_manifest}"
 
+BACKEND_IMAGE="localhost:32000/tg-mini-app-backend:${BACKEND_TAG}" AUDIO_CHANNEL=beta \
+  bash "${script_dir}/deploy_audio_worker.sh"
+
 kubectl apply -f "${rendered_manifest}"
 kubectl apply -f \
   "${repo_root}/k8s/argo-rollouts/lightny-work-runs-observability.yaml"

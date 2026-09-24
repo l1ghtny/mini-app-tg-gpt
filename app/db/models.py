@@ -774,6 +774,34 @@ class TokenUsage(SQLModel, table=True):
     __table_args__ = (Index("ix_token_usage_user_created", "user_id", "created_at"),)
 
 
+class AudioTranscriptionJob(SQLModel, table=True):
+    __tablename__ = "audio_transcription_job"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    request_id: uuid.UUID = Field(index=True)
+    channel: str = Field(index=True)
+    status: str = Field(default="queued", index=True)
+    model_name: str
+    audio_key: Optional[str] = None
+    audio_extension: str
+    duration_seconds: float
+    transcript_text: Optional[str] = Field(default=None, sa_column=Column(Text))
+    error_code: Optional[str] = None
+    attempt_started_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime))
+    lease_expires_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
+    created_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime, index=True))
+    updated_at: datetime = Field(default_factory=utcnow_naive, sa_column=Column(DateTime))
+    expires_at: datetime = Field(sa_column=Column(DateTime, nullable=False, index=True))
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_audio_transcription_job_user_request"),
+        Index("ix_audio_transcription_job_status_created", "status", "created_at"),
+    )
+
+
 class DerivedImage(SQLModel, table=True):
     __tablename__ = "derived_image"
 

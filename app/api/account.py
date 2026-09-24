@@ -17,6 +17,7 @@ from app.db.database import get_session
 from app.db.models import AppUser
 from app.db.subscription_tiers import UserSubscription, UserUsagePack
 from app.r2.methods import delete_object
+from app.r2.private_audio import delete_audio as delete_private_audio
 
 account = APIRouter(prefix="/account", tags=["account"])
 
@@ -146,6 +147,50 @@ async def delete_account(
 ) -> None:
     if payload.confirmation != "DELETE":
         raise HTTPException(status_code=422, detail="deletion_confirmation_required")
+
+    await session.exec(
+        select(AppUser).where(AppUser.id == current_user.id).with_for_update()
+    )
+
+    # Remove recoverable transcript text and private raw input before the
+    # account's identity is cleared. A running worker checks the job row again
+    # before settlement and cannot restore a deleted result.
+    audio_jobs = (await session.exec(
+        select(models.AudioTranscriptionJob)
+        .where(models.AudioTranscriptionJob.user_id == current_user.id)
+        .with_for_update()
+    )).all()
+    for job in audio_jobs:
+        if job.status == "storing":
+            # The upload may finish after this transaction. Retain its key for
+            # the API completion path or the worker's delayed cleanup.
+            job.status = "cancel_pending"
+            job.error_code = "voice_transcription_account_deleted"
+            job.transcript_text = None
+            job.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            session.add(job)
+            ledger = (await session.exec(select(models.RequestLedger).where(
+                models.RequestLedger.user_id == current_user.id,
+                models.RequestLedger.request_id == str(job.request_id),
+            ))).first()
+            if ledger and ledger.state == models.State.reserved:
+                ledger.state = models.State.failed
+                session.add(ledger)
+            continue
+        if job.audio_key:
+            try:
+                await delete_private_audio(job.audio_key)
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="account_audio_cleanup_unavailable") from exc
+        if job.status in ("queued", "processing"):
+            ledger = (await session.exec(select(models.RequestLedger).where(
+                models.RequestLedger.user_id == current_user.id,
+                models.RequestLedger.request_id == str(job.request_id),
+            ))).first()
+            if ledger and ledger.state == models.State.reserved:
+                ledger.state = models.State.failed
+                session.add(ledger)
+        await session.delete(job)
 
     conversations = (
         await session.exec(

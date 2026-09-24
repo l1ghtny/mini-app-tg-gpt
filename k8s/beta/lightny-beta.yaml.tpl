@@ -128,6 +128,34 @@ spec:
               value: gpt-transcribe
             - name: PROMETHEUS_METRICS_PORT
               value: "9100"
+            - name: DEPLOYMENT_CHANNEL
+              value: beta
+            - name: VOICE_TRANSCRIPTION_UPLOAD_MAX_BYTES
+              value: '20971520'
+            - name: VOICE_TRANSCRIPTION_UPLOAD_MAX_DURATION_SECONDS
+              value: '1800'
+            - name: VOICE_TRANSCRIPTION_COST_PER_MINUTE_USD
+              value: '0.0045'
+            - name: AUDIO_TRANSCRIPTION_R2_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: tg-mini-beta-work-runs-r2
+                  key: R2_PRIVATE_DOCUMENTS_BUCKET
+            - name: AUDIO_TRANSCRIPTION_R2_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: tg-mini-beta-work-runs-r2
+                  key: R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID
+            - name: AUDIO_TRANSCRIPTION_R2_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tg-mini-beta-work-runs-r2
+                  key: R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
+            - name: AUDIO_TRANSCRIPTION_R2_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: backend-beta-env
+                  key: R2_ENDPOINT
           envFrom:
             - secretRef:
                 name: backend-beta-env
