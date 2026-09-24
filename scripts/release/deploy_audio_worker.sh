@@ -16,8 +16,7 @@ case "${BACKEND_IMAGE}" in
   *[!a-zA-Z0-9._:/@-]*) echo "Invalid backend image" >&2; exit 1 ;;
 esac
 
-# Reuse existing secret references; do not duplicate or change storage credentials.
-kubectl get secret "${env_secret}" tg-mini-beta-work-runs-r2 -n "${K8S_NAMESPACE}" >/dev/null
+# Kubelet resolves existing secret references; CI does not need secret-read access.
 manifest="$(mktemp)"
 trap 'rm -f "${manifest}"' EXIT
 sed \
