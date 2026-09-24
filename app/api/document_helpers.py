@@ -929,7 +929,10 @@ async def replace_conversation_documents(
 
     # Selecting files is an explicit request to make them available to this chat.
     # Preserve other permissions; sending [] still explicitly disables all tools.
-    if normalized_ids and conversation.tool_choice != "auto":
+    auto_tools = conversation.tool_choice == "auto" or (
+        isinstance(conversation.tool_choice, list) and "auto" in conversation.tool_choice
+    )
+    if normalized_ids and not auto_tools:
         choice = conversation.tool_choice
         permissions = list(choice) if isinstance(choice, list) else ([choice] if choice and choice != "none" else [])
         conversation.tool_choice = list(dict.fromkeys([*permissions, "file_search"]))

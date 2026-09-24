@@ -8,7 +8,7 @@ from app.services import shared_chat_provider as provider
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('choice,expected', [([], ['file_search']), (['web_search'], ['web_search', 'file_search']), ('none', ['file_search']), ('auto', 'auto')])
+@pytest.mark.parametrize('choice,expected', [([], ['file_search']), (['web_search'], ['web_search', 'file_search']), ('none', ['file_search']), ('auto', 'auto'), (['auto'], ['auto'])])
 async def test_attaching_enables_search_atomically(document_helpers, monkeypatch, choice, expected):
     from app.db.models import Conversation, AppUser
     from app.schemas.documents import DocumentCapabilitiesResponse
@@ -35,6 +35,14 @@ def document_helpers(monkeypatch):
     from app.api import document_helpers
     monkeypatch.setattr(document_helpers, '_resolve_document_provider', lambda **kw: ('openai', 'openai', False))
     return document_helpers
+
+
+def test_new_conversations_and_messages_default_to_auto():
+    from app.db.models import Conversation
+    from app.schemas.chat import NewMessageRequest
+    assert Conversation(user_id=uuid.uuid4()).tool_choice == 'auto'
+    request = NewMessageRequest(client_request_id='default-tool-check', model='gpt-6-astra', role='user', content=[{'type': 'text', 'value': 'Hello'}])
+    assert request.tool_choice == 'auto'
 
 
 @pytest.mark.asyncio
