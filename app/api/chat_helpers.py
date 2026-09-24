@@ -1480,6 +1480,7 @@ async def _replace_message_content(
     for part in list(message.content):
         await session.delete(part)
 
+    documents = await _snapshot_conversation_documents(session, message.conversation_id, user_id)
     ordinal = 0
     if has_text:
         session.add(
@@ -1488,6 +1489,7 @@ async def _replace_message_content(
                 ordinal=ordinal,
                 type="text",
                 value=text_value,
+                data={"attached_documents": documents},
             )
         )
         ordinal += 1
@@ -1498,6 +1500,7 @@ async def _replace_message_content(
             ordinal=ordinal,
             type="image_url",
             value=image_url,
+            data={"attached_documents": documents} if ordinal == 0 else None,
         )
         session.add(content)
         await session.flush()
@@ -1713,6 +1716,22 @@ def _resolve_system_prompt(conversation: Conversation, user: AppUser) -> str:
     return "\n\n".join(parts) + "\n\n"
 
 
+async def _snapshot_conversation_documents(
+    session: AsyncSession, conversation_id: uuid.UUID, user_id: uuid.UUID
+) -> list[dict[str, str]]:
+    rows = (await session.exec(
+        select(models.UserDocument.id, models.UserDocument.filename)
+        .join(models.ConversationDocument, models.ConversationDocument.document_id == models.UserDocument.id)
+        .where(
+            models.ConversationDocument.conversation_id == conversation_id,
+            models.UserDocument.user_id == user_id,
+            models.UserDocument.deleted_at.is_(None),
+        )
+        .order_by(models.ConversationDocument.attached_at, models.UserDocument.id)
+    )).all()
+    return [{"id": str(document_id), "filename": filename} for document_id, filename in rows]
+
+
 async def _create_user_message(
     session: AsyncSession,
     conversation: Conversation,
@@ -1728,8 +1747,12 @@ async def _create_user_message(
     conversation.draft_updated_at = conversation.updated_at
     session.add(conversation)
 
-    for part in request.content:
-        mc = models.MessageContent(message_id=user_msg.id, type=part.type, value=part.value)
+    documents = await _snapshot_conversation_documents(session, conversation.id, conversation.user_id)
+    for index, part in enumerate(request.content):
+        mc = models.MessageContent(
+            message_id=user_msg.id, ordinal=index, type=part.type, value=part.value,
+            data={"attached_documents": documents} if index == 0 else None,
+        )
         session.add(mc)
         await session.flush()
         if part.type == "image_url":
