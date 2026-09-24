@@ -78,11 +78,24 @@ async def download_audio(key: str, *, max_bytes: int) -> bytes:
             response = await client.get_object(Bucket=bucket, Key=key)
             body = response["Body"]
             try:
-                contents = await body.read(max_bytes + 1)
+                length = response.get("ContentLength")
+                if isinstance(length, int) and length > max_bytes:
+                    raise ValueError("private audio object is oversized")
+                parts = []
+                size = 0
+                while size <= max_bytes:
+                    chunk = await body.read(min(1024 * 1024, max_bytes + 1 - size))
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ValueError("private audio object is oversized")
+                    parts.append(chunk)
+                contents = b"".join(parts)
             finally:
                 body.close()
-            if not contents or len(contents) > max_bytes:
-                raise ValueError("private audio object is missing or oversized")
+            if not contents:
+                raise ValueError("private audio object is missing")
             return contents
 
 
