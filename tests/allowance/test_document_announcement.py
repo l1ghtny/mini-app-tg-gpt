@@ -33,3 +33,39 @@ def test_document_notice_offline_sql():
     assert 'on conflict (id) do nothing' in sql
     assert 'delete' not in sql and 'drop' not in sql
     assert migration.down_revision=='xw0e1f2a3b4f'
+
+@pytest.mark.asyncio
+async def test_indexing_notice_extends_existing_item_without_republishing(db):
+    engine, _, _ = db
+    migration = import_module('migrations.versions.xw0e1f2a3b51_document_indexing_notice')
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda c: WhatsNewItem.__table__.create(c))
+        def apply(c, action):
+            with Operations.context(MigrationContext.configure(c)):
+                action()
+        await conn.run_sync(lambda c: apply(c, migration.previous.upgrade))
+        published = (await conn.execute(text('select published_at from whats_new_item'))).scalar_one()
+        await conn.execute(WhatsNewItem.__table__.insert().values(**WhatsNewItem(id="unrelated", kind="improvement", title_en="Other", title_ru="Other", body_en="Keep", body_ru="Keep").model_dump()))
+        await conn.run_sync(lambda c: apply(c, migration.upgrade))
+        await conn.run_sync(lambda c: apply(c, migration.upgrade))
+        row = (await conn.execute(text('select body_en, body_ru, published_at from whats_new_item where id=:id'), {'id':migration.ITEM_ID})).one()
+        assert row.body_en == migration.BODY_EN
+        assert row.body_ru == migration.BODY_RU
+        assert row.published_at == published
+        assert (await conn.execute(text('select count(*) from whats_new_item'))).scalar_one() == 2
+        await conn.run_sync(lambda c: apply(c, migration.downgrade))
+        assert (await conn.execute(text('select body_en from whats_new_item where id=:id'), {'id':migration.ITEM_ID})).scalar_one() == migration.previous.BODY_EN
+        assert (await conn.execute(text("select body_en from whats_new_item where id='unrelated'"))).scalar_one() == 'Keep'
+
+
+def test_indexing_notice_offline_sql():
+    migration = import_module('migrations.versions.xw0e1f2a3b51_document_indexing_notice')
+    output = StringIO()
+    context = MigrationContext.configure(dialect_name='postgresql', opts={'as_sql':True,'literal_binds':True,'output_buffer':output})
+    with Operations.context(context):
+        migration.upgrade()
+    sql = output.getvalue().lower()
+    assert 'update whats_new_item' in sql
+    assert "where id = '2026-09-24-document-selection'" in sql
+    assert 'published_at' not in sql and 'insert' not in sql and 'delete' not in sql
+    assert migration.down_revision == 'xw0e1f2a3b50'
