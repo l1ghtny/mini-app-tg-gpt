@@ -21,6 +21,10 @@ from app.services.allowance_policy import (
     affordable_output,
     image_budget,
     reference_count,
+    DOCUMENT_SEARCH_TOKENS,
+    MAX_CHAT_TOOL_CALLS,
+    text_encoding,
+    text_tokens,
 )
 from app.services.openai_service import client, _instructions_for_openai
 
@@ -29,7 +33,7 @@ logger = logging.getLogger(__name__)
 TOOL_DESCRIPTIONS = {
     "inspect_image": "Inspect specific attached images when the existing conversation does not contain the visual facts needed to answer. Use image reference IDs from the conversation. Ask a precise question. Use high detail normally; original only for unreadable small text or fine details. Do not inspect images again if the prior answer already contains the needed facts.",
     "web_search": "Search the web for current evidence. Cite returned source URLs in the answer.",
-    "file_search": "Search the user's attached documents. Cite the filename and relevant passage.",
+    "file_search": "Search all attached documents in one focused query. Results are bounded excerpts, not the complete files. Cite the filename and relevant passage. Use the returned evidence to answer and state any gaps.",
     "image_generation": "Generate or edit one image. Describe the requested change precisely. Choose reference_mode none for a new unrelated image, latest to edit the last image, or recent only when the task requires combining recent images (up to four).",
 }
 
@@ -313,12 +317,16 @@ async def openai_turn(
         # Omit absent SDK fields when replaying output as input after a tool call.
         output = [x.model_dump(exclude_none=True) for x in complete.output]
         usage = normalize_openai_usage(complete.usage, output)
+        reason = getattr(getattr(complete, "incomplete_details", None), "reason", None)
+        usage["response_status"] = complete.status
+        if reason:
+            usage["incomplete_reason"] = reason
         await run.finish(
             attempt, model, usage, complete.id, success=complete.status == "completed"
         )
         if complete.status != "completed":
-            raise RuntimeError(
-                "The model ran out of response capacity; try a smaller task"
+            raise ProviderResponseError(
+                status=complete.status, reason=reason or "unknown"
             )
         yield {
             "type": "turn.result",
@@ -458,7 +466,7 @@ async def claude_turn(
     normalized_usage["stop_reason"] = stop
     await run.finish(attempt, model, normalized_usage, response_id, success=success)
     if not success:
-        raise RuntimeError(f"Claude did not finish the answer (stop_reason={stop})")
+        raise ProviderResponseError(status="incomplete", reason=stop or "unknown")
     yield {
         "type": "turn.result",
         "output": output,
@@ -530,27 +538,30 @@ async def run_tool(run, name, args, tools, messages, index):
     if name == "file_search":
         stores = tools[name].get("vector_store_ids", [])
         attempt = await run.start(LUNA, 2500 * len(stores))
-        passages = []
+        by_store = []
         for store in stores:
             results = await client.with_options(max_retries=0).vector_stores.search(
                 vector_store_id=store, query=query, max_num_results=4
             )
+            passages = []
             for item in results.data:
                 passages.append(
                     dict(
                         filename=item.filename,
                         text="\n".join(
                             c.text for c in item.content if c.type == "text"
-                        )[:5000],
+                        ),
                     )
                 )
+            by_store.append(passages)
+        result = bounded_document_results(by_store)
         await run.finish(
             attempt, LUNA, {"file_calls": len(stores)}, units=2500 * len(stores)
         )
         yield {"type": "file_search.used"}
         yield {
             "type": "tool.result",
-            "result": json.dumps(passages, ensure_ascii=False),
+            "result": result,
         }
         return
     prompt = [{"role": "user", "content": [{"type": "input_text", "text": query}]}]
@@ -604,6 +615,45 @@ async def run_tool(run, name, args, tools, messages, index):
                 dict(text=r.output_text, sources=sources), ensure_ascii=False
             ),
         }
+
+
+def bounded_document_results(by_store):
+    # Interleave ranked passages so large files cannot crowd out other documents.
+    passages = []
+    seen = set()
+    for rank in range(max((len(group) for group in by_store), default=0)):
+        for group in by_store:
+            if rank < len(group):
+                item = group[rank]
+                key = (item["filename"], item["text"])
+                if key not in seen:
+                    seen.add(key)
+                    passages.append(item)
+    encoding = text_encoding()
+    tokens = [encoding.encode(p["text"], disallowed_special=()) for p in passages]
+    # Bound the entire JSON payload, including filenames and escaping.
+    while passages:
+        low, high = 0, DOCUMENT_SEARCH_TOKENS
+        best = None
+        while low <= high:
+            size = (low + high) // 2
+            payload = json.dumps(
+                [
+                    {"filename": p["filename"], "text": encoding.decode(t[:size])}
+                    for p, t in zip(passages, tokens)
+                ],
+                ensure_ascii=False,
+            )
+            if text_tokens(payload) <= DOCUMENT_SEARCH_TOKENS:
+                best = payload
+                low = size + 1
+            else:
+                high = size - 1
+        if best is not None and high > 0:
+            return best
+        passages.pop()
+        tokens.pop()
+    return "[]"
 
 
 def shared_instructions(model, instructions):
@@ -684,7 +734,9 @@ async def stream_shared_response(
     if isinstance(tool_choice, dict):
         if tool_choice.get("type") == "allowed_tools":
             allowed = {t.get("type") for t in tool_choice.get("tools", [])}
-            selected = {name: spec for name, spec in selected.items() if name in allowed}
+            selected = {
+                name: spec for name, spec in selected.items() if name in allowed
+            }
             if tool_choice.get("mode") == "required" and len(selected) == 1:
                 required = next(iter(selected))
         else:
@@ -705,15 +757,23 @@ async def stream_shared_response(
     history = claude_messages(messages) if is_claude else list(messages)
     index = 0
     calls_used = 0
+    document_search_used = False
     for turn in range(3):
-        turn_tools = selected if calls_used < 2 else {}
+        turn_tools = (
+            selected
+            if calls_used < MAX_CHAT_TOOL_CALLS and not document_search_used
+            else {}
+        )
+        turn_system = system
+        if document_search_used:
+            turn_system += "\nDocument retrieval is complete for this request. Answer from the excerpts already returned, cite their filenames, and state any evidence gaps. Do not claim the entire document was reviewed."
         fn = claude_turn if is_claude else openai_turn
         result = None
         async for event in fn(
             run,
             history,
             model,
-            system,
+            turn_system,
             turn_tools,
             required if turn == 0 else None,
             effort,
@@ -741,18 +801,21 @@ async def stream_shared_response(
             history.extend(result["output"])
         results = []
         for call in result["calls"]:
-            calls_used += 1
-            if calls_used > 2:
-                raise RuntimeError("Tool limit reached")
             index += 1
-            result_text = None
-            async for event in run_tool(
-                run, call["name"], call["args"], selected, original, index
-            ):
-                if event["type"] == "tool.result":
-                    result_text = event["result"]
-                else:
-                    yield event
+            if calls_used >= MAX_CHAT_TOOL_CALLS or call["name"] not in turn_tools:
+                # Every tool_use needs a matching result, even when not executed.
+                result_text = "Tool not executed: the request's tool limit has been reached. Answer using evidence already returned; clearly state any missing information."
+            else:
+                calls_used += 1
+                document_search_used |= call["name"] == "file_search"
+                result_text = None
+                async for event in run_tool(
+                    run, call["name"], call["args"], selected, original, index
+                ):
+                    if event["type"] == "tool.result":
+                        result_text = event["result"]
+                    else:
+                        yield event
             if is_claude:
                 results.append(
                     {

@@ -8,6 +8,9 @@ from functools import lru_cache
 import tiktoken
 
 RATE_VERSION = "2026-09-18-v1"
+DOCUMENT_SEARCH_TOKENS = 2048
+MAX_CHAT_TOOL_CALLS = 2
+
 BASE_GRANT = 1_250_000
 LUNA = "gpt-5.6-luna"
 FLARE = "gpt-image-2.5-flare"
@@ -223,3 +226,20 @@ def affordable_output(model, messages, instructions, budget, *, target):
     base = step_budget(model, messages, instructions, max_output=0)
     remaining = Decimal(max(0, budget - base)) / Decimal(MODELS[model].output_rate)
     return min(target, int(remaining))
+
+
+def document_followup_messages(messages):
+    """Worst-case bounded evidence plus routing metadata for a document turn."""
+    return [
+        *messages,
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": " evidence"
+                    * (DOCUMENT_SEARCH_TOKENS * MAX_CHAT_TOOL_CALLS + 512),
+                }
+            ],
+        },
+    ]

@@ -1,3 +1,7 @@
+## 2026-09-24 Document generation recovery in progress
+
+Fixing successful document retrieval followed by answer-capacity failure and Fable excess-tool batch aborts. Changes in isolated checkout `/private/tmp/lightny-document-generation`: bounded evidence, one document retrieval round, graceful excess-call results, document-aware estimates and precise completion metadata. Nine focused regressions pass; full accounting tests running. Production release and a tiny two-document Terra acceptance check precede beta. No new announcement or schema change; existing document notice covers restored behavior. Frontend compatibility preserved; richer error presentation remains a follow-up.
+
 ## 2026-09-23 Code-block fix deployed; release note ready
 
 Sentry FRONTEND-52 reproduced exactly and fixed in frontend 3851785 (production) / 03a70c0 (beta). Beta flow 9184 and production flow 9195 passed; frontend images beta-190 / 75 deployed, all production canary analyses successful. Both production domains and beta passed desktop/mobile code rendering and copy checks with healthy and failed downloads, using synthetic intercepted browser data. Frontend tests: 366 production / 399 beta.

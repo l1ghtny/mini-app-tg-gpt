@@ -15,11 +15,17 @@ from app.services.allowance_policy import (
     step_budget,
     image_budget,
     output_target,
+    document_followup_messages,
+    MAX_CHAT_TOOL_CALLS,
 )
 
 
 def tool_names(choice):
-    if choice == "auto" or choice is None:
+    if (
+        choice == "auto"
+        or choice is None
+        or (isinstance(choice, list) and "auto" in choice)
+    ):
         return {"web_search", "file_search", "image_generation"}
     if isinstance(choice, str):
         return {choice} if choice != "none" else set()
@@ -61,6 +67,13 @@ async def estimate(session, user, conversation, request):
         history + [current], conversation
     )
     tools = tool_names(request.tool_choice)
+    document_stores = []
+    if "file_search" in tools:
+        from app.api.document_helpers import list_conversation_ready_vector_store_ids
+
+        document_stores = await list_conversation_ready_vector_store_ids(
+            session, conversation.id, user=user
+        )
     if references:
         tools.add("inspect_image")
     instructions = shared_instructions(
@@ -134,6 +147,25 @@ async def estimate(session, user, conversation, request):
         # Optional tools use bounded headroom, not a second full-context reservation.
         # Every actual tool/continuation still passes begin_attempt before spending.
         paid_upper += 40_000
+    document_followup = 0
+    if document_stores:
+        # One routing turn, up to two bounded searches, then the final answer.
+        # Reserve the extra input and routing output, not another full answer.
+        evidence = document_followup_messages(messages)
+        document_followup = step_budget(
+            request.model, evidence, instructions, max_output=512
+        )
+        search_budget = 2500 * len(document_stores) * MAX_CHAT_TOOL_CALLS
+        if included:
+            paid_upper = max(paid_upper, search_budget)
+        else:
+            document_upper = upper + document_followup + search_budget
+            if request.required_tool == "file_search":
+                document_upper += step_budget(
+                    request.model, [], max_output=output_target(request.model, effort)
+                ) - step_budget(request.model, [], max_output=target)
+            paid_upper = max(paid_upper, document_upper)
+            typical += document_followup + search_budget
     threshold = max(1, a.granted * 5 // 100)
     needs_confirmation = (
         typical >= threshold
@@ -172,7 +204,8 @@ async def estimate(session, user, conversation, request):
                     json.dumps(history, sort_keys=True).encode()
                 ).hexdigest(),
                 rate=RATE_VERSION,
-                context_policy="multimodal-v2",
+                context_policy="bounded-documents-v3",
+                document_stores=sorted(document_stores),
             ),
             sort_keys=True,
             ensure_ascii=False,
@@ -218,7 +251,8 @@ async def estimate(session, user, conversation, request):
         else None,
         luna_minimum=minimum if included else 0,
         luna_ceiling=min(
-            (upper * 2 if included else 0) + (50_000 if needs_summary else 0),
+            (max(upper * 2, upper + document_followup) if included else 0)
+            + (50_000 if needs_summary else 0),
             max(0, a.luna_granted - a.luna_spent - a.luna_reserved),
         ),
     )

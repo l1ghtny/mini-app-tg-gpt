@@ -236,7 +236,14 @@ async def generate_and_publish(
             from app.services import allowance
             if request_id and allowance.enabled(user_id):
                 error_event["error"] = "The request could not be completed. No allowance will be charged for an unsuccessful task."
-                if isinstance(e, HTTPException) and isinstance(e.detail, dict):
+                from app.services.provider_errors import ProviderResponseError
+                if isinstance(e, ProviderResponseError):
+                    error_event["code"] = (
+                        "response_capacity_exceeded"
+                        if e.reason in {"max_output_tokens", "max_tokens"}
+                        else "provider_response_incomplete"
+                    )
+                elif isinstance(e, HTTPException) and isinstance(e.detail, dict):
                     error_event["code"] = e.detail.get("error", "generation_failed")
                 await allowance.settle(session, user_id, request_id, success=False)
             await _record_and_publish_activity(
