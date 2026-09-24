@@ -457,6 +457,9 @@ spec:
         - podSelector:
             matchLabels:
               app: tg-mini-beta-work-run-worker
+        - podSelector:
+            matchLabels:
+              app: tg-mini-beta-audio-transcription-worker
       ports:
         - protocol: TCP
           port: 6379
