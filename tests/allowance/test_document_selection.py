@@ -88,3 +88,67 @@ async def test_search_reads_both_attached_stores(monkeypatch):
     assert 'SAPPHIRE-731' in result and 'COPPER-482' in result
     assert [c.kwargs['vector_store_id'] for c in search.call_args_list] == ['vs-first', 'vs-second']
     assert run.finish.call_args.kwargs['units'] == 5000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('model', ['gpt-5.6-terra', 'claude-fable-5-1'])
+@pytest.mark.parametrize('choice,has_access', [('auto', True), ('none', False),
+    ({'type':'allowed_tools','mode':'auto','tools':[{'type':'web_search'}]}, False)])
+async def test_current_attachment_context_overrides_stale_denials_without_forcing_tools(monkeypatch, model, choice, has_access):
+    messages = [
+        {'role':'user','content':[{'type':'input_text','text':'What can you tell me about this file?'}]},
+        {'role':'assistant','content':[{'type':'input_text','text':'I do not see a file attached.'}]},
+        {'role':'user','content':[{'type':'input_text','text':'This one'}]},
+    ]
+    monkeypatch.setattr(provider, 'compress_context', AsyncMock(return_value=messages))
+    seen = []
+    async def turn(run, history, model, system, tools, required, effort, index):
+        seen.append((system, tools, required))
+        yield {'type':'turn.result','output':[],'calls':[]}
+    monkeypatch.setattr(provider, 'openai_turn', turn)
+    monkeypatch.setattr(provider, 'claude_turn', turn)
+    stream = provider.stream_shared_response(messages, model, tool_choice=choice,
+        tools=[{'type':'file_search','vector_store_ids':['vs-first','vs-second']}, {'type':'web_search'}])
+    await anext(stream)
+    await stream.aclose()
+    system, tools, required = seen[0]
+    assert ('Current attachment state: 2 ready document(s)' in system) == has_access
+    assert ('file_search' in tools) == has_access
+    assert required is None
+    assert 'Earlier assistant claims' in system
+    assert 'search them before answering' in system
+
+
+@pytest.mark.asyncio
+async def test_no_documents_does_not_claim_current_attachments(monkeypatch):
+    monkeypatch.setattr(provider, 'compress_context', AsyncMock(return_value=[]))
+    systems = []
+    async def turn(run, history, model, system, tools, required, effort, index):
+        systems.append(system)
+        yield {'type':'turn.result','output':[],'calls':[]}
+    monkeypatch.setattr(provider, 'openai_turn', turn)
+    stream = provider.stream_shared_response([], 'gpt-5.6-terra', tools=[{'type':'web_search'}])
+    await anext(stream)
+    await stream.aclose()
+    assert 'Current attachment state:' not in systems[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', ['completed', 'failed', 'cancelled', 'in_progress'])
+async def test_ingestion_only_marks_completed_indexes_ready_and_keeps_cleanup_ids(document_helpers, monkeypatch, status):
+    from app.db.models import UserDocument, DocumentProviderArtifact
+    doc = UserDocument(id=uuid.uuid4(), user_id=uuid.uuid4(), filename='brief.txt')
+    artifact = DocumentProviderArtifact(document_id=doc.id, status='processing')
+    monkeypatch.setattr(document_helpers, '_openai_client', SimpleNamespace(vector_stores=SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(id='vs-new')),
+        files=SimpleNamespace(upload_and_poll=AsyncMock(return_value=SimpleNamespace(id='file-new',status=status,last_error=None))))))
+    operation = document_helpers._ingest_openai_artifact(document=doc, artifact=artifact, tmp_path='/tmp/brief.txt')
+    if status == 'completed':
+        await operation
+        assert artifact.status == 'ready'
+    else:
+        with pytest.raises(RuntimeError, match='Document indexing'):
+            await operation
+        assert artifact.status != 'ready'
+    assert artifact.external_file_id == 'file-new'
+    assert artifact.external_index_id == 'vs-new'
