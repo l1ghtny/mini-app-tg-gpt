@@ -1134,10 +1134,21 @@ async def replace_conversation_documents(
             _refresh_expiration(doc, caps.doc_retention_hours)
             session.add(doc)
 
+    # Selecting files is an explicit request to make them available to this chat.
+    # Preserve other permissions; sending [] still explicitly disables all tools.
+    auto_tools = conversation.tool_choice == "auto" or (
+        isinstance(conversation.tool_choice, list) and "auto" in conversation.tool_choice
+    )
+    if normalized_ids and not auto_tools:
+        choice = conversation.tool_choice
+        permissions = list(choice) if isinstance(choice, list) else ([choice] if choice and choice != "none" else [])
+        conversation.tool_choice = list(dict.fromkeys([*permissions, "file_search"]))
+        session.add(conversation)
     await session.commit()
     return ConversationDocumentsUpdateResponse(
         conversation_id=conversation_id,
         document_ids=normalized_ids,
+        tool_choice=conversation.tool_choice,
         effective_provider=effective_provider,  # type: ignore[arg-type]
     )
 
@@ -1180,6 +1191,7 @@ async def list_conversation_document_ids(
     return ConversationDocumentsUpdateResponse(
         conversation_id=conversation_id,
         document_ids=unique_ids,
+        tool_choice=conversation.tool_choice,
         effective_provider=effective_provider,  # type: ignore[arg-type]
     )
 

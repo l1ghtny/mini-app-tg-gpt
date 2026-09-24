@@ -679,9 +679,17 @@ async def stream_shared_response(
     }
     if tool_choice == "none":
         selected = {}
+    required = None
+    if isinstance(tool_choice, dict):
+        if tool_choice.get("type") == "allowed_tools":
+            allowed = {t.get("type") for t in tool_choice.get("tools", [])}
+            selected = {name: spec for name, spec in selected.items() if name in allowed}
+            if tool_choice.get("mode") == "required" and len(selected) == 1:
+                required = next(iter(selected))
+        else:
+            required = tool_choice.get("type")
     if run.image_references:
         selected["inspect_image"] = {}
-    required = tool_choice.get("type") if isinstance(tool_choice, dict) else None
     effort = reasoning_effort or ("none" if thinking_enabled is False else "medium")
     system = shared_instructions(model, instructions)
     is_claude = MODELS[model].provider == "anthropic"
