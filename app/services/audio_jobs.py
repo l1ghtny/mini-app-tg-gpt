@@ -17,6 +17,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.config import settings
 from app.db.database import engine
 from app.db.models import AudioTranscriptionJob, AppUser, RequestLedger, State, TokenUsage, utcnow_naive
+# Register the RequestLedger foreign-key target before a standalone worker flush.
+from app.db import subscription_tiers as _subscription_tiers  # noqa: F401
 from app.r2.private_audio import delete_audio, download_audio
 from app.redis.settings import settings as redis_settings
 from app.schemas.audio import AudioTranscriptionJobResponse
@@ -305,15 +307,18 @@ async def cleanup_cancelled_object(job_id: uuid.UUID) -> None:
             await session.commit()
 
 
-async def _heartbeat(stop_event: asyncio.Event) -> None:
+async def _heartbeat(stop_event: asyncio.Event, ready_event: asyncio.Event) -> None:
     redis = Redis.from_url(redis_settings.REDIS_URL, decode_responses=True)
     try:
         while not stop_event.is_set():
-            HEARTBEAT_PATH.touch()
-            try:
-                await redis.set(f"voice:transcription:worker:{settings.DEPLOYMENT_CHANNEL}", "1", ex=30)
-            except Exception:
-                logger.exception("Could not publish audio worker heartbeat")
+            if ready_event.is_set():
+                HEARTBEAT_PATH.touch()
+                try:
+                    await redis.set(f"voice:transcription:worker:{settings.DEPLOYMENT_CHANNEL}", "1", ex=30)
+                except Exception:
+                    logger.exception("Could not publish audio worker heartbeat")
+            else:
+                HEARTBEAT_PATH.unlink(missing_ok=True)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=10)
             except TimeoutError:
@@ -323,7 +328,8 @@ async def _heartbeat(stop_event: asyncio.Event) -> None:
 
 
 async def run_worker(stop_event: asyncio.Event) -> None:
-    heartbeat = asyncio.create_task(_heartbeat(stop_event))
+    ready_event = asyncio.Event()
+    heartbeat = asyncio.create_task(_heartbeat(stop_event, ready_event))
     maintenance: asyncio.Task | None = None
     try:
         while not stop_event.is_set():
@@ -341,6 +347,7 @@ async def run_worker(stop_event: asyncio.Event) -> None:
                     )
                 async with AsyncSession(engine, expire_on_commit=False) as session:
                     job = await claim_next_job(session)
+                ready_event.set()
                 if job:
                     await process_job(job)
                 else:
@@ -351,6 +358,8 @@ async def run_worker(stop_event: asyncio.Event) -> None:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                ready_event.clear()
+                HEARTBEAT_PATH.unlink(missing_ok=True)
                 logger.exception("Audio transcription worker loop failed")
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=2)
