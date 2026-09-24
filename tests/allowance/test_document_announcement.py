@@ -35,14 +35,17 @@ def test_document_notice_offline_sql():
     assert migration.down_revision=='xw0e1f2a3b4f'
 
 @pytest.mark.asyncio
-async def test_indexing_notice_extends_existing_item_without_republishing(db):
+@pytest.mark.parametrize('module', ['xw0e1f2a3b51_document_indexing_notice', 'xw0e1f2a3b52_document_filename_notice'])
+async def test_indexing_notice_extends_existing_item_without_republishing(db, module):
     engine, _, _ = db
-    migration = import_module('migrations.versions.xw0e1f2a3b51_document_indexing_notice')
+    migration = import_module('migrations.versions.' + module)
     async with engine.begin() as conn:
         await conn.run_sync(lambda c: WhatsNewItem.__table__.create(c))
         def apply(c, action):
             with Operations.context(MigrationContext.configure(c)):
                 action()
+        original = import_module('migrations.versions.xw0e1f2a3b50_announce_document_selection')
+        await conn.run_sync(lambda c: apply(c, original.upgrade))
         await conn.run_sync(lambda c: apply(c, migration.previous.upgrade))
         published = (await conn.execute(text('select published_at from whats_new_item'))).scalar_one()
         await conn.execute(WhatsNewItem.__table__.insert().values(**WhatsNewItem(id="unrelated", kind="improvement", title_en="Other", title_ru="Other", body_en="Keep", body_ru="Keep").model_dump()))
@@ -58,8 +61,9 @@ async def test_indexing_notice_extends_existing_item_without_republishing(db):
         assert (await conn.execute(text("select body_en from whats_new_item where id='unrelated'"))).scalar_one() == 'Keep'
 
 
-def test_indexing_notice_offline_sql():
-    migration = import_module('migrations.versions.xw0e1f2a3b51_document_indexing_notice')
+@pytest.mark.parametrize('module, parent', [('xw0e1f2a3b51_document_indexing_notice','xw0e1f2a3b50'), ('xw0e1f2a3b52_document_filename_notice','xw0e1f2a3b51')])
+def test_indexing_notice_offline_sql(module, parent):
+    migration = import_module('migrations.versions.' + module)
     output = StringIO()
     context = MigrationContext.configure(dialect_name='postgresql', opts={'as_sql':True,'literal_binds':True,'output_buffer':output})
     with Operations.context(context):
@@ -68,4 +72,4 @@ def test_indexing_notice_offline_sql():
     assert 'update whats_new_item' in sql
     assert "where id = '2026-09-24-document-selection'" in sql
     assert 'published_at' not in sql and 'insert' not in sql and 'delete' not in sql
-    assert migration.down_revision == 'xw0e1f2a3b50'
+    assert migration.down_revision == parent
