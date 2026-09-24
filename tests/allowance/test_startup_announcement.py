@@ -33,4 +33,3 @@ def test_startup_notice_offline_sql():
     assert 'on conflict (id) do nothing' in sql
     assert 'delete' not in sql and 'drop' not in sql
     assert migration.down_revision=='xw0e1f2a3b52'
-
