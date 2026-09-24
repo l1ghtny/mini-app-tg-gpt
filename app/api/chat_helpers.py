@@ -1224,6 +1224,9 @@ def _resolve_openai_tooling(
         if not normalized_choices:
             return [], "none", ledger_choice
 
+        if "auto" in normalized_choices:
+            return default_tools, "auto", ledger_choice
+
         selected_tools = [tool_by_type[name] for name in normalized_choices if name in tool_by_type]
         if not selected_tools:
             return (default_tools, "auto", ledger_choice) if provider == "perplexity" else ([], "none", ledger_choice)

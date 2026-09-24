@@ -72,3 +72,4 @@ class ConversationDocumentsUpdateResponse(BaseModel):
     conversation_id: uuid.UUID
     document_ids: list[uuid.UUID]
     effective_provider: DocumentProvider = "openai"
+    tool_choice: str | list[str] | None = None
