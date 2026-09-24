@@ -27,4 +27,10 @@ RU: Названия выбранных файлов теперь видны н�
 
 ## Deployment
 
-Pending production feature verification, notice publication, then beta release.
+Feature release: backend `53f99ac`, frontend `0a3b616`; production flow [9266/#84](https://teamcity.kosh.games/build/9266) passed all four children. Both rollouts are Healthy with two updated replicas; runtime hashes match source and both public domains return JSON readiness. Backend84 digest `ac8c5675ed9b20aee31be3ff9b693062331c7b77545dbe5340f5ec7955b17df2`; frontend84 digest `a5f0a6bb5e5e5f6b6bda9f1ea37f417b30f0b30aa5d175e5a9c352833a0f1275`.
+
+Real production acceptance on backend84 passed with one uploaded tiny text file and Terra in Auto: correct private code retrieved through file search; request idempotency and stream resume passed; server snapshot matched the uploaded record and survived detachment plus deletion. Final run charged 7,987 units within its 50,000 cap. A preceding run charged 8,009 units and verified retrieval but stopped at an incorrect harness assertion expecting the unsuffixed upload name; the existing upload service suffixes filenames. Both runs cleaned up their own synthetic data. No paid beta generation.
+
+All four local rendered history cases passed (390/1440 px, EN/light and RU/dark). Screenshots reviewed after animations settled. Existing selection/indexing scripts passed too. Beta merge validation: 412 frontend tests/build and 26 backend document tests passed.
+
+The deployed frontend passed all four browser cases through the existing owner canary route, with screenshots reviewed. Pending: public-route confirmation, notice xw0e1f2a3b52 publication, then beta deployment. Announcement checks: six tests, single Alembic head, bounded offline SQL and whitespace passed.
