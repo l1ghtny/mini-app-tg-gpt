@@ -134,19 +134,27 @@ async def estimate(session, user, conversation, request):
     if request.required_tool == "image_generation":
         tool_budget = image_reserve
     elif request.required_tool == "web_search":
-        tool_budget = 40_000
+        tool_budget = 80_000
     elif request.required_tool == "file_search":
         tool_budget = 10_000
     if request.required_tool:
-        # A short routing response, tool, and final answer, not two max-length answers.
-        continuation = 0 if included else minimum
+        # Web search may use two provider calls and still need a full final answer.
+        if included:
+            continuation = 0
+        elif request.required_tool == "web_search":
+            continuation = step_budget(
+                request.model, messages, instructions,
+                max_output=output_target(request.model, effort),
+            )
+        else:
+            continuation = minimum
         paid_upper += continuation + tool_budget
         lower += continuation + tool_budget
         typical += continuation + tool_budget
     elif tools:
-        # Optional tools use bounded headroom, not a second full-context reservation.
-        # Every actual tool/continuation still passes begin_attempt before spending.
-        paid_upper += 40_000
+        # Two web searches can incur search fees and substantial retrieved
+        # context before the final answer. Every attempt still checks its cap.
+        paid_upper += 80_000 if "web_search" in tools else 40_000
     document_followup = 0
     if document_stores:
         # One routing turn, up to two bounded searches, then the final answer.
@@ -205,6 +213,7 @@ async def estimate(session, user, conversation, request):
                 ).hexdigest(),
                 rate=RATE_VERSION,
                 context_policy="bounded-documents-v3",
+                quote_policy="web-search-headroom-v1",
                 document_stores=sorted(document_stores),
             ),
             sort_keys=True,

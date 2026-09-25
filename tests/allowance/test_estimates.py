@@ -6,6 +6,45 @@ from app.services.allowance_policy import image_budget, affordable_output, step_
 
 
 @pytest.mark.asyncio
+async def test_optional_web_search_quote_covers_two_searches_and_final_answer(
+    estimate_case,
+):
+    s, u, c, r = estimate_case
+    account = await estimates.allowance.account(s, u.id)
+    account.plan = "premium"
+    account.granted = 6_250_000
+    r.model = "gpt-5.6-terra"
+    r.required_tool = None
+    r.tool_choice = []
+    without_search = await estimates.estimate(s, u, c, r)
+    r.tool_choice = ["web_search"]
+    with_search = await estimates.estimate(s, u, c, r)
+
+    assert not with_search["needs_confirmation"]
+    assert with_search["ceiling_units"] - without_search["ceiling_units"] == 80_000
+
+    # This two-search request previously left only 1,400 final output tokens.
+    prior_units = 3_880 + 25_775 + 5_940 + 24_060
+    final_input_budget = 18_195
+    old_ceiling = 94_655
+    new_ceiling = old_ceiling + (
+        with_search["ceiling_units"] - without_search["ceiling_units"] - 40_000
+    )
+    final_capacity = min(
+        4_096, (new_ceiling - prior_units - final_input_budget) // 12
+    )
+    assert final_capacity == 4_096
+
+    r.required_tool = "web_search"
+    required_search = await estimates.estimate(s, u, c, r)
+    assert required_search["ceiling_units"] > with_search["ceiling_units"]
+
+    r.spend_limit_units = 20_000
+    limited = await estimates.estimate(s, u, c, r)
+    assert limited["ceiling_units"] == 20_000
+
+
+@pytest.mark.asyncio
 async def test_quality_changes_estimate_and_default_quality_is_bound(estimate_case):
     s, u, c, r = estimate_case
     low = await estimates.estimate(s, u, c, r)
