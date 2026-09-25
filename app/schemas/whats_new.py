@@ -1,7 +1,17 @@
-from datetime import datetime
-from typing import Literal, Optional
+from datetime import UTC, datetime
+from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field, model_validator
+
+
+def _as_utc(value: datetime) -> datetime:
+    # Stored naive timestamps represent UTC, never the server's local timezone.
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+UTCResponseDatetime = Annotated[datetime, AfterValidator(_as_utc)]
 
 
 WhatsNewLang = Literal["en", "ru"]
@@ -22,7 +32,7 @@ class WhatsNewAudience(BaseModel):
 
 class WhatsNewItemResponse(BaseModel):
     id: str
-    published_at: datetime
+    published_at: UTCResponseDatetime
     kind: WhatsNewKind
     title: str
     body: str
@@ -35,8 +45,8 @@ class WhatsNewItemResponse(BaseModel):
 
 class WhatsNewListResponse(BaseModel):
     items: list[WhatsNewItemResponse] = Field(default_factory=list)
-    latest_published_at: Optional[datetime] = None
-    seen_up_to: Optional[datetime] = None
+    latest_published_at: Optional[UTCResponseDatetime] = None
+    seen_up_to: Optional[UTCResponseDatetime] = None
     has_unseen: bool = False
     unseen_count: int = 0
 
@@ -54,5 +64,4 @@ class WhatsNewSeenRequest(BaseModel):
 
 
 class WhatsNewSeenResponse(BaseModel):
-    seen_up_to: Optional[datetime] = None
-
+    seen_up_to: Optional[UTCResponseDatetime] = None
