@@ -5,7 +5,7 @@ from typing import Literal
 from datetime import UTC, datetime
 from datetime import timedelta
 from decimal import Decimal
-from asyncio import to_thread
+from asyncio import to_thread, timeout
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from openai import (
@@ -69,8 +69,8 @@ async def _release_lock(redis: Redis, key: str, token: str) -> None:
         logger.exception("Transcription lock release failed key=%s", key)
 
 
-def _utc_month_start() -> datetime:
-    return datetime.now(UTC).replace(
+def _utc_month_start(now: datetime | None = None) -> datetime:
+    return (now or datetime.now(UTC)).replace(
         day=1,
         hour=0,
         minute=0,
@@ -78,6 +78,12 @@ def _utc_month_start() -> datetime:
         microsecond=0,
         tzinfo=None,
     )
+
+
+def _next_utc_month_start(now: datetime) -> datetime:
+    if now.month == 12:
+        return datetime(now.year + 1, 1, 1, tzinfo=UTC)
+    return datetime(now.year, now.month + 1, 1, tzinfo=UTC)
 
 
 async def _get_transcription_tier(
@@ -113,13 +119,14 @@ async def _used_transcription_minutes(
     user_id: uuid.UUID,
     tier_id: uuid.UUID,
     exclude_request_id: str,
+    period_start: datetime | None = None,
 ) -> float:
     statement = select(func.coalesce(func.sum(RequestLedger.cost), 0)).where(
         RequestLedger.user_id == user_id,
         RequestLedger.tier_id == tier_id,
         RequestLedger.feature == "transcription",
         RequestLedger.state.in_((State.reserved, State.consumed)),
-        RequestLedger.created_at >= _utc_month_start(),
+        RequestLedger.created_at >= (period_start or _utc_month_start()),
         RequestLedger.request_id != exclude_request_id,
     )
     return float((await session.exec(statement)).one() or 0)
@@ -242,21 +249,33 @@ async def get_audio_transcription_limits(
 ) -> AudioTranscriptionLimits:
     if not settings.VOICE_TRANSCRIPTION_ENABLED:
         raise HTTPException(status_code=404, detail="voice_transcription_disabled")
+    upload_available = False
     try:
         ensure_audio_storage_configured()
-    except PrivateAudioStorageConfigurationError as exc:
-        raise HTTPException(status_code=503, detail="voice_transcription_storage_unavailable") from exc
-    if not await redis.get(f"voice:transcription:worker:{settings.DEPLOYMENT_CHANNEL}"):
-        raise HTTPException(status_code=503, detail="voice_transcription_worker_unavailable")
+    except PrivateAudioStorageConfigurationError:
+        pass
+    else:
+        try:
+            async with timeout(2):
+                upload_available = bool(await redis.get(
+                    f"voice:transcription:worker:{settings.DEPLOYMENT_CHANNEL}"
+                ))
+        except Exception:
+            logger.exception("Could not read audio worker availability")
     tier = await _get_transcription_tier(session, current_user.id)
+    now = datetime.now(UTC)
     remaining = 0.0
     if tier:
         used = await _used_transcription_minutes(
-            session, user_id=current_user.id, tier_id=tier.id, exclude_request_id=""
+            session, user_id=current_user.id, tier_id=tier.id,
+            exclude_request_id="", period_start=_utc_month_start(now),
         )
         remaining = max(0.0, tier.monthly_transcription_minutes - used)
     return AudioTranscriptionLimits(
         entitled=tier is not None,
+        monthly_limit_minutes=float(tier.monthly_transcription_minutes) if tier else 0.0,
+        resets_at=_next_utc_month_start(now) if tier else None,
+        upload_available=upload_available,
         max_bytes=settings.VOICE_TRANSCRIPTION_UPLOAD_MAX_BYTES,
         max_duration_seconds=settings.VOICE_TRANSCRIPTION_UPLOAD_MAX_DURATION_SECONDS,
         remaining_minutes=remaining,

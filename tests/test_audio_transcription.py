@@ -2,6 +2,7 @@ import os
 import asyncio
 import subprocess
 import uuid
+from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -234,11 +235,26 @@ async def test_limits_show_zero_without_entitled_tier(monkeypatch):
         current_user=SimpleNamespace(id=uuid.uuid4()), session=SimpleNamespace(), redis=redis,
     )
     assert limits.remaining_minutes == 0
+    assert limits.monthly_limit_minutes == 0
+    assert limits.resets_at is None
+    assert limits.upload_available is True
     assert limits.entitled is False
     assert limits.allowed_extensions == ["mp3", "m4a", "wav", "webm"]
     assert limits.max_duration_seconds == 1800
     assert limits.max_bytes == 20 * 1024 * 1024
     assert limits.recording_max_duration_seconds == 300
+
+
+def test_next_utc_calendar_month_handles_year_and_leap_day():
+    assert audio_api._next_utc_month_start(datetime(2026, 12, 31, 23, tzinfo=UTC)) == datetime(
+        2027, 1, 1, tzinfo=UTC
+    )
+    assert audio_api._next_utc_month_start(datetime(2028, 2, 29, 23, tzinfo=UTC)) == datetime(
+        2028, 3, 1, tzinfo=UTC
+    )
+    assert audio_api._utc_month_start(datetime(2028, 2, 29, 23, tzinfo=UTC)) == datetime(
+        2028, 2, 1
+    )
 
 
 @pytest.mark.asyncio
@@ -346,6 +362,9 @@ async def test_transcription_requires_a_tier_allowance(monkeypatch, audio_sample
     assert limits.status_code == 200
     assert limits.json()["entitled"] is False
     assert limits.json()["remaining_minutes"] == 0
+    assert limits.json()["monthly_limit_minutes"] == 0
+    assert limits.json()["resets_at"] is None
+    assert limits.json()["upload_available"] is True
     assert response.status_code == 403
     assert response.json()["detail"] == "voice_transcription_subscription_required"
     await engine.dispose()
@@ -458,6 +477,80 @@ async def test_zero_price_smooth_tier_receives_beta_allowance(monkeypatch, audio
     assert limits.json()["remaining_minutes"] == 120
     assert response.status_code == 200
     assert response.json()["text"] == "Smooth transcript"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_limits_keep_quota_visible_when_upload_unavailable(monkeypatch):
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    assert test_db_url
+    engine = create_async_engine(test_db_url, future=True, echo=False)
+    user = await _create_user(engine, tier_name="advanced")
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        tier = (await session.exec(select(SubscriptionTier).where(
+            SubscriptionTier.name == "advanced"
+        ))).one()
+        ledger = RequestLedger(
+            user_id=user.id, tier_id=tier.id, request_id=str(uuid.uuid4()),
+            model_name="gpt-transcribe", feature="transcription",
+            cost=60.25, state=State.reserved,
+        )
+        session.add(ledger)
+        await session.commit()
+    redis = FakeRedis()
+    app = _build_app(engine, user, redis)
+    monkeypatch.setattr(settings, "VOICE_TRANSCRIPTION_ENABLED", True)
+
+    def storage_down():
+        raise audio_api.PrivateAudioStorageConfigurationError("unavailable")
+
+    monkeypatch.setattr(audio_api, "ensure_audio_storage_configured", storage_down)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        storage_result = await client.get("/api/v1/audio/transcriptions/limits")
+        monkeypatch.setattr(audio_api, "ensure_audio_storage_configured", lambda: None)
+
+        async def redis_down(_key):
+            raise ConnectionError("unavailable")
+
+        original_get = redis.get
+        monkeypatch.setattr(redis, "get", redis_down)
+        redis_result = await client.get("/api/v1/audio/transcriptions/limits")
+
+        async def redis_hangs(_key):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(redis, "get", redis_hangs)
+        timeout_result = await client.get("/api/v1/audio/transcriptions/limits")
+        monkeypatch.setattr(redis, "get", original_get)
+        redis.values[f"voice:transcription:worker:{settings.DEPLOYMENT_CHANNEL}"] = "1"
+        healthy_result = await client.get("/api/v1/audio/transcriptions/limits")
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            saved = (await session.exec(select(RequestLedger).where(
+                RequestLedger.id == ledger.id
+            ))).one()
+            saved.cost = 180
+            session.add(saved)
+            await session.commit()
+        exhausted_result = await client.get("/api/v1/audio/transcriptions/limits")
+
+    for result in (storage_result, redis_result, timeout_result, healthy_result, exhausted_result):
+        assert result.status_code == 200
+        body = result.json()
+        assert body["entitled"] is True
+        assert body["monthly_limit_minutes"] == 180
+        assert body["resets_at"].endswith("Z")
+        assert datetime.fromisoformat(body["resets_at"].replace("Z", "+00:00")) == (
+            audio_api._next_utc_month_start(datetime.now(UTC))
+        )
+    assert storage_result.json()["remaining_minutes"] == pytest.approx(119.75)
+    assert storage_result.json()["upload_available"] is False
+    assert redis_result.json()["remaining_minutes"] == pytest.approx(119.75)
+    assert redis_result.json()["upload_available"] is False
+    assert timeout_result.json()["remaining_minutes"] == pytest.approx(119.75)
+    assert timeout_result.json()["upload_available"] is False
+    assert healthy_result.json()["upload_available"] is True
+    assert exhausted_result.json()["remaining_minutes"] == 0
+    assert exhausted_result.json()["upload_available"] is True
     await engine.dispose()
 
 

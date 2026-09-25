@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Literal
+from datetime import datetime
 
 
 class AudioTranscriptionResponse(BaseModel):
@@ -12,6 +13,9 @@ class AudioTranscriptionResponse(BaseModel):
 
 class AudioTranscriptionLimits(BaseModel):
     entitled: bool
+    monthly_limit_minutes: float
+    resets_at: datetime | None
+    upload_available: bool
     max_bytes: int
     max_duration_seconds: int
     remaining_minutes: float
