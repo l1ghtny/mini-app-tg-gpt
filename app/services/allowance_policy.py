@@ -31,9 +31,9 @@ class ModelPolicy:
 MODELS = {
     p.name: p
     for p in (
-        ModelPolicy(LUNA, "openai", "everyday", ".2", ".02", ".25", "1.2", 4096),
+        ModelPolicy(LUNA, "openai", "everyday", ".2", ".02", ".25", "1.2", 16384),
         ModelPolicy(
-            "gpt-5.6-terra", "openai", "standard", "2", ".2", "2.5", "12", 8192
+            "gpt-5.6-terra", "openai", "standard", "2", ".2", "2.5", "12", 16384
         ),
         ModelPolicy(
             "claude-sonnet-5", "anthropic", "standard", "2", ".2", "2.5", "10", 16384
@@ -216,8 +216,9 @@ def reference_count(messages):
 
 
 def output_target(model, effort="medium", required_tool=None):
-    target = 2048 if required_tool else 8192 if effort == "high" else 4096
-    return min(target, MODELS[model].max_output)
+    # Reasoning effort controls thinking, not how long the requested answer may be.
+    # Reserve this headroom in the quote too; unused output is never charged.
+    return min(2048, MODELS[model].max_output) if required_tool else MODELS[model].max_output
 
 
 def affordable_output(model, messages, instructions, budget, *, target):

@@ -66,7 +66,8 @@ async def test_quality_changes_estimate_and_default_quality_is_bound(estimate_ca
 async def test_automatic_expensive_image_requires_confirmation(estimate_case):
     s, u, c, r = estimate_case
     r.required_tool = None
-    r.tool_choice = "auto"
+    r.model = "gpt-5.6-luna"
+    r.tool_choice = ["image_generation"]
     r.image_quality = "high"
     high = await estimates.estimate(s, u, c, r)
     assert high["needs_confirmation"]

@@ -186,11 +186,12 @@ async def estimate(session, user, conversation, request):
             paid_upper,
             upper + minimum + image_reserve if not included else image_reserve,
         )
-    if not needs_confirmation:
-        paid_upper = min(paid_upper, threshold)
     ceiling = min(paid_upper, allowance.available(a))
     if request.spend_limit_units is not None:
         ceiling = min(ceiling, request.spend_limit_units)
+    # Do not silently shrink a long answer to the automatic-confirmation threshold.
+    # Quote and confirm its real maximum before starting any provider work instead.
+    needs_confirmation = needs_confirmation or ceiling >= threshold
     minimum_ceiling = (0 if included else minimum) + tool_budget
     if request.required_tool and not included:
         minimum_ceiling += minimum
@@ -213,7 +214,7 @@ async def estimate(session, user, conversation, request):
                 ).hexdigest(),
                 rate=RATE_VERSION,
                 context_policy="bounded-documents-v3",
-                quote_policy="web-search-headroom-v1",
+                quote_policy="long-answer-headroom-v1",
                 document_stores=sorted(document_stores),
             ),
             sort_keys=True,

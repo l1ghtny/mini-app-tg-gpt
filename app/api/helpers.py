@@ -81,8 +81,12 @@ async def generate_and_publish(
         last_ckpt: dict[int, int] = {}
         content_cache: dict[int, MessageContent] = {}
         partial_image_keys: dict[int, list[str]] = {}
+        from app.services import allowance
+        from app.services.generation_observability import report_generation_failure
         lifecycle: dict[str, Any] = {
             "text_request_finalized": False,
+            "shared_allowance": allowance.enabled(user_id),
+            "terminal_done": False,
             "stream_failed": False,
             "last_error_message": None,
             "last_error_code": None,
@@ -168,9 +172,9 @@ async def generate_and_publish(
                                     await allowance.settle(session, user_id, request_id, success=not lifecycle["stream_failed"])
                                 await bus.publish(assistant_message_id_str, ev)
 
-                    allowance_success = not lifecycle["stream_failed"]
-                    if request_id and not lifecycle["text_request_finalized"]:
+                    if request_id and not lifecycle["terminal_done"] and not lifecycle["stream_failed"]:
                         raise RuntimeError("Chat stream ended without a completion event")
+                    allowance_success = lifecycle["terminal_done"] and not lifecycle["stream_failed"]
 
             except GenerationStopped:
                 # Cancellation occurs between events, never halfway through a DB/image write.
@@ -204,14 +208,16 @@ async def generate_and_publish(
                 return
 
         except (Exception, asyncio.CancelledError) as e:
-            logger.exception(
+            report_generation_failure(lifecycle, model=model, request_id=request_id, exception=e)
+            logger.warning(
                 "Generate/publish pipeline failed request_id=%s conversation_id=%s assistant_message_id=%s",
                 request_id,
                 str(conversation_id),
                 str(assistant_message_id),
+                exc_info=True,
             )
             # A broken transaction must not prevent releasing an unused request.
-            # Use a conditional update: output already charged by text.done stays charged.
+            # Keep legacy completed charges intact; shared requests finalize at terminal done.
             if request_id:
                 try:
                     await session.rollback()
@@ -263,6 +269,7 @@ async def generate_and_publish(
                 raise
         else:
             if lifecycle.get("stream_failed"):
+                report_generation_failure(lifecycle, model=model, request_id=request_id)
                 await bus.mark_done(
                     assistant_message_id_str,
                     ok=False,
@@ -377,7 +384,7 @@ async def _handle_stream_event(
         if i in buffers:
             await _upsert_text(assistant_message_id, i, buffers[i], session=session, content_cache=content_cache)
 
-        if not lifecycle.get("text_request_finalized"):
+        if not lifecycle.get("shared_allowance") and not lifecycle.get("text_request_finalized"):
             await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
             lifecycle["text_request_finalized"] = True
         return
@@ -534,9 +541,10 @@ async def _handle_stream_event(
         return
 
     if event_type == "done":
+        lifecycle["terminal_done"] = True
         # Some responses (for example image-only) may not emit text.done.
         if not lifecycle.get("text_request_finalized"):
-            await finalize_request(session, request_id=request_id, user_id=user_id, success=True)
+            await finalize_request(session, request_id=request_id, user_id=user_id, success=not lifecycle.get("stream_failed", False))
             lifecycle["text_request_finalized"] = True
         if lifecycle.get("assistant_text_dirty"):
             await queue_assistant_index_refresh(
