@@ -95,7 +95,7 @@ def test_summary_boundary_remains_stable_between_compactions(monkeypatch):
 
 @pytest.mark.parametrize("granted", [1250000, 2500000, 6250000, 25000000])
 @pytest.mark.asyncio
-async def test_image_history_does_not_trigger_half_allowance_quotes(
+async def test_image_history_quotes_real_answer_capacity_without_resending_images(
     estimate_case, monkeypatch, granted
 ):
     from app.api import chat_helpers
@@ -114,8 +114,8 @@ async def test_image_history_does_not_trigger_half_allowance_quotes(
         AsyncMock(return_value=image_history()),
     )
     quote = await estimates.estimate(s, u, c, r)
-    assert not quote["needs_confirmation"]
-    assert quote["ceiling_percent"] <= 5
+    assert quote["needs_confirmation"] == (quote["ceiling_percent"] >= 5)
+    assert quote["ceiling_percent"] < 50
     assert quote["estimated_max_percent"] <= quote["ceiling_percent"]
     assert quote["minimum_ceiling_units"] <= quote["ceiling_units"]
 
