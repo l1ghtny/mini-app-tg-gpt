@@ -68,7 +68,12 @@ async def test_document_search_finishes_without_retrieval_loop_or_batch_abort(
     ]
     assert events[-1]["type"] == "done"
     assert len(executed) == min(batch, 2)
-    assert turns[1][1] == {}
+    expected_tools = (
+        {"file_search": {"type": "file_search", "vector_store_ids": ["one", "two"]}}
+        if model == "claude-fable-5-1"
+        else {}
+    )
+    assert turns[1][1] == expected_tools
     if batch == 3:
         results = turns[1][0][-1]["content"]
         assert len(results) == 3
