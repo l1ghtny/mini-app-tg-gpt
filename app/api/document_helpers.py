@@ -685,7 +685,7 @@ async def _ingest_openai_artifact(
     converted_path = None
     try:
         if Path(document.filename).suffix.lower() == ".srt":
-            converted_path = index_path.with_suffix(".txt")
+            converted_path = index_path.with_name(f"{index_path.name}.txt")
             with index_path.open("rb") as source:
                 prefix = source.read(4)
             encoding = "utf-16" if prefix.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
