@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,15 +17,39 @@ async def handle_create_folder(
     session: AsyncSession,
     current_user: AppUser,
 ) -> ChatFolder:
+    if request.client_request_id is not None:
+        existing = (await session.exec(
+            select(ChatFolder.id).where(
+                ChatFolder.user_id == current_user.id,
+                ChatFolder.client_request_id == request.client_request_id,
+            )
+        )).first()
+        if existing is not None:
+            return await _load_owned_folder(session, existing, current_user.id)
+
     new_folder = ChatFolder(
         user_id=current_user.id,
+        client_request_id=request.client_request_id,
         name=request.name,
         prompt=request.prompt
     )
-    session.add(new_folder)
-    await session.flush()
-    await _replace_folder_documents(session, new_folder, request.document_ids, current_user.id)
-    await session.commit()
+    try:
+        session.add(new_folder)
+        await session.flush()
+        await _replace_folder_documents(session, new_folder, request.document_ids, current_user.id)
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if request.client_request_id is not None:
+            existing = (await session.exec(
+                select(ChatFolder.id).where(
+                    ChatFolder.user_id == current_user.id,
+                    ChatFolder.client_request_id == request.client_request_id,
+                )
+            )).first()
+            if existing is not None:
+                return await _load_owned_folder(session, existing, current_user.id)
+        raise
     return await _load_owned_folder(session, new_folder.id, current_user.id)
 
 async def handle_get_folders(
