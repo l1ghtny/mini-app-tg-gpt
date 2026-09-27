@@ -42,11 +42,11 @@ async def test_srt_is_indexed_as_utf8_text_without_changing_the_document(
         document=document, artifact=artifact, tmp_path=str(source)
     )
 
-    assert uploaded == [("captions.txt", subtitle)]
+    assert uploaded == [("captions.SRT.txt", subtitle)]
     assert artifact.status == "ready"
     assert artifact.external_file_id == "file-srt"
     assert source.read_bytes() == subtitle.encode(encoding)
-    assert not (tmp_path / "captions.txt").exists()
+    assert not (tmp_path / "captions.SRT.txt").exists()
 
 
 @pytest.mark.asyncio
@@ -68,4 +68,4 @@ async def test_invalid_srt_text_fails_before_provider_upload(monkeypatch, tmp_pa
         )
 
     create.assert_not_awaited()
-    assert not (tmp_path / "captions.txt").exists()
+    assert not (tmp_path / "captions.srt.txt").exists()
