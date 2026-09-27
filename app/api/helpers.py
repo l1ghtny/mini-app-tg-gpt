@@ -242,8 +242,11 @@ async def generate_and_publish(
             from app.services import allowance
             if request_id and allowance.enabled(user_id):
                 error_event["error"] = "The request could not be completed. No allowance will be charged for an unsuccessful task."
-                from app.services.provider_errors import ProviderResponseError
-                if isinstance(e, ProviderResponseError):
+                from app.services.provider_errors import ImageModerationError, ProviderResponseError
+                if isinstance(e, ImageModerationError):
+                    error_event["code"] = e.code
+                    error_event["error"] = e.public_message
+                elif isinstance(e, ProviderResponseError):
                     error_event["code"] = (
                         "response_capacity_exceeded"
                         if e.reason in {"max_output_tokens", "max_tokens"}
