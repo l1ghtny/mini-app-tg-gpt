@@ -101,6 +101,7 @@ _DEFAULT_EXTENSION_ALLOWLIST = {
     ".py",
     ".rb",
     ".sh",
+    ".srt",
     ".tex",
     ".ts",
     ".txt",
@@ -861,12 +862,35 @@ async def _ingest_openai_artifact(
     artifact: DocumentProviderArtifact,
     tmp_path: str,
 ) -> None:
-    vector_store = await _openai_client.vector_stores.create(name=f"user-document-{document.id}")
-    artifact.external_index_id = vector_store.id
-    vector_file = await _openai_client.vector_stores.files.upload_and_poll(
-        vector_store_id=vector_store.id,
-        file=Path(tmp_path),
-    )
+    index_path = Path(tmp_path)
+    converted_path = None
+    try:
+        if Path(document.filename).suffix.lower() == ".srt":
+            converted_path = index_path.with_suffix(".txt")
+            with index_path.open("rb") as source:
+                prefix = source.read(4)
+            encoding = "utf-16" if prefix.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+            with index_path.open("r", encoding=encoding) as source, converted_path.open(
+                "w", encoding="utf-8"
+            ) as target:
+                try:
+                    while chunk := source.read(1024 * 1024):
+                        if "\x00" in chunk:
+                            raise ValueError("Subtitle file contains binary data")
+                        target.write(chunk)
+                except (UnicodeError, ValueError) as exc:
+                    raise ValueError("Subtitle file must contain UTF-8 or UTF-16 text") from exc
+            index_path = converted_path
+
+        vector_store = await _openai_client.vector_stores.create(name=f"user-document-{document.id}")
+        artifact.external_index_id = vector_store.id
+        vector_file = await _openai_client.vector_stores.files.upload_and_poll(
+            vector_store_id=vector_store.id,
+            file=index_path,
+        )
+    finally:
+        if converted_path is not None:
+            converted_path.unlink(missing_ok=True)
     artifact.external_file_id = vector_file.id
     if vector_file.status != "completed":
         error = getattr(vector_file, "last_error", None)
