@@ -333,9 +333,13 @@ class ChatStarterSuggestion(SQLModel, table=True):
 
 class ChatFolder(SQLModel, table=True):
     __tablename__ = "chat_folder"
+    __table_args__ = (
+        UniqueConstraint("user_id", "client_request_id", name="uq_chat_folder_user_request"),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid6.uuid7, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    client_request_id: Optional[uuid.UUID] = Field(default=None, nullable=True)
     name: str = Field(index=True)
     prompt: Optional[str] = Field(default=None)
 
