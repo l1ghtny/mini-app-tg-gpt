@@ -32,7 +32,7 @@ from app.api.whats_new import whats_new
 from app.core.config import settings
 from app.core.deployment_channel import blocked_beta_action
 from app.core.sentry_setup import build_sentry_openai_integrations
-from app.core.version import APP_VERSION
+from app.core.version import APP_VERSION, sentry_release
 
 logger = settings.custom_logger
 CANARY_HEADER_NAME = (
@@ -62,7 +62,7 @@ if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
-        release=app.version,
+        release=sentry_release("tg-mini-backend"),
         # Capture only 10% of transactions for performance monitoring
         traces_sample_rate=0.1
         if settings.ENVIRONMENT in ("production", "production_main_server")

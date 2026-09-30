@@ -46,6 +46,8 @@ class Settings:
     SHARED_ALLOWANCE_HISTORY_TOKENS = int(os.getenv("SHARED_ALLOWANCE_HISTORY_TOKENS", "8000"))
     SHARED_ALLOWANCE_REQUEST_SECONDS = int(os.getenv("SHARED_ALLOWANCE_REQUEST_SECONDS", "900"))
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+    # Temporary owner-requested pause. Set true after restoring provider funding.
+    ANTHROPIC_ENABLED = os.getenv("ANTHROPIC_ENABLED", "false").lower() in ("true", "1")
     ANTHROPIC_API_BASE_URL = os.getenv("ANTHROPIC_API_BASE_URL", "https://api.anthropic.com")
     DEPLOYMENT_CHANNEL: str = (
         os.getenv("DEPLOYMENT_CHANNEL", "production").strip().lower()

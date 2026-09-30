@@ -20,6 +20,7 @@ class TextModelSupportsResponse(BaseModel):
 
 
 class TextModelCatalogEntryResponse(BaseModel):
+    available: bool = True
     model_name: str
     display_name: str
     display_name_ru: Optional[str] = None

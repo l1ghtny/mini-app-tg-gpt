@@ -4,6 +4,7 @@ import json
 import logging
 from app.services.allowance_context import compress_context
 from app.services.provider_errors import ProviderResponseError
+from app.services.model_availability import require_text_model_available
 from datetime import UTC, datetime
 import httpx
 from openai import APIStatusError
@@ -349,6 +350,7 @@ async def openai_turn(
 async def claude_turn(
     run, messages, model, instructions, tools, required, effort, index
 ):
+    require_text_model_available(model)
     if not settings.ANTHROPIC_API_KEY:
         raise RuntimeError("Claude is unavailable: provider configuration missing")
     if required and model == "claude-fable-5-1":
@@ -677,6 +679,7 @@ async def stream_shared_response(
     **kwargs,
 ):
     run = ChatRun(user_id, request_id, kwargs.get("conversation_id"))
+    require_text_model_available(model)
     input_messages = len(messages)
     input_images = sum(
         p.get("type") == "input_image" for m in messages for p in m.get("content", [])

@@ -6,6 +6,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.models import ImageModelCatalog, ImageQualityPricing, TextModelCatalog
+from app.services.model_availability import text_model_available
 from app.schemas.models_catalog import (
     ImageModelCatalogEntryResponse,
     ImageModelQualityCatalogEntryResponse,
@@ -94,6 +95,7 @@ async def get_models_catalog(session: AsyncSession) -> ModelsCatalogResponse:
 
     text_models = [
         TextModelCatalogEntryResponse(
+            available=text_model_available(row.model_name, provider=row.provider),
             model_name=row.model_name,
             display_name=row.display_name,
             display_name_ru=row.display_name_ru,
