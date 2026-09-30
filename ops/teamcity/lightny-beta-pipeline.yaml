@@ -23,7 +23,7 @@ jobs:
             .
           docker push "$IMAGE:$TAG"
     repositories:
-      - main:
+      - TelegramMiniAppProject_LightnyBackendBeta:
           path: backend
           enabled: true
   build_frontend:
@@ -100,7 +100,7 @@ jobs:
           bash scripts/release/deploy_beta.sh
         format-stderr-as-error: true
     repositories:
-      - main:
+      - TelegramMiniAppProject_LightnyBackendBeta:
           path: backend
           enabled: true
   id3VerifySharedDatabaseSchema:
@@ -126,6 +126,6 @@ jobs:
           export MIGRATION_MODE="check"
           bash scripts/release/run_migration.sh
     repositories:
-      - main:
+      - TelegramMiniAppProject_LightnyBackendBeta:
           path: backend
           enabled: true

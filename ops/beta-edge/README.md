@@ -4,6 +4,8 @@ Public URL: `https://beta.app.lightnyai.ru`. DNS A record points to
 `193.233.244.246`, TTL 60. Beta keeps its existing user allowlist, database,
 Redis isolation, and disabled billing actions. Claude remains paused.
 
+`k8s/beta/origin-tls.yaml` is provisioned by infrastructure operations before deployment;
+CI retains its existing permissions and applies only the Ingress.
 `k8s/beta/origin.yaml` creates `lightnyai-beta.internal` on `public-awg`.
 Its private origin certificate renews through the existing cert-manager CA.
 Nginx verifies that CA; the public certificate renews through the edge's
