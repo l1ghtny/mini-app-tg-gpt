@@ -33,6 +33,9 @@ def tool_names(choice):
 
 
 async def estimate(session, user, conversation, request):
+    from app.services.model_availability import require_text_model_available
+
+    require_text_model_available(request.model)
     allowance.require_enabled(user.id)
     a = await allowance.account(session, user.id)
     allowance.require_active(a)

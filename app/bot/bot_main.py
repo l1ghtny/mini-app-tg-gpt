@@ -14,7 +14,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
-from app.core.version import APP_VERSION
+from app.core.version import APP_VERSION, sentry_release
 from app.db.database import engine
 from app.db.models import AppUser
 from app.api.identity_helpers import consume_telegram_link
@@ -34,7 +34,7 @@ if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
-        release=APP_VERSION,
+        release=sentry_release("tg-mini-bot"),
         # Capture only 10% of transactions for performance monitoring
         traces_sample_rate=0.1 if settings.ENVIRONMENT in ("production", "production_main_server") else 1.0,
         send_default_pii=True,
