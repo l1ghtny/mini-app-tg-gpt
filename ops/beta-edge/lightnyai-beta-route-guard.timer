@@ -1,0 +1,11 @@
+[Unit]
+Description=Recheck Moscow beta origin routing every ten seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=10s
+AccuracySec=1s
+Unit=lightnyai-beta-route-guard.service
+
+[Install]
+WantedBy=timers.target

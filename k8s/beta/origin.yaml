@@ -1,0 +1,62 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: lightnyai-beta-origin
+  namespace: gpt
+spec:
+  secretName: lightnyai-beta-origin-tls
+  duration: 2160h
+  renewBefore: 720h
+  dnsNames:
+    - lightnyai-beta.internal
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: lightnyai-origin-ca
+    kind: Issuer
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lightnyai-beta-origin
+  namespace: gpt
+spec:
+  ingressClassName: public-awg
+  rules:
+    - host: lightnyai-beta.internal
+      http:
+        paths:
+          - path: /health/live
+            pathType: Exact
+            backend:
+              service:
+                name: tg-mini-beta-backend
+                port:
+                  number: 80
+          - path: /health/ready
+            pathType: Exact
+            backend:
+              service:
+                name: tg-mini-beta-backend
+                port:
+                  number: 80
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: tg-mini-beta-backend
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tg-mini-beta-frontend
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - lightnyai-beta.internal
+      secretName: lightnyai-beta-origin-tls

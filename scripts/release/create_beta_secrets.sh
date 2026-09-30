@@ -48,7 +48,7 @@ jq \
   --arg allowed_user_ids "${BETA_ALLOWED_USER_IDS}" \
   --arg redis_url "redis://:${redis_password}@tg-mini-beta-redis:6379/0" \
   --arg secret_key "${beta_secret_key}" \
-  --arg webapp_url "https://beta.app.lightny.ru" \
+  --arg webapp_url "https://beta.app.lightnyai.ru" \
   '
     .data as $source |
     ({
@@ -89,12 +89,12 @@ jq \
         TELEGRAM_OIDC_ENABLED: ("true" | @base64),
         TELEGRAM_OIDC_REDIRECT_URI: (($webapp_url + "/api/v1/auth/telegram/oidc/callback") | @base64),
         CORS_ALLOWED_ORIGINS: ($webapp_url | @base64),
-        PASSKEY_RP_ID: ("app.lightny.ru" | @base64),
+        PASSKEY_RP_ID: ("beta.app.lightnyai.ru" | @base64),
         PASSKEY_ALLOWED_ORIGINS: ($webapp_url | @base64),
         AUTH_COOKIE_NAME: ("lightny_beta_session" | @base64),
         AUTH_COOKIE_SECURE: ("true" | @base64),
         AUTH_COOKIE_SAMESITE: ("lax" | @base64),
-        WEB_AUTH_TRUSTED_PROXY_CIDRS: ("10.1.0.0/16,10.77.0.2/32" | @base64)
+        WEB_AUTH_TRUSTED_PROXY_CIDRS: ("10.1.0.0/16,10.77.0.2/32,10.78.0.2/32,10.78.0.6/32,10.78.0.10/32" | @base64)
       }
     }
   ' "${tmp_dir}/source.json" >"${tmp_dir}/beta-secret.json"

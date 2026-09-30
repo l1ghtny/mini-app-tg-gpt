@@ -1,0 +1,12 @@
+[Unit]
+Description=Actively select healthy Lightny AI beta Moscow origins
+Wants=network-online.target
+After=network-online.target nginx.service awg-quick@lnnode2.service awg-quick@lnnew.service
+ConditionPathExists=/etc/nginx/sites-available/lightnyai-beta
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lightnyai/bin/beta-route-guard
+TimeoutStartSec=30
+NoNewPrivileges=true
+PrivateTmp=true

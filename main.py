@@ -99,6 +99,8 @@ app.add_middleware(
         "*.lightny.pro",
         "lightny.ru",
         "*.lightny.ru",
+        "beta.app.lightnyai.ru",
+        "lightnyai-beta.internal",
         "localhost",
         "127.0.0.1",
         "192.168.1.137",

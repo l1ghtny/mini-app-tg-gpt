@@ -5,7 +5,7 @@ K8S_NAMESPACE="${K8S_NAMESPACE:-gpt}"
 BACKEND_TAG="${BACKEND_TAG:?BACKEND_TAG is required}"
 FRONTEND_TAG="${FRONTEND_TAG:?FRONTEND_TAG is required}"
 DEPLOYMENT_TIMEOUT="${DEPLOYMENT_TIMEOUT:-600s}"
-PUBLIC_BETA_URL="${PUBLIC_BETA_URL:-https://beta.app.lightny.ru}"
+PUBLIC_BETA_URL="${PUBLIC_BETA_URL:-https://beta.app.lightnyai.ru}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 
@@ -54,6 +54,7 @@ BACKEND_IMAGE="localhost:32000/tg-mini-app-backend:${BACKEND_TAG}" AUDIO_CHANNEL
   bash "${script_dir}/deploy_audio_worker.sh"
 
 kubectl apply -f "${rendered_manifest}"
+kubectl apply -f "${repo_root}/k8s/beta/origin.yaml"
 kubectl apply -f \
   "${repo_root}/k8s/argo-rollouts/lightny-work-runs-observability.yaml"
 kubectl rollout status deployment/tg-mini-beta-redis -n "${K8S_NAMESPACE}" \
