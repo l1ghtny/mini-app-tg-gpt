@@ -1,3 +1,24 @@
+## 2026-10-01 Q01–Q03 deployed; announcement publication authorised
+
+Production frontend flow 9798/build112 and beta flow9803/build223 succeeded;
+runtime frontends 2.0.2+112 and 2.0.2+beta-223. Beta Work retained. Public API
+send/SSE/resume/idempotency probes passed on both channels with the explicitly
+approved synthetic chats. Production actual tier identity, mobile chat actions,
+older-answer warning and Cancel/focus retention verified in the deployed UI.
+Disposable PostgreSQL announcement replay/feed/downgrade integration passed.
+Production publication hold is satisfied. One stable EN/RU item, backend patch
+2.0.2; backend master remains the sole writer. No API contract changes.
+
+Risks: beta passkey sign-in and desktop/mobile checks pending user interaction;
+received Sentry events/source-map uploads unverified; browser download-event
+capture timed out although reviewed export tests pass. Legacy app.lightny.ru
+reachability remains intentionally deferred. See release evidence for exact IDs.
+
+Next: publish PR18 via production pipeline, verify head61 and localized feed;
+carry identical migration history to beta with schema check only; finish beta
+UI verification, then create separate Q04/Q19/Q20/M16 review PRs (M16 may need
+backend companion). Q07/Q11/public sharing remain deferred. No new batch merges.
+
 ## 2026-09-30 Q01–Q03 announcement prepared; publication held
 
 Objective: one grouped production notice for the separately reviewed frontend

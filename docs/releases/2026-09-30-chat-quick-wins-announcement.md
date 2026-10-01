@@ -1,6 +1,9 @@
 # Held Q01–Q03 production announcement
 
-**Draft PR — do not merge until Q01–Q03 frontend production acceptance.**
+**October 1: owner authorised publication; production frontend acceptance completed.**
+Release evidence and remaining beta/telemetry checks are recorded in
+`2026-10-01-chat-quick-wins-deployment.md`. The original hold below describes
+the preparation boundary and is now satisfied for production publication.
 The beta and production database is shared. This PR must not accompany the beta
 feature deployment. No row, including an inactive draft row, has been written.
 
