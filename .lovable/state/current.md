@@ -1,3 +1,45 @@
+## 2026-10-01 Q01–Q03 deployed; announcement publication authorised
+
+Production frontend flow 9798/build112 and beta flow9803/build223 succeeded;
+runtime frontends 2.0.2+112 and 2.0.2+beta-223. Beta Work retained. Public API
+send/SSE/resume/idempotency probes passed on both channels with the explicitly
+approved synthetic chats. Production actual tier identity, mobile chat actions,
+older-answer warning and Cancel/focus retention verified in the deployed UI.
+Disposable PostgreSQL announcement replay/feed/downgrade integration passed.
+Production publication hold is satisfied. One stable EN/RU item, backend patch
+2.0.2; backend master remains the sole writer. No API contract changes.
+
+Risks: beta passkey sign-in and desktop/mobile checks pending user interaction;
+received Sentry events/source-map uploads unverified; browser download-event
+capture timed out although reviewed export tests pass. Legacy app.lightny.ru
+reachability remains intentionally deferred. See release evidence for exact IDs.
+
+Next: publish PR18 via production pipeline, verify head61 and localized feed;
+carry identical migration history to beta with schema check only; finish beta
+UI verification, then create separate Q04/Q19/Q20/M16 review PRs (M16 may need
+backend companion). Q07/Q11/public sharing remain deferred. No new batch merges.
+
+## 2026-09-30 Q01–Q03 announcement prepared; publication held
+
+Objective: one grouped production notice for the separately reviewed frontend
+quick wins. Isolated branch `codex/ux-q01-q03-announcement`; no shared work changed.
+
+Completed: EN/RU migration xw0e1f2a3b61 (stable item 2026-09-30-chat-quick-wins),
+idempotent insertion and scoped downgrade; 10 offline notice/timestamp tests,
+PostgreSQL offline upgrade SQL, one Alembic head, Ruff and whitespace checks.
+Backend version 2.0.1 -> 2.0.2 only for later announcement publication. Frontend
+patch 2.0.2 is in its separate owner-review PR. No API/accounting contract changes.
+
+Blockers/risks: DO NOT MERGE this draft until frontend production feature
+verification. Beta/production share a DB; no pending/inactive row may be inserted.
+No DB connection or migration executed. Disposable PostgreSQL idempotency/downgrade
+and live localized feed acceptance remain pending.
+
+Next steps: review frontend; beta acceptance without this migration; production
+frontend acceptance; recheck scope/version/head/feed duplicates; then publish from
+backend master and verify API/bot Sentry/feed. Carry same history to beta once.
+Details: `docs/releases/2026-09-30-chat-quick-wins-announcement.md`.
+
 ## 2026-09-24 Startup improvement verified in production; notice publication next
 
 HTTP/2 enabled on app.lightnyai.ru. Frontend f3d5eaf/flow9291/#87 fully promoted; public mobile/desktop startup/reload/resume counts and h2 asset delivery pass. Frontend385 tests/build/lint pass; beta merge418 tests/build pass. Publishing required single EN/RU startup notice via migration53 after production feature verification. Next: validate localized feed, release frontend/backend beta and verify exact runtime. No upstream-reuse or UI-stall changes. Report: docs/operations/2026-09-24-startup-loading-release.md.

@@ -171,6 +171,7 @@ async def test_mark_seen_updates_watermark():
     "migrations.versions.xo2c3d4e5f6a_add_image_resizing_whats_new",
     "migrations.versions.xp3d4e5f6a7b_add_error_toast_whats_new",
     "migrations.versions.xw0e1f2a3b4f_announce_code_block_recovery",
+    "migrations.versions.xw0e1f2a3b61_announce_chat_quick_wins",
 ])
 async def test_release_notice_migration_replay_and_localized_feed(module_name):
     from importlib import import_module
@@ -202,6 +203,21 @@ async def test_release_notice_migration_replay_and_localized_feed(module_name):
                 WhatsNewItem.id == migration.ITEM_ID
             ))).all()
             assert len(rows) == 1
+            published_at = rows[0].published_at
+            rows[0].body_en = "Publisher edit retained after replay"
+            session.add(rows[0])
+            await session.commit()
+
+        async with engine.begin() as connection:
+            await connection.run_sync(apply, migration.upgrade)
+        async with AsyncSession(engine) as session:
+            retained = await session.get(WhatsNewItem, migration.ITEM_ID)
+            assert retained.published_at == published_at
+            assert retained.body_en == "Publisher edit retained after replay"
+            # Restore copy for the localized feed checks below.
+            retained.body_en = migration.BODY_EN
+            session.add(retained)
+            await session.commit()
 
         app = _build_app(engine, user)
         async with AsyncClient(

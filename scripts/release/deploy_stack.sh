@@ -74,6 +74,9 @@ retry_aborted_rollout() {
   fi
 }
 
+BACKEND_IMAGE="${backend_image}" AUDIO_CHANNEL=production \
+  bash "${script_dir}/deploy_audio_worker.sh"
+
 patch_application_image "${BACKEND_APPLICATION}" "${backend_image}"
 wait_for_deployment_image tg-mini-backend "${backend_image}"
 retry_aborted_rollout tg-mini-backend

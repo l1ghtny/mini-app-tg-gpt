@@ -318,6 +318,12 @@ async def _create_user(engine, *, tier_name: str | None) -> AppUser:
                     select(SubscriptionTier).where(SubscriptionTier.name == tier_name)
                 )
             ).one()
+            if tier_name == "advanced":
+                # The production test seed predates transcription and grants
+                # this legacy tier zero minutes. Give this synthetic test user
+                # an explicit allowance without changing production defaults.
+                tier.monthly_transcription_minutes = 180
+                session.add(tier)
             session.add(UserSubscription(user_id=user.id, tier_id=tier.id))
         await session.commit()
         return user
