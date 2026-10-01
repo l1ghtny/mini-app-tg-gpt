@@ -1,3 +1,13 @@
+## 2026-10-01 M16 search context companion ready for review
+
+Objective: exact-title priority and bounded live search excerpts. Implemented in isolated `codex/ux-m16-search-context`; original checkout work is preserved. Exact normalized titles precede other results; duplicate titles and nonexact semantic order remain. Optional typed metadata preserves legacy conversation fields, verifies live ownership/current message text, and batches at most three candidate passages per result. Search URLs are redacted from Sentry hooks.
+
+Validation: five disposable PostgreSQL regression cases plus a pure excerpt check pass; two offline checks pass with one overlapping excerpt check. Ruff and compilation pass. Local `pg_trgm` is unavailable, so only trigram similarity is stubbed to zero; live PostgreSQL joins/current-text validation run unchanged. Full trigram integration and deployed acceptance are unverified.
+
+Frontend follow-up: paired M16 frontend on Q20 consumes optional metadata, renders excerpts/context/literal highlights, strips metadata before chat storage and redacts SDK search URLs. Backend-first compatible rollout; legacy title-only response remains supported. Report: docs/ux-review/2026-10-01-m16-search-context.md.
+
+Next steps: review the backend and frontend companion PRs; keep both unmerged/unreleased. No migration/version/notice publication in this batch. Future combined Q04/Q19/Q20/M16 release needs one grouped EN/RU notice after feature verification and independent component minor decisions based on then-live shared-major versions. Q07, Q11 and public sharing remain deferred.
+
 ## 2026-09-24 Startup improvement verified in production; notice publication next
 
 HTTP/2 enabled on app.lightnyai.ru. Frontend f3d5eaf/flow9291/#87 fully promoted; public mobile/desktop startup/reload/resume counts and h2 asset delivery pass. Frontend385 tests/build/lint pass; beta merge418 tests/build pass. Publishing required single EN/RU startup notice via migration53 after production feature verification. Next: validate localized feed, release frontend/backend beta and verify exact runtime. No upstream-reuse or UI-stall changes. Report: docs/operations/2026-09-24-startup-loading-release.md.

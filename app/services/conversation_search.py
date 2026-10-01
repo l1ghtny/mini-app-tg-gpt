@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from sqlalchemy import delete, func
 from sqlalchemy.orm import selectinload
@@ -19,6 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.database import engine
 from app.db.models import (
     AppUser,
+    ChatFolder,
     Conversation,
     ConversationSearchChunk,
     ConversationSearchJob,
@@ -26,6 +27,8 @@ from app.db.models import (
     Message,
     MessageContent,
 )
+
+from app.schemas.chat import ConversationSearchMetadata, ConversationSearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -441,6 +444,126 @@ async def queue_assistant_index_refresh(
 class _ConversationScore:
     conversation: Conversation
     score: float
+    exact_title: bool = False
+
+
+def _plain_excerpt(text: str, query: str) -> str:
+    # Indexed passages normalize whitespace, so fenced code may no longer
+    # contain newlines. Removing fences preserves its actual code text.
+    text = text.replace("```", "")
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"(^|\s)[#>*]+\s*", r"\1", text)
+    text = re.sub(r"[`*_]", "", text)
+    text = _normalize_text(text)
+    # A literal match is useful context; semantic-only matches use the passage
+    # opening. Never synthesize an excerpt from the history summary.
+    match = re.search(re.escape(query), text, flags=re.IGNORECASE)
+    start = max(0, match.start() - 70) if match else 0
+    prefix = "…" if start else ""
+    available = 240 - len(prefix)
+    tail = text[start:]
+    if len(tail) <= available:
+        return prefix + tail
+    return prefix + tail[: available - 1].rstrip() + "…"
+
+
+async def _search_metadata(
+    session: AsyncSession,
+    *,
+    current_user: AppUser,
+    ranked: list[_ConversationScore],
+    chunks: list[ConversationSearchChunk],
+    query_embedding: list[float],
+    query: str,
+) -> dict[uuid.UUID, ConversationSearchMetadata]:
+    result_ids = {item.conversation.id for item in ranked}
+    candidates: dict[uuid.UUID, list[ConversationSearchChunk]] = {}
+    for chunk in chunks:
+        if (
+            chunk.conversation_id in result_ids
+            and cosine_similarity(query_embedding, chunk.embedding) >= 0.15
+        ):
+            candidates.setdefault(chunk.conversation_id, []).append(chunk)
+    for conversation_id, rows in candidates.items():
+        rows.sort(
+            key=lambda row: (
+                -cosine_similarity(query_embedding, row.embedding),
+                str(row.id),
+            )
+        )
+        candidates[conversation_id] = rows[:3]
+    candidate_ids = [
+        row.id
+        for rows in candidates.values()
+        for row in rows
+        if row.text_hash == _hash_text(row.chunk_text)
+    ]
+    live_rows = []
+    if candidate_ids:
+        # Bound metadata work to three candidate passages per returned chat.
+        # Join through the live message/content and live ownership; stale index
+        # ownership or a deleted/truncated/edited passage cannot expose text.
+        live_rows = (
+            await session.exec(
+                select(ConversationSearchChunk.id, Message.created_at)
+                .join(
+                    MessageContent,
+                    MessageContent.id == ConversationSearchChunk.message_content_id,
+                )
+                .join(Message, Message.id == MessageContent.message_id)
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(
+                    ConversationSearchChunk.id.in_(candidate_ids),
+                    Conversation.user_id == current_user.id,
+                    ConversationSearchChunk.user_id == current_user.id,
+                    Message.id == ConversationSearchChunk.message_id,
+                    Message.conversation_id == ConversationSearchChunk.conversation_id,
+                    Message.role.in_(["user", "assistant"]),
+                    MessageContent.type == "text",
+                    func.strpos(
+                        func.trim(
+                            func.regexp_replace(MessageContent.value, r"\s+", " ", "g")
+                        ),
+                        ConversationSearchChunk.chunk_text,
+                    )
+                    > 0,
+                )
+            )
+        ).all()
+    live = dict(live_rows)
+    folders = (
+        dict(
+            (
+                await session.exec(
+                    select(Conversation.id, ChatFolder.name)
+                    .join(ChatFolder, ChatFolder.id == Conversation.folder_id)
+                    .where(
+                        Conversation.id.in_(result_ids),
+                        Conversation.user_id == current_user.id,
+                        ChatFolder.user_id == current_user.id,
+                    )
+                )
+            ).all()
+        )
+        if result_ids
+        else {}
+    )
+    metadata = {}
+    for item in ranked:
+        conversation_id = item.conversation.id
+        chunk = next(
+            (row for row in candidates.get(conversation_id, []) if row.id in live), None
+        )
+        metadata[conversation_id] = ConversationSearchMetadata(
+            excerpt=_plain_excerpt(chunk.chunk_text, query) if chunk else None,
+            message_id=chunk.message_id if chunk else None,
+            message_created_at=live[chunk.id] if chunk else None,
+            folder_name=folders[conversation_id][:120]
+            if conversation_id in folders
+            else None,
+        )
+    return metadata
 
 
 async def search_conversations(
@@ -448,21 +571,23 @@ async def search_conversations(
     *,
     current_user: AppUser,
     query: str,
-) -> list[Conversation]:
+    include_metadata: bool = False,
+) -> list[Conversation] | list[ConversationSearchResult]:
     normalized_query = _normalize_text(query)
     if not normalized_query:
         return []
 
     conversations = (
         await session.exec(
-            select(Conversation)
-            .where(Conversation.user_id == current_user.id)
+            select(Conversation).where(Conversation.user_id == current_user.id)
         )
     ).all()
     if not conversations:
         return []
 
-    conversation_by_id = {conversation.id: conversation for conversation in conversations}
+    conversation_by_id = {
+        conversation.id: conversation for conversation in conversations
+    }
     query_embedding = get_conversation_search_embedder().embed_query(normalized_query)
 
     projection_rows = (
@@ -482,9 +607,10 @@ async def search_conversations(
     title_scores = dict(
         (
             await session.exec(
-                select(Conversation.id, func.similarity(Conversation.title, normalized_query)).where(
-                    Conversation.user_id == current_user.id
-                )
+                select(
+                    Conversation.id,
+                    func.similarity(Conversation.title, normalized_query),
+                ).where(Conversation.user_id == current_user.id)
             )
         ).all()
     )
@@ -510,7 +636,7 @@ async def search_conversations(
         title_lower = title.casefold()
         title_similarity = float(title_scores.get(conversation.id, 0.0) or 0.0)
         lexical_boost = title_similarity * 0.2
-        exact_title_match = title_lower == lowered_query
+        exact_title_match = _normalize_text(title).casefold() == lowered_query
         prefix_title_match = title_lower.startswith(lowered_query)
         contains_title_match = lowered_query in title_lower
         if exact_title_match:
@@ -531,15 +657,40 @@ async def search_conversations(
             or contains_title_match
             or title_similarity >= 0.08
         ):
-            ranked.append(_ConversationScore(conversation=conversation, score=score))
+            ranked.append(
+                _ConversationScore(
+                    conversation=conversation,
+                    score=score,
+                    exact_title=exact_title_match,
+                )
+            )
 
     ranked.sort(
         key=lambda item: (
+            item.exact_title,
             item.score,
             item.conversation.updated_at or datetime.min,
         ),
         reverse=True,
     )
+    if include_metadata:
+        metadata = await _search_metadata(
+            session,
+            current_user=current_user,
+            ranked=ranked,
+            chunks=chunk_rows,
+            query_embedding=query_embedding,
+            query=normalized_query,
+        )
+        return [
+            ConversationSearchResult.model_validate(
+                {
+                    **item.conversation.model_dump(),
+                    "search": metadata[item.conversation.id],
+                }
+            )
+            for item in ranked
+        ]
     return [conversation_by_id[item.conversation.id] for item in ranked]
 
 
