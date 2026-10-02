@@ -1476,3 +1476,38 @@ Ship server-backed chat drafts and Favorites together with the matching frontend
 # 2026-09-21 Passkey management implemented locally
 
 Prepared isolated paired worktrees at /private/tmp/lightny-passkey-management/{backend,frontend}, branch codex/passkey-management-20260921. Localized legacy default names; added owner-only renaming, creation/last-use browser context, dates and selected-key deletion confirmation. Exposes existing RP metadata without changing domain handling. Nullable migration xw0e1f2a3b4c must precede backend deployment. Frontend contracts and evidence: docs/operations/2026-09-21-passkey-management.md. Release to production and beta authorized on 22 September, after the usage-efficiency release completes. Next: integrate both branch pairs, production migration/release, beta release, and live version checks; real registration/sign-in remains a user-device check.
+## 2026-10-02 generation budgets and allowances v2 implementation
+
+Objective: implement the approved conservative generation profiles, versioned
+allowance uplift and bounded supplier-funded recovery; raise a backend PR.
+Work is isolated in `codex/generation-budgets` from master `4ea687b`.
+
+Implemented: persisted quote/execution plans, native supported Claude task budgets,
+full-profile admission, final-answer/tool reserves, one known-cap recovery without
+tool replay, supplier loss/exposure gate, sticky allowance policy upgrades and
+residual partial-text persistence. Flag defaults off; no live grants or deployment.
+Summarization quotes now include all batches and their bounded retries.
+
+Validation complete: 267 allowance tests and 15 focused cancellation, availability
+and provider-schema tests passed; changed-file Ruff and whitespace checks passed.
+Migration upgrade/downgrade, offline SQL and single head passed. Self-review
+complete. Disposable local PostgreSQL and synthetic provider responses only.
+Provider quality and deployed UI unverified. Completed empty answers are refunded.
+
+Frontend follow-up: expose optional long response preference and returned profile,
+allow xhigh/max where supported, handle full-profile insufficient funds/operational
+pause with actionable choices, verify confirmation/send/reconnect/reload. Existing
+response and SSE fields remain supported; no frontend files changed.
+
+What's New: required at activation because allowances and response recovery change
+visible behavior. Hold drafts in operations documentation; no announcement DB rows.
+Backend version: unchanged in this gated PR; next approved activation release needs
+a minor bump from then-live production (last recorded baseline 2.0.2, provisional
+2.1.0). Frontend version: unchanged; optional UI work is a separate release.
+
+Handoff: `docs/operations/2026-10-02-generation-budget-v2.md`, including held EN/RU
+release drafts. Current frontend confirmation contract checked read-only on main.
+
+Next: backend PR review. Activation requires funded
+supplier envelope sizing, paid provider benchmarks, compatible UI acceptance and
+production version/publication gate. No deployment is authorized by this task.

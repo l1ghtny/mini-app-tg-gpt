@@ -18,7 +18,8 @@ from app.db.allowance import (
     ProviderAttempt,
 )
 from app.services.allowance_policy import (
-    BASE_GRANT,
+    GRANT_VERSION_V2,
+    grant_units,
     PRIVATE_PLANS,
     IMAGE_OUTPUT_TOKENS,
     RATE_VERSION,
@@ -90,13 +91,17 @@ async def private_entitlement(session, user_id, *, now=None):
 def adjust_private_grant(session, row, plan):
     """Replace capacity, never refill spent usage. Retain already committed holds."""
     policy = PLANS[plan]
-    grant = max(BASE_GRANT * policy["multiple"], row.spent + row.reserved)
+    version = GRANT_VERSION_V2 if settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED else row.grant_policy_version
+    grant = max(grant_units(plan, version=version), row.spent + row.reserved)
+    if row.plan == plan:
+        grant = max(grant, row.granted)
     luna = max(policy["luna_units"], row.luna_spent + row.luna_reserved)
-    if (row.plan, row.granted, row.luna_granted) == (plan, grant, luna):
+    if (row.plan, row.granted, row.luna_granted, row.grant_policy_version) == (plan, grant, luna, version):
         return
     session.add(AllowanceEvent(account_id=row.id, event_key=f"adjust:{row.id}:{uuid4()}",
         kind="plan_adjustment", units=grant-row.granted, luna_units=luna-row.luna_granted))
     row.plan, row.granted, row.luna_granted = plan, grant, luna
+    row.grant_policy_version = version
     session.add(row)
 
 
@@ -213,6 +218,16 @@ async def account(session, user_id, *, now=None):
         if plan not in PLANS:
             raise HTTPException(503, detail="Invalid allowance configuration")
         p = PLANS[plan]
+        grant_version = GRANT_VERSION_V2 if settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED else RATE_VERSION
+        if grant_version != GRANT_VERSION_V2:
+            # Once granted, the new offer survives a generation-flag rollback.
+            migrated = (await session.exec(select(AllowanceAccount.id).where(
+                AllowanceAccount.user_id == user_id,
+                AllowanceAccount.grant_policy_version == GRANT_VERSION_V2,
+                (AllowanceAccount.plan == "starter") if trial else (AllowanceAccount.plan != "starter"),
+            ).limit(1))).first()
+            if migrated:
+                grant_version = GRANT_VERSION_V2
         row = AllowanceAccount(
             user_id=user_id,
             scope=scope,
@@ -221,7 +236,8 @@ async def account(session, user_id, *, now=None):
             subscription_anchor=anchor,
             plan=plan,
             rate_version=RATE_VERSION,
-            granted=int(BASE_GRANT * p["multiple"]),
+            grant_policy_version=grant_version,
+            granted=grant_units(plan, version=grant_version),
             luna_granted=p["luna_units"],
         )
         session.add(row)
@@ -237,6 +253,8 @@ async def account(session, user_id, *, now=None):
         )
     elif access:
         adjust_private_grant(session, row, access.plan)
+    elif settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED:
+        adjust_private_grant(session, row, row.plan)
     return row
 
 
@@ -350,13 +368,14 @@ async def snapshot(session, user_id):
         period_end_kind="trial_expiry" if trial else "access_expiry" if ends_with_access else "reset",
         access_expires_at=access_ends.replace(tzinfo=UTC).isoformat() if access_ends else None,
         rate_version=a.rate_version,
+        grant_policy_version=a.grant_policy_version,
         models=model_access(a.plan),
         default_model="claude-sonnet-5" if trial else "gpt-5.6-terra",
         image_model="gpt-image-2.5-flare",
         luna_available=not trial_expired(a) and a.luna_granted - a.luna_spent - a.luna_reserved > 0,
         image_output_units={k: v * 30 for k, v in IMAGE_OUTPUT_TOKENS.items()},
         catalog=catalog(),
-        plans=public_plans(),
+        plans=public_plans(version=a.grant_policy_version),
         history=[
             dict(
                 request_id=r.request_id,
@@ -374,7 +393,8 @@ async def snapshot(session, user_id):
 
 
 async def reserve(
-    session, *, user_id, conversation_id, request_id, model, ceiling, luna_ceiling=0
+    session, *, user_id, conversation_id, request_id, model, ceiling, luna_ceiling=0,
+    execution_plan=None, recovery_ceiling=0,
 ):
     a = await account(session, user_id)
     require_active(a)
@@ -418,6 +438,8 @@ async def reserve(
         model=model,
         ceiling=ceiling,
         luna_ceiling=luna_ceiling,
+        execution_plan=execution_plan,
+        recovery_ceiling=recovery_ceiling,
     )
     session.add(r)
     await session.flush()
@@ -449,25 +471,27 @@ async def request_row(session, user_id, request_id, lock=False):
     return (await session.exec(q)).first()
 
 
-async def remaining_request_budget(session, user_id, request_id, *, included=False):
+async def remaining_request_budget(session, user_id, request_id, *, included=False, recovery=False):
     r = await request_row(session, user_id, request_id)
     if not r or r.status != "reserved":
         raise HTTPException(409, detail="Allowance reservation is not active")
     attempts = (
         await session.exec(
             select(ProviderAttempt).where(
-                ProviderAttempt.request_id == r.id, ProviderAttempt.included == included
+                ProviderAttempt.request_id == r.id, ProviderAttempt.included == included,
+                ProviderAttempt.recovery == recovery,
             )
         )
     ).all()
     used = sum(
         p.supplier_units if p.supplier_units is not None else p.budget for p in attempts
     )
-    return max(0, (r.luna_ceiling if included else r.ceiling) - used)
+    cap = r.recovery_ceiling if recovery else r.luna_ceiling if included else r.ceiling
+    return max(0, cap - used)
 
 
 async def begin_attempt(
-    session, *, user_id, request_id, step_key, model, budget, included=False
+    session, *, user_id, request_id, step_key, model, budget, included=False, recovery=False
 ):
     # Serialize the operational budget across users in PostgreSQL.
     if session.bind.dialect.name == "postgresql":
@@ -484,12 +508,18 @@ async def begin_attempt(
         raise HTTPException(
             409, detail="Provider step already started; reconcile before retry"
         )
+    if recovery and (not r.execution_plan or not r.recovery_ceiling or any(p.recovery for p in attempts)):
+        raise HTTPException(409, detail={"error": "recovery_not_available"})
+    if recovery and not any(p.status == "failed" and p.supplier_units is not None and
+                            (p.usage_details or {}).get("incomplete_reason", (p.usage_details or {}).get("stop_reason"))
+                            in {"max_tokens", "max_output_tokens"} for p in attempts):
+        raise HTTPException(409, detail={"error": "recovery_not_available"})
     used = sum(
         (p.supplier_units if p.supplier_units is not None else p.budget)
         for p in attempts
-        if p.included == included
+        if p.included == included and p.recovery == recovery
     )
-    cap = r.luna_ceiling if included else r.ceiling
+    cap = r.recovery_ceiling if recovery else r.luna_ceiling if included else r.ceiling
     if budget < 0 or used + budget > cap:
         raise HTTPException(
             402,
@@ -520,12 +550,27 @@ async def begin_attempt(
     ).one()
     if int(total) + budget > settings.SHARED_ALLOWANCE_PROVIDER_BUDGET_UNITS:
         raise HTTPException(503, detail={"error": "beta_spend_paused"})
+    if r.execution_plan:
+        # Losses are separate from customer balances. Unknown usage remains exposure.
+        loss = (await session.exec(select(func.coalesce(func.sum(
+            func.coalesce(ProviderAttempt.supplier_units, ProviderAttempt.budget)
+        ), 0)).join(AllowanceRequest, AllowanceRequest.id == ProviderAttempt.request_id).where(
+            AllowanceRequest.scope == r.scope,
+            ProviderAttempt.created_at >= start,
+            (ProviderAttempt.status == "failed") |
+            (AllowanceRequest.status.in_(["failed", "pending", "reserved"])) |
+            ProviderAttempt.recovery.is_(True),
+        ))).one()
+        loss_cap = settings.SHARED_ALLOWANCE_PROVIDER_BUDGET_UNITS * max(0, min(100, settings.SHARED_ALLOWANCE_RECOVERY_BUDGET_PERCENT)) // 100
+        if int(loss) + budget > loss_cap:
+            raise HTTPException(503, detail={"error": "provider_failure_spend_paused"})
     p = ProviderAttempt(
         request_id=r.id,
         step_key=step_key,
         model=model,
         budget=budget,
         included=included,
+        recovery=recovery,
     )
     session.add(p)
     await session.commit()

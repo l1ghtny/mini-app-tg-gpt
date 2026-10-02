@@ -2237,7 +2237,11 @@ async def _shared_entitlements(session, user, request, conversation):
         raise HTTPException(403, detail={"error": "model_not_in_plan", "model": request.model})
     if request.image_model and request.image_model != FLARE:
         raise HTTPException(409, detail={"error": "image_model_unavailable", "image_model": FLARE})
-    if request.reasoning_effort and request.reasoning_effort not in {"none", "low", "medium", "high"}:
+    from app.core.config import settings as shared_settings
+    allowed_efforts = {"none", "low", "medium", "high"}
+    if shared_settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED:
+        allowed_efforts |= {"xhigh", "max"}
+    if request.reasoning_effort and request.reasoning_effort not in allowed_efforts:
         raise HTTPException(400, detail={"error": "reasoning_effort_not_supported_for_model"})
     if request.model == "claude-fable-5-1" and (request.thinking is False or request.reasoning_effort == "none"):
         raise HTTPException(400, detail={"error": "thinking_required_for_model"})

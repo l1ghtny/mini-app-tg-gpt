@@ -12,6 +12,8 @@ DOCUMENT_SEARCH_TOKENS = 2048
 MAX_CHAT_TOOL_CALLS = 2
 
 BASE_GRANT = 1_250_000
+BASE_GRANT_V2 = 1_750_000
+GRANT_VERSION_V2 = "2026-10-02-v2"
 LUNA = "gpt-5.6-luna"
 FLARE = "gpt-image-2.5-flare"
 
@@ -80,6 +82,17 @@ def model_access(plan: str) -> list[str]:
     ]
 
 
+def grant_units(plan, *, version=None):
+    from app.core.config import settings
+
+    v2 = version == GRANT_VERSION_V2 or (
+        version is None and settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED
+    )
+    if plan == "starter" and v2:
+        return 750_000
+    return int((BASE_GRANT_V2 if v2 else BASE_GRANT) * PLANS[plan]["multiple"])
+
+
 def ceil_units(value: Decimal) -> int:
     return int(value.to_integral_value(rounding=ROUND_CEILING))
 
@@ -121,7 +134,8 @@ def text_tokens(value):
 
 
 def input_upper_bound(
-    messages: list[dict], instructions: str = "", *, model: str | None = None
+    messages: list[dict], instructions: str = "", *, model: str | None = None,
+    tool_schemas=None,
 ) -> int:
     # Text tokenizer plus provider/schema margin; images are bounded by detail.
     # The same count feeds admission and each provider attempt, including Claude.
@@ -150,7 +164,8 @@ def input_upper_bound(
             item["content"] = parts
         sanitized.append(item)
     text = json.dumps(sanitized, ensure_ascii=False)
-    return math.ceil(text_tokens(text + instructions) * 1.25) + images + 1024
+    schema_text = json.dumps(tool_schemas, ensure_ascii=False) if tool_schemas else ""
+    return math.ceil(text_tokens(text + instructions + schema_text) * 1.25) + images + 1024
 
 
 def step_budget(
@@ -161,11 +176,12 @@ def step_budget(
     max_output: int | None = None,
     search_calls: int = 0,
     file_calls: int = 0,
+    tool_schemas=None,
 ) -> int:
     p = MODELS[model]
     # Cache writes can cost more than uncached input.
     return ceil_units(
-        Decimal(input_upper_bound(messages, instructions, model=model))
+        Decimal(input_upper_bound(messages, instructions, model=model, tool_schemas=tool_schemas))
         * max(Decimal(p.input_rate), Decimal(p.write_rate))
         + Decimal(p.max_output if max_output is None else max_output)
         * Decimal(p.output_rate)
@@ -174,12 +190,12 @@ def step_budget(
     )
 
 
-def public_plans() -> list[dict]:
+def public_plans(*, version=None) -> list[dict]:
     return [
         dict(
             key=key,
             **{k: v for k, v in p.items() if k != "luna_units"},
-            allowance_units=BASE_GRANT * p["multiple"],
+            allowance_units=grant_units(key, version=version),
             baseline="start",
             period="month",
             models=model_access(key),
