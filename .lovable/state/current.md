@@ -1,3 +1,23 @@
+## 2026-10-02 PR20 private-review fixes
+
+Owner asked the review chat to request two fixes on the existing PR. Scope is
+limited to quote/execution mismatches; reservation/confirmation and tool-round
+redesign remain an open product discussion. No merge, activation or deployment.
+
+Completed: v2 estimates include image-quota notices, while send admission prices
+the exact final prompt from the handler. Luna works at zero shared balance with
+remaining fair-use capacity. Image quotes fund the permitted 8,000-character
+query's 32,000-byte UTF-8 bound; schema and execution use the same character limit.
+
+Validation: 270 allowance tests and 26 focused cancellation, availability,
+reasoning and provider-schema checks passed. Three new regressions exercise
+real isolated PostgreSQL quote/send/provider/settlement paths and the image query
+bound, with synthetic provider responses only. Ruff/whitespace checks pass.
+
+Next: review updated PR20 at its new head. Keep the v2 flag off. Broader accounting
+and sequential tool-round alternatives require a separate owner design decision.
+Existing What's New/version activation gate and frontend handoff remain unchanged.
+
 ## 2026-10-02 M16 Codex review and conditional merge
 
 Owner requested Codex review of both companions and authorised merge if review and validation pass. Synced the isolated backend branch with production master; resolved only the release-helper import and retained both project status sections. Offline excerpt/telemetry checks (2 tests), Ruff and whitespace checks pass after resolution. Frontend M16/Q20 reviews are running; backend final-head review is next. Full trigram integration still needs verification.

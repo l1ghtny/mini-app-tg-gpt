@@ -9,7 +9,13 @@ from fastapi import HTTPException
 
 from app.core.config import settings
 from app.services import allowance
-from app.services.allowance_policy import LUNA, RATE_VERSION, image_budget, step_budget
+from app.services.allowance_policy import (
+    LUNA,
+    RATE_VERSION,
+    MAX_TOOL_QUERY_BYTES,
+    image_budget,
+    step_budget,
+)
 from app.services.generation_budget import PROFILES, evidence_messages, execution_plan
 
 
@@ -100,6 +106,7 @@ async def estimate_plan(
                 image_reserve,
                 image_budget(
                     request.image_quality or conversation.image_quality or "medium",
+                    prompt_bytes=MAX_TOOL_QUERY_BYTES,
                     reference_tokens=min(4, references) * 120 * 120,
                 ),
             )

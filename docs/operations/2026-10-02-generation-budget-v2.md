@@ -73,6 +73,17 @@ tradeoff with real document/web tasks before enabling the policy.
 
 Quotes include actual tool schemas, final-answer input headroom, decoded-image
 reference bounds and all summary batches plus each summary's bounded retry.
+They also include entitlement-dependent image-quota notices; send admission
+receives the handler's final prompt so the strict capacity check prices the
+instructions that execution uses. Luna-only requests with an exhausted shared
+balance can still use their remaining Luna fair-use allowance.
+
+Image-tool queries allow 8,000 characters, so quotes fund up to 32,000 UTF-8 bytes
+per image call, including multibyte text. Schema validation, tool execution and
+quote pricing share this limit. This increases image holds to fund the permitted
+prompt size; settlement charges only returned usage. A detailed generated prompt
+must not fail image admission after a paid routing call solely because the quote
+assumed a 1,000-byte prompt.
 Every provider step rechecks actual assembled context against the remaining
 funds. Quote input counts use a local tokenizer with margin, not the provider's
 native counter. Thus a hold remains a conservative estimate, not a proven exact
@@ -172,8 +183,12 @@ downgrade and legacy balances; accounting tests cover concurrent recovery,
 unknown usage, loss gating, grant upgrades and exactly-once charging. Provider
 tests inspect native budgets, caps, stable prefixes, final tool disabling and
 truncated-JSON accounting. Partial failure tests check deletion safety.
-Executed checks: 267 allowance tests and 15 focused cancellation, availability
-and provider-schema tests passed; changed-file Ruff and whitespace checks passed.
+Executed checks after private-review fixes: 270 allowance tests and 26 focused
+cancellation, availability, reasoning and provider-schema tests passed;
+changed-file Ruff and whitespace checks passed. New integration regressions use
+the real quote, send handler, reservation, provider capacity, image admission and
+settlement paths with synthetic provider streams: zero-paid Luna, a 5,100-character
+Russian image query, and the maximum four-byte UTF-8 image query bound.
 
 ## Frontend handoff
 

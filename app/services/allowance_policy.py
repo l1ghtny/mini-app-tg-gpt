@@ -10,6 +10,9 @@ import tiktoken
 RATE_VERSION = "2026-09-18-v1"
 DOCUMENT_SEARCH_TOKENS = 2048
 MAX_CHAT_TOOL_CALLS = 2
+MAX_TOOL_QUERY_CHARS = 8000
+# Each permitted Unicode character can require four UTF-8 bytes in image pricing.
+MAX_TOOL_QUERY_BYTES = MAX_TOOL_QUERY_CHARS * 4
 
 BASE_GRANT = 1_250_000
 BASE_GRANT_V2 = 1_750_000

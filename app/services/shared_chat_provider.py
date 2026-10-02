@@ -24,6 +24,7 @@ from app.services.allowance_policy import (
     reference_count,
     DOCUMENT_SEARCH_TOKENS,
     MAX_CHAT_TOOL_CALLS,
+    MAX_TOOL_QUERY_CHARS,
     text_encoding,
     text_tokens,
 )
@@ -44,7 +45,7 @@ def tool_schema(name):
         return {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "maxLength": 8000},
+                "query": {"type": "string", "maxLength": MAX_TOOL_QUERY_CHARS},
                 "image_ids": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -58,7 +59,7 @@ def tool_schema(name):
         }
     schema = {
         "type": "object",
-        "properties": {"query": {"type": "string", "maxLength": 8000}},
+        "properties": {"query": {"type": "string", "maxLength": MAX_TOOL_QUERY_CHARS}},
         "required": ["query"],
         "additionalProperties": False,
     }
@@ -555,7 +556,7 @@ async def run_tool(run, name, args, tools, messages, index):
     ):
         raise ValueError("Unavailable tool or invalid tool arguments")
     query = args["query"]
-    if not query.strip() or len(query) > 8000:
+    if not query.strip() or len(query) > MAX_TOOL_QUERY_CHARS:
         raise ValueError("Tool query is empty or too long")
     yield {
         "type": "status",

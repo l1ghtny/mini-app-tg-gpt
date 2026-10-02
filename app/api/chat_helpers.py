@@ -341,7 +341,7 @@ async def handle_create_message(
     from app.services import allowance
     if allowance.enabled(current_user.id):
         from app.services.allowance_chat import admit
-        await admit(session, current_user, conversation, request)
+        await admit(session, current_user, conversation, request, system_prompt=system_prompt)
     try:
         user_msg = await _create_user_message(session, conversation, request, background_tasks)
         assistant_msg = await _create_assistant_message(session, conversation_id)
