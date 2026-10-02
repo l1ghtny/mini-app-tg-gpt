@@ -18,6 +18,7 @@ from app.schemas.chat import (
     ConversationDraftAPI,
     CreateConversationRequest,
     ConversationAPI,
+    ConversationSearchResult,
     ConversationWithMessages,
     EditMessageRequest,
     MessageUpdated,
@@ -329,7 +330,7 @@ async def get_conversation(conversation_id: uuid.UUID, session: AsyncSession = D
     )
 
 
-@router.get("/conversations/search/{string}")
+@router.get("/conversations/search/{string}", response_model=List[ConversationSearchResult])
 async def search_conversations(
     string: str,
     session: AsyncSession = Depends(get_read_session),
@@ -339,6 +340,7 @@ async def search_conversations(
         query=string,
         session=session,
         current_user=current_user,
+        include_metadata=True,
     )
 
 

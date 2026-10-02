@@ -2203,11 +2203,13 @@ async def handle_conversation_search(
     query: str,
     session: AsyncSession,
     current_user: AppUser,
-) -> Sequence[Conversation]:
+    include_metadata: bool = False,
+):
     return await semantic_search_conversations(
         session,
         current_user=current_user,
         query=query,
+        include_metadata=include_metadata,
     )
 
 

@@ -106,6 +106,21 @@ class ConversationWithMessages(ConversationAPI):
     messages: List[Message] = []
 
 
+class ConversationSearchMetadata(BaseModel):
+    excerpt: Optional[str] = Field(default=None, max_length=240)
+    message_id: Optional[uuid.UUID] = None
+    message_created_at: Optional[datetime] = None
+    folder_name: Optional[str] = Field(default=None, max_length=120)
+
+
+class ConversationSearchResult(ConversationAPI):
+    updated_at: Optional[datetime] = None
+    search: Optional[ConversationSearchMetadata] = None
+    # Historical search rows include the ORM conversation fields. Preserve
+    # those fields while giving the optional search payload an explicit schema.
+    model_config = ConfigDict(extra="allow")
+
+
 class CreateConversationRequest(BaseModel):
     folder_id: Optional[uuid.UUID] = None
 
