@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from openai import APIStatusError
+from app.services.provider_errors import ImageModerationError
 from app.services.allowance_policy import FLARE, ceil_units, image_budget
 from io import BytesIO
 from PIL import Image
@@ -152,8 +153,16 @@ async def generate_image(run, query, refs, quality, reference_mode="none"):
             else await api.generate(**params)
         )
     except APIStatusError as exc:
+        moderation = ImageModerationError.from_api_error(exc) if exc.status_code == 400 else None
         if exc.status_code in {400, 401, 403, 404, 422, 429}:
-            await run.finish(attempt, FLARE, {}, success=False, units=0)
+            failure_usage = {
+                "error_code": moderation.code,
+                "moderation_stage": moderation.stage,
+                "image_action": "edit" if files else "generate",
+            } if moderation else {}
+            await run.finish(attempt, FLARE, failure_usage, success=False, units=0)
+        if moderation:
+            raise moderation from None
         raise
     if response.usage is None:
         raise ValueError("Image endpoint omitted usage")

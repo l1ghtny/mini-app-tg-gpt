@@ -4,6 +4,7 @@ import json
 import logging
 from app.services.allowance_context import compress_context
 from app.services.provider_errors import ProviderResponseError
+from app.services.model_availability import require_text_model_available
 from datetime import UTC, datetime
 import httpx
 from openai import APIStatusError
@@ -349,14 +350,11 @@ async def openai_turn(
 async def claude_turn(
     run, messages, model, instructions, tools, required, effort, index
 ):
+    require_text_model_available(model)
     if not settings.ANTHROPIC_API_KEY:
         raise RuntimeError("Claude is unavailable: provider configuration missing")
     if required and model == "claude-fable-5-1":
         # Fable accepts auto/none only; enforce the required call in the app too.
-        instructions += (
-            f"\nThe user explicitly selected {required}. Call this tool before "
-            "answering. Do not substitute an answer from memory."
-        )
         tools = {required: tools[required]}
     # Bound text + images and signed thinking included in follow-up requests.
     maximum = await run.text_capacity(
@@ -681,6 +679,7 @@ async def stream_shared_response(
     **kwargs,
 ):
     run = ChatRun(user_id, request_id, kwargs.get("conversation_id"))
+    require_text_model_available(model)
     input_messages = len(messages)
     input_images = sum(
         p.get("type") == "input_image" for m in messages for p in m.get("content", [])
@@ -754,6 +753,14 @@ async def stream_shared_response(
             "merely because no inline file content appears in the message."
         )
     is_claude = MODELS[model].provider == "anthropic"
+    if is_claude and required and model == "claude-fable-5-1":
+        # Signed thinking blocks bind to the system prompt and tools. Keep both
+        # unchanged while returning tool results in the same assistant turn.
+        system += (
+            f"\nThe user explicitly selected {required}. Call this tool before "
+            "answering. Do not substitute an answer from memory."
+        )
+        selected = {required: selected[required]}
     history = claude_messages(messages) if is_claude else list(messages)
     index = 0
     calls_used = 0
@@ -761,11 +768,12 @@ async def stream_shared_response(
     for turn in range(3):
         turn_tools = (
             selected
-            if calls_used < MAX_CHAT_TOOL_CALLS and not document_search_used
+            if is_claude
+            or (calls_used < MAX_CHAT_TOOL_CALLS and not document_search_used)
             else {}
         )
         turn_system = system
-        if document_search_used:
+        if document_search_used and not is_claude:
             turn_system += "\nDocument retrieval is complete for this request. Answer from the excerpts already returned, cite their filenames, and state any evidence gaps. Do not claim the entire document was reviewed."
         fn = claude_turn if is_claude else openai_turn
         result = None

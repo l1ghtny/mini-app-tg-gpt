@@ -48,6 +48,7 @@ from app.services.model_registry import (
     models_share_provider,
 )
 from app.services.perplexity_features import required_rank_for_perplexity_options
+from app.services.model_availability import require_text_model_available
 from app.services.streaming.test_idempotency import _choose_link_for_message
 from app.services.subscription_check.entitlements import (
     get_active_tier,
@@ -284,6 +285,7 @@ async def handle_create_message(
     if existing_response:
         return existing_response
 
+    require_text_model_available(request.model)
     conversation = await _load_conversation_for_user(session, conversation_id, current_user.id)
     if "tool_choice" not in request.model_fields_set and get_text_model_provider(request.model) != "perplexity":
         request.tool_choice = conversation.tool_choice

@@ -23,6 +23,12 @@ from app.db.allowance import (
 from app.core.config import settings
 
 
+@pytest.fixture(autouse=True)
+def normal_provider_availability(monkeypatch):
+    # Existing provider behavior tests simulate an operational Claude account.
+    monkeypatch.setattr(settings, "ANTHROPIC_ENABLED", True)
+
+
 @pytest_asyncio.fixture
 async def db(monkeypatch):
     url = os.environ["TEST_DATABASE_URL"]

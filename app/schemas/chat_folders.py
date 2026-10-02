@@ -13,7 +13,7 @@ class ChatFolderBase(BaseModel):
     document_ids: List[uuid.UUID] = Field(default_factory=list)
 
 class ChatFolderCreate(ChatFolderBase):
-    pass
+    client_request_id: Optional[uuid.UUID] = None
 
 class ChatFolderUpdate(BaseModel):
     name: Optional[str] = None
@@ -26,6 +26,7 @@ class ChatFolderUpdate(BaseModel):
 class ChatFolder(ChatFolderBase):
     id: uuid.UUID
     user_id: uuid.UUID
+    client_request_id: Optional[uuid.UUID] = None
 
     model_config = ConfigDict(from_attributes=True)
 

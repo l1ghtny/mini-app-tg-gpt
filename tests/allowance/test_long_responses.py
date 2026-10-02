@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from app.services import allowance_chat, generation_observability as telemetry
 from app.services.allowance_policy import MODELS, output_target
-from app.services.provider_errors import ProviderResponseError
+from app.services.provider_errors import ImageModerationError, ProviderResponseError
 
 
 @pytest.mark.parametrize("model", list(MODELS))
@@ -159,7 +159,7 @@ def test_reporting_failure_cannot_break_customer_refund(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure_mode", ["exception", "error_event", "missing_done", "cancelled"]
+    "failure_mode", ["exception", "error_event", "missing_done", "cancelled", "image_moderation"]
 )
 async def test_pipeline_reports_unexpected_failure_and_refunds(
     monkeypatch, failure_mode
@@ -195,6 +195,8 @@ async def test_pipeline_reports_unexpected_failure_and_refunds(
         yield {"type": "text.done", "index": 0}
         if failure_mode == "exception":
             raise ProviderResponseError(status="incomplete", reason="max_output_tokens")
+        if failure_mode == "image_moderation":
+            raise ImageModerationError(stage="output")
         if failure_mode == "cancelled":
             raise GenerationStopped()
         if failure_mode == "error_event":
@@ -235,3 +237,8 @@ async def test_pipeline_reports_unexpected_failure_and_refunds(
     else:
         report.assert_called_once()
         assert bus.mark_done.call_args.kwargs["ok"] is False
+
+    if failure_mode == "image_moderation":
+        emitted = [call.args[1] for call in bus.publish.call_args_list if call.args[1].get("type") == "error"]
+        assert emitted == [{"type": "error", "code": "image_moderation_blocked", "error": ImageModerationError.public_message}]
+        assert pipeline._record_and_publish_activity.call_args.kwargs["event"] == emitted[0]

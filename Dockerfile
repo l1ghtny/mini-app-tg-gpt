@@ -32,6 +32,7 @@ FROM deps AS runtime
 # non-root user
 RUN useradd -u 10001 -m appuser
 COPY . .
+RUN date -u +%Y%m%dT%H%M%SZ > /app/.build-id
 # entrypoint needs exec perms
 RUN chmod +x docker/entrypoint.sh || true
 USER appuser

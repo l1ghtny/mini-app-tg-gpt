@@ -80,9 +80,74 @@ async def test_fable_required_tool_uses_auto_and_preserves_call(monkeypatch):
     assert captured["tool_choice"] == {"type": "auto"}
     assert captured["cache_control"] == {"type": "ephemeral"}
     assert [tool["name"] for tool in captured["tools"]] == ["web_search"]
-    assert "Call this tool before" in captured["system"][0]["text"]
+    assert captured["system"][0]["text"] == "Assistant"
     assert result[-1]["calls"][0]["name"] == "web_search"
     assert run.finish.call_args.kwargs["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_claude_tool_followup_keeps_signed_prefix(monkeypatch):
+    monkeypatch.setattr(provider, "compress_context", AsyncMock(return_value=[]))
+    calls = []
+
+    async def fake_claude_turn(
+        run, messages, model, instructions, tools, required, effort, index
+    ):
+        calls.append((instructions, list(tools), required, list(messages)))
+        if len(calls) == 1:
+            yield {
+                "type": "turn.result",
+                "output": [
+                    {"type": "thinking", "thinking": "", "signature": "signed"},
+                    {
+                        "type": "tool_use",
+                        "id": "search-1",
+                        "name": "web_search",
+                        "input": {"query": "a"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "search-2",
+                        "name": "web_search",
+                        "input": {"query": "b"},
+                    },
+                ],
+                "calls": [
+                    {"id": "search-1", "name": "web_search", "args": {"query": "a"}},
+                    {"id": "search-2", "name": "web_search", "args": {"query": "b"}},
+                ],
+            }
+        else:
+            yield {"type": "turn.result", "output": [], "calls": []}
+
+    async def fake_run_tool(*args):
+        yield {"type": "tool.result", "result": "Synthetic search result"}
+
+    monkeypatch.setattr(provider, "claude_turn", fake_claude_turn)
+    monkeypatch.setattr(provider, "run_tool", fake_run_tool)
+    events = [
+        event
+        async for event in provider.stream_shared_response(
+            [],
+            "claude-fable-5-1",
+            tools=[{"type": "web_search"}, {"type": "image_generation"}],
+            tool_choice={"type": "web_search"},
+        )
+    ]
+    assert events[-1] == {"type": "done"}
+    assert len(calls) == 2
+    assert calls[0][0] == calls[1][0]
+    assert calls[0][1] == calls[1][1] == ["web_search"]
+    assert "Call this tool before" in calls[0][0]
+    assert [part["type"] for part in calls[1][3][-2]["content"]] == [
+        "thinking",
+        "tool_use",
+        "tool_use",
+    ]
+    assert [part["type"] for part in calls[1][3][-1]["content"]] == [
+        "tool_result",
+        "tool_result",
+    ]
 
 
 @pytest.mark.asyncio

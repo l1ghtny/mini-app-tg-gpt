@@ -1,3 +1,11 @@
+## 2026-10-02 M16 Codex review and conditional merge
+
+Owner requested Codex review of both companions and authorised merge if review and validation pass. Synced the isolated backend branch with production master; resolved only the release-helper import and retained both project status sections. Offline excerpt/telemetry checks (2 tests), Ruff and whitespace checks pass after resolution. Frontend M16/Q20 reviews are running; backend final-head review is next. Full trigram integration still needs verification.
+
+What's New: required because search context/exact-title priority and Q20 recovery change a visible workflow. Keep announcement publication held until production acceptance; no database row or announcement migration is run during review. The last verified deployed components were both 2.0.2. Provisional next-release decisions: backend 2.0.2 -> 2.1.0 for optional search metadata and frontend 2.0.2 -> 2.1.0 for the substantial search workflow. Recheck live baselines and bump each changed component once when preparing the approved deployment. Q04/Q19 are separate, unapproved merges and must not be included silently.
+
+Next: finish final-head Codex reviews and full PostgreSQL verification; merge only clean approved search PRs, with Q20 dependency reviewed first. Deployment, version changes and a single grouped EN/RU publication remain a separate release step.
+
 ## 2026-10-01 M16 search context companion ready for review
 
 Objective: exact-title priority and bounded live search excerpts. Implemented in isolated `codex/ux-m16-search-context`; original checkout work is preserved. Exact normalized titles precede other results; duplicate titles and nonexact semantic order remain. Optional typed metadata preserves legacy conversation fields, verifies live ownership/current message text, and batches at most three candidate passages per result. Search URLs are redacted from Sentry hooks.
@@ -7,6 +15,47 @@ Validation: five disposable PostgreSQL regression cases plus a pure excerpt chec
 Frontend follow-up: paired M16 frontend on Q20 consumes optional metadata, renders excerpts/context/literal highlights, strips metadata before chat storage and redacts SDK search URLs. Backend-first compatible rollout; legacy title-only response remains supported. Report: docs/ux-review/2026-10-01-m16-search-context.md.
 
 Next steps: review the backend and frontend companion PRs; keep both unmerged/unreleased. No migration/version/notice publication in this batch. Future combined Q04/Q19/Q20/M16 release needs one grouped EN/RU notice after feature verification and independent component minor decisions based on then-live shared-major versions. Q07, Q11 and public sharing remain deferred.
+## 2026-10-01 Q01–Q03 deployed; announcement publication authorised
+
+Production frontend flow 9798/build112 and beta flow9803/build223 succeeded;
+runtime frontends 2.0.2+112 and 2.0.2+beta-223. Beta Work retained. Public API
+send/SSE/resume/idempotency probes passed on both channels with the explicitly
+approved synthetic chats. Production actual tier identity, mobile chat actions,
+older-answer warning and Cancel/focus retention verified in the deployed UI.
+Disposable PostgreSQL announcement replay/feed/downgrade integration passed.
+Production publication hold is satisfied. One stable EN/RU item, backend patch
+2.0.2; backend master remains the sole writer. No API contract changes.
+
+Risks: beta passkey sign-in and desktop/mobile checks pending user interaction;
+received Sentry events/source-map uploads unverified; browser download-event
+capture timed out although reviewed export tests pass. Legacy app.lightny.ru
+reachability remains intentionally deferred. See release evidence for exact IDs.
+
+Next: publish PR18 via production pipeline, verify head61 and localized feed;
+carry identical migration history to beta with schema check only; finish beta
+UI verification, then create separate Q04/Q19/Q20/M16 review PRs (M16 may need
+backend companion). Q07/Q11/public sharing remain deferred. No new batch merges.
+
+## 2026-09-30 Q01–Q03 announcement prepared; publication held
+
+Objective: one grouped production notice for the separately reviewed frontend
+quick wins. Isolated branch `codex/ux-q01-q03-announcement`; no shared work changed.
+
+Completed: EN/RU migration xw0e1f2a3b61 (stable item 2026-09-30-chat-quick-wins),
+idempotent insertion and scoped downgrade; 10 offline notice/timestamp tests,
+PostgreSQL offline upgrade SQL, one Alembic head, Ruff and whitespace checks.
+Backend version 2.0.1 -> 2.0.2 only for later announcement publication. Frontend
+patch 2.0.2 is in its separate owner-review PR. No API/accounting contract changes.
+
+Blockers/risks: DO NOT MERGE this draft until frontend production feature
+verification. Beta/production share a DB; no pending/inactive row may be inserted.
+No DB connection or migration executed. Disposable PostgreSQL idempotency/downgrade
+and live localized feed acceptance remain pending.
+
+Next steps: review frontend; beta acceptance without this migration; production
+frontend acceptance; recheck scope/version/head/feed duplicates; then publish from
+backend master and verify API/bot Sentry/feed. Carry same history to beta once.
+Details: `docs/releases/2026-09-30-chat-quick-wins-announcement.md`.
 
 ## 2026-09-24 Startup improvement verified in production; notice publication next
 

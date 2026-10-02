@@ -669,6 +669,7 @@ async def release_stale_requests(session, *, cutoff, user_id=None):
 
 
 def catalog():
+    from app.services.model_availability import text_model_available
     labels = {
         "gpt-5.6-luna": "Luna",
         "gpt-5.6-terra": "Terra",
@@ -709,6 +710,7 @@ def catalog():
         text_models=[
             dict(
                 model_name=name,
+                available=text_model_available(name, provider=p.provider),
                 display_name=labels[name],
                 display_name_ru=labels[name],
                 provider=p.provider,
