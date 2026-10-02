@@ -127,7 +127,7 @@ async def estimate(session, user, conversation, request, *, system_prompt=None):
             # Editing still checks availability before any image-provider spend.
             reference_tokens = refs * 120 * 120  # 3840px decoder bound.
     if settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED:
-        from app.services.allowance_quote_v2 import estimate_plan
+        from app.services.allowance_quote_v3 import estimate_plan
 
         image_reserve = image_budget(
             quality, prompt_bytes=MAX_TOOL_QUERY_BYTES, reference_tokens=reference_tokens
@@ -138,6 +138,7 @@ async def estimate(session, user, conversation, request, *, system_prompt=None):
             image_reserve=image_reserve, history=history,
             references=len(references),
             summary_units=summary_budget(history + [current], conversation),
+            consent_instructions=_resolve_system_prompt(conversation, user),
         )
     image_reserve = image_budget(quality, reference_tokens=reference_tokens)
     # Expected usage and admission use the exact same compacted multimodal context.

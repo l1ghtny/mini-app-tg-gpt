@@ -78,10 +78,19 @@ class AllowanceRequest(SQLModel, table=True):
     status: str = "reserved"
     execution_plan: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     recovery_ceiling: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
+    admission_policy: str = "held-legacy"
+    supplier_ceiling: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
+    risk_policy: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    execution_state: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    task_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    task_deadline_at: datetime | None = None
+    admission_period_start: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow_naive)
     __table_args__ = (
         UniqueConstraint("user_id", "scope", "request_id", name="uq_allowance_request"),
         CheckConstraint("recovery_ceiling >= 0", name="ck_allowance_recovery_ceiling"),
+        Index("ix_allowance_active_tasks", "user_id", "status", "lease_expires_at"),
     )
 
 

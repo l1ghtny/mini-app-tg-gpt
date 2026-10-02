@@ -1,4 +1,44 @@
-## 2026-10-02 PR20 private-review fixes
+## 2026-10-02 PR20 no-hold tasks and iterative research
+
+Owner explicitly expanded the same PR20 scope through the review chat. The
+earlier narrow fixes below are retained; their instruction to defer the broader
+redesign is superseded. Work stays in the isolated generation-budgets worktree.
+Necessary frontend integration has its own isolated companion branch. No merge,
+activation, deployment, Anthropic restoration or funded-envelope increase.
+
+Implemented: versioned no-hold customer admission; signed non-consuming caps;
+two durable logical-task slots; owner/lease fencing and explicit cancellation;
+original-period clamped settlement; net supplier loss/unknown exposure guards;
+six-operation iterative research with parallelism two, image consent/limit one,
+120-second research cutoff, duplicate/empty retrieval bounds, protected full final
+and one known-cap evidence-preserving recovery. Migration63 is additive after62.
+Saved legacy/v2 held policies remain distinct, including after flag rollback.
+
+Pilot calibration: $6 normal ceiling and separately capped recovery; grace up to
+$4; rolling user loss/exposure clamp(50% grant,$2,$5). The $2 floor is necessary
+to admit a normal Fable trial answer; it raises bounded small-plan platform risk.
+Global supplier envelope $25 and loss/exposure pool $5 are unchanged. Peak
+parallel flagship work/recovery may still pause; real quality/economics are gates.
+Exact formulas, scenarios and rollout are in the updated operations document.
+
+Validation: 302 allowance checks passed on isolated single-process PostgreSQL;
+26 focused cancellation/availability/reasoning/provider-schema checks passed.
+Migration roundtrip/single-head checks, Ruff and whitespace checks passed.
+Frontend: 127 focused Vitest checks, touched-file ESLint and production build pass.
+In-app desktop1280x900
+and mobile390x844 checks used actual consent component with synthetic quotes;
+ordinary one-unit preparation had no dialog, image consent remained explicit.
+Mobile side margins were tightened. No authenticated live/paid acceptance claimed.
+
+Release gate: What's New required for coordinated activation; no shared feed
+rows inserted. Read deployed backend2.0.2 and frontend2.1.0+118. Proposed sources
+backend2.1.0 capability and frontend2.1.1 compatible integration fix. Recheck and
+consolidate pending-release versions before an authorized deployment.
+
+Next: review PR20 and the linked frontend companion at their final heads. Keep activation false and explicitly report paid-provider,
+live-stream and funded-pilot acceptance gaps.
+
+## 2026-10-02 PR20 private-review fixes (historical narrow scope)
 
 Owner asked the review chat to request two fixes on the existing PR. Scope is
 limited to quote/execution mismatches; reservation/confirmation and tool-round

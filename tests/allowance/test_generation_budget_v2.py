@@ -80,7 +80,8 @@ async def test_quote_and_admission_persist_identical_plan(
     quote = await allowance_chat.estimate(s, u, c, r)
     assert quote["reasoning_effort"] == "low"
     assert quote["max_output_tokens"] == 12000
-    assert quote["minimum_ceiling_units"] == quote["ceiling_units"]
+    assert quote["minimum_ceiling_units"] == 10_000
+    assert not quote["needs_confirmation"]
     reserve = AsyncMock()
     monkeypatch.setattr(allowance, "reserve", reserve)
     r.estimate_reference = quote["estimate_reference"]
@@ -96,7 +97,7 @@ async def test_small_spend_cap_fails_before_confirmation_or_reservation(
     s, u, c, r = estimate_case
     r.required_tool = None
     r.tool_choice = []
-    r.spend_limit_units = 10000
+    r.spend_limit_units = 9999
     reserve = AsyncMock()
     monkeypatch.setattr(allowance, "reserve", reserve)
     with pytest.raises(HTTPException) as exc:

@@ -1,20 +1,105 @@
-# Generation budgets and allowance policy v2
+# Generation budgets, no-hold charging and iterative research
 
-Owner-authorized backend implementation; activation is a separate release.
-`SHARED_ALLOWANCE_GENERATION_V2_ENABLED` defaults to `false`. The additive
-schema migration alone does not change grants or execution. Legacy requests
-have no saved plan and keep the legacy behavior. This PR does not enable Claude,
-change the production/beta eligibility gates, deploy, or publish an announcement.
+Backend PR #20 and its linked frontend companion are one review scope. No merge,
+activation, deployment, provider restoration or supplier-envelope increase is
+authorized here. `SHARED_ALLOWANCE_GENERATION_V2_ENABLED=false` remains the default.
+The flag name is historical: future admissions with it on now use `no-hold-v3`
+accounting and `iterative-v3` execution. Saved earlier v2 plans keep held accounting.
 
-## Execution and task selection
+## Customer charging and consent
 
-The server persists the execution plan at reservation. Quotes and execution use
-the same version, effort, output cap and allowed tools. A stale signed quote is
-rejected before provider work. Omitted effort selects the model's default;
-explicit effort is preserved. A short prompt gets normal capacity. There is no
-paid classifier or hidden semantic task label.
+Three separate values are persisted: customer-approved charge maxima (shared and
+Luna), the normal supplier execution ceiling, and a separately bounded recovery
+ceiling. New quotes and admissions consume no customer hold. Quotes create no
+task slot or supplier attempt. Old quote fields remain compatible with existing
+clients: `ceiling_units` is a customer charge maximum, and the minimum is an
+admission floor rather than a full-profile supplier reservation.
 
-| Model | Normal cap | Expanded cap | Automatic effort |
+Normal text, web and document requests need no spending dialog. Image operations
+require a deliberate selected/required image action and signed consent; auto mode
+does not grant image permission. An image discovered without permission receives
+an explanation instead of execution. The customer can reduce an approved maximum.
+Rich-account explicit caps below 10,000 units are rejected before supplier work;
+near-zero remaining balances can approve their smaller remainder. Luna text can
+approve zero shared units when fair-use capacity remains. Required paid tools at
+zero shared balance fail before provider work; optional paid tools are omitted.
+
+Signed five-minute estimates bind stable task inputs, history, system preferences,
+model, effort, length, tools, document stores, image quality and approved maxima.
+Small balance movements do not invalidate consent. Send rechecks current access
+and balances atomically and can lower, never raise, the signed maxima. Edit and
+regenerate preserve the frontend's consent-before-rewrite contract: re-quote the
+rewritten history within the prior approved maximum. An account/history/task
+change still requires a fresh signature.
+
+Known successful usage settles exactly once under row locks against the original
+account and its admission period, clamped to remaining capacity and the approved
+maximum. No negative balances, future-period debt or account transfer occurs.
+Platform support pays bounded excess. Failed/cancelled logical tasks retain the
+refund policy, including successful child work. Unknown usage consumes no customer
+hold or charge, but remains internal exposure until verified reconciliation.
+New trial clocks start on a known successful result; legacy trial semantics remain
+unchanged. Grant upgrades never refill prior spend, and grant policy stays sticky
+through flag rollback.
+
+## Ownership and concurrency
+
+Two live logical tasks per user are admitted atomically in PostgreSQL across
+conversations, workers, accounting scopes and periods. Summaries, tools and
+recovery use the parent slot. Duplicate client IDs do not create another task:
+the existing message/stream is reused once available; the admission race returns
+409 while the initial result link is not yet recorded. Expensive image calls in
+the shared pipeline use the same parent; upload/proxy endpoints do not generate
+billable images.
+
+Queued tasks have a five-minute lease. A worker claims a unique owner once;
+each supplier/batch admission verifies ownership and renews the lease, bounded
+by the original 900-second deadline. Provider work has a 240-second timeout.
+An expired worker can record late invoice usage but cannot start another call or
+charge a fenced task. New admission and stale cleanup close expired tasks while
+retaining unknown spend. Explicit cancellation fences the ledger owner as well
+as setting the existing stop flag. SSE disconnect/reconnect does neither. Two
+saved no-hold tasks also keep the slot guard during flag rollback; ordinary legacy
+operation otherwise retains its existing admission behavior.
+
+## Adaptive research and answer capacity
+
+Pilot defaults: six unique tool executions, six planning turns, one final-only
+phase, two read-only operations in parallel and one image operation. Exact
+duplicate calls reuse cached results without another attempt or operation; every
+planning turn still counts. Refined sequential web and document searches are
+allowed. Two identical/empty retrieval payloads stop further work with that tool.
+Every emitted call receives a matched result, including a truthful blocked result.
+
+The 120-second research clock starts at the first admitted actual tool operation.
+Time, operation, context and funding limits stop new research and allow a full
+answer from available evidence. Instructions require citations and explicit gaps.
+Early completion returns immediately. A final phase cannot restart research.
+Tool results are bounded to 2,048 tokens, preserving complete citation URLs and
+filenames. Full Claude history, signatures, system and tool schemas are retained;
+the 192,000-token context safety bound stops new research before final input plus
+its output cap would exceed that bound. Provider-specific live limits remain an
+activation check; this is a conservative internal bound, not a model specification.
+
+Supplier steps are admitted incrementally. Parallel batches commit all admissions
+before dispatch; a failed batch admission rolls back every step and counter.
+Before planning or tools, protect a full final response priced from assembled
+history plus bounded prospective output/evidence. This protection also counts
+against other live tasks in the global/user exposure guard. Legacy supplier
+admissions also honor saved live final protections during flag rollback. A turn that may answer
+directly always gets the full normal cap. Only a forced initial tool-routing turn
+can use the routing cap. If another research turn cannot be funded, use one final
+call rather than a tiny answer or another tool attempt.
+
+One answer-only recovery is allowed after known `max_tokens`/`max_output_tokens`
+exhaustion. It retains retrieved evidence and public partial text, never replays
+search/image side effects, and never retries unknown/ambiguous usage. Both funding
+guards and context checks are re-evaluated. Recovery is conditional on funding;
+the system cannot promise it after multiple full-cap expensive failures.
+
+## Model profiles
+
+| Model | Normal cap | Expanded cap | Default effort |
 | --- | ---: | ---: | --- |
 | Luna | 8,000 | 16,000 | low |
 | Terra | 12,000 | 24,000 | low |
@@ -24,224 +109,110 @@ paid classifier or hidden semantic task label.
 | Astra | 24,000 | 48,000 | low |
 | Fable 5.1 | 32,000 | 48,000 | medium |
 
-The additive send/estimate field `response_length: "auto" | "long"` defaults
-to auto. Long selects expanded output without increasing effort. An explicit
-quantity of at least 1,000 words or three pages (English/Russian) also expands
-capacity; this is a narrow convenience rule, not task classification. Explicit
-medium or deeper effort selects expanded capacity. High has a floor of 32k
-for models whose normal cap is at most 16k, otherwise 48k; xhigh/max have a 64k
-floor. None is rejected for Astra/Fable. The existing provider model IDs and
-rates remain unchanged; live acceptance must confirm all exposed effort/model
-combinations, especially xhigh/max, before the UI offers them.
+No paid classifier or semantic task label is used. Short prompts keep normal
+capacity. `response_length=long`, explicit quantities of at least 1,000 words or
+three pages, and explicit medium/deeper effort select expanded capacity. High
+has a 32k/48k floor and xhigh/max a 64k floor. Explicit choices are preserved;
+none remains unsupported for Astra/Fable. Live effort acceptance is required
+before offering additional controls.
 
-Output caps include private reasoning and visible answer tokens. They do not
-reserve a guaranteed visible-answer allocation. Lower automatic effort,
-sufficient capacity and one funded recovery address exhaustion; a token cap
-cannot guarantee task quality or a complete answer.
+Caps include reasoning and visible output; they cannot guarantee an answer-token
+allocation. Native Claude targets are Opus 20k/32k/40k and Fable 24k/40k/48k for
+normal/expanded/forced-tool work, increased to at least 64k/80k respectively when
+iterative tools are available. Full-history replay uses the same native total
+without double-decrementing it. Sonnet/GPT get no native task-budget field.
+Claude beta support and actual model quality need provider acceptance before use.
+See [Claude task budgets](https://platform.claude.com/docs/en/build-with-claude/task-budgets)
+and [OpenAI reasoning costs](https://developers.openai.com/api/docs/guides/reasoning#controlling-costs).
 
-Native Claude task targets are Opus 20k/32k/40k and Fable 24k/40k/48k for
-normal/expanded/explicit tool work. High uses at least 48k, xhigh/max at least
-64k. Input above 8k increases the target. Sonnet and GPT receive no task-budget
-field. Supported Claude requests send `output_config.task_budget` and the
-`task-budgets-2026-03-13` beta header. Task targets are soft guidance across
-context and generation; output caps are hard per-response limits. Replaying
-full history keeps the same native total, rather than subtracting tokens and
-counting history twice. Signed completed Claude thinking/tool blocks, system
-and tool schemas are retained across follow-ups. Incomplete private reasoning
-is never fabricated or replayed in recovery.
+## Exact funding defaults and tradeoffs
 
-Provider references: [Claude task budgets](https://platform.claude.com/docs/en/build-with-claude/task-budgets),
-[OpenAI reasoning costs](https://developers.openai.com/api/docs/guides/reasoning#controlling-costs).
-Treat native beta support as an activation acceptance check.
+Units are micro-USD at the existing rate snapshot, not customer currency. The
+funded global supplier envelope stays 25,000,000 units ($25) per calendar month;
+the existing 20% internal loss/exposure pool stays 5,000,000 units ($5). Neither
+private grants nor subscriptions implicitly raise that funded envelope.
 
-## Funding the workflow
+Normal task ceiling is the minimum of: $6; approved shared + Luna maxima + grace;
+and a planned headroom estimate (at least $0.50, otherwise three full direct calls
+plus $0.30 research and summary/image headroom). Recovery is separately priced and
+capped at $6. Supplier budgets are capacities, not mandatory calls or invoices.
+At most two tasks therefore have an individual-ceiling bound of $24 including
+two recoveries; simultaneously admitted unresolved work plus protected finals is
+also bounded by the smaller user cap and $5 global pool, and all actual supplier
+work by the $25 envelope. Token/input bounds are conservative estimates; unexpected
+invoice overruns are recorded and block further work, not erased.
 
-Admission requires the entire selected profile to fit the available customer
-allowance and explicit spend limit. It refuses insufficient capacity before
-any provider attempt instead of shrinking output to 256 tokens. A hold is the
-worst planned capacity, not a charge; settlement still charges successful known
-usage once. Requests at or above 5% of the grant require existing spending consent.
+The rolling 30-day user loss/exposure cap is `clamp(50% of grant, $2, $5)`.
+Grace per task is `min($4, user cap)`. Unknown costs remain in exposure even after
+their date window expires. Known net losses include failed children, recovery and
+refunded parent tasks; proportional successful paid/fair-use credits prevent old
+charges from hiding new-window losses. All unsettled supplier work is conservatively
+treated as exposure. Each request saves the limits applied at admission.
 
-Optional tools can answer directly, so their first call has the full output cap.
-An explicitly required tool gets an 8k routing cap (16k at high or deeper).
-Tool workflows fund one planning round, up to two tool calls, then a full
-answer-only response. This deliberately replaces the legacy three-round loop
-for v2. Exact duplicate tool calls reuse the result. The final answer and tool
-funds are protected before routing. Additional rounds are not silently purchased.
-Tasks requiring sequential new research need a new user request; benchmark this
-tradeoff with real document/web tasks before enabling the policy.
+| Plan | Shared grant | Luna capacity | Grace per task | User loss/exposure cap |
+| --- | ---: | ---: | ---: | ---: |
+| Trial | $0.75 | $0.10 | $2 | $2 |
+| Start | $1.75 | $0.29 | $2 | $2 |
+| Plus | $3.50 | $0.50 | $2 | $2 |
+| Premium | $8.75 | $1 | $4 | $4.375 |
+| Max | $35 | $3.33 | $4 | $5 |
 
-Quotes include actual tool schemas, final-answer input headroom, decoded-image
-reference bounds and all summary batches plus each summary's bounded retry.
-They also include entitlement-dependent image-quota notices; send admission
-receives the handler's final prompt so the strict capacity check prices the
-instructions that execution uses. Luna-only requests with an exhausted shared
-balance can still use their remaining Luna fair-use allowance.
+The $2 floor is deliberately above 50% for small plans: $0.75 cannot admit a
+normal 32k Fable answer, whose output capacity alone prices at $1.60. Default
+single-answer admission is covered for every trial model. A hypothetical customer
+using all paid and Luna capacity plus the entire loss cap gives supplier-cost
+envelopes of $2.85/$4.04/$6/$14.125/$43.33 for Trial/Start/Plus/Premium/Max.
+These are capacity scenarios, not measured costs or margin forecasts; the global
+$25 guard can stop work sooner. Heavy parallel flagship research and full-cap
+recovery can still be refused. Six research operations are a maximum, not a
+guaranteed allowance to spend through six maximum-sized responses.
 
-Image-tool queries allow 8,000 characters, so quotes fund up to 32,000 UTF-8 bytes
-per image call, including multibyte text. Schema validation, tool execution and
-quote pricing share this limit. This increases image holds to fund the permitted
-prompt size; settlement charges only returned usage. A detailed generated prompt
-must not fail image admission after a paid routing call solely because the quote
-assumed a 1,000-byte prompt.
-Every provider step rechecks actual assembled context against the remaining
-funds. Quote input counts use a local tokenizer with margin, not the provider's
-native counter. Thus a hold remains a conservative estimate, not a proven exact
-invoice ceiling. Cache hits are not assumed; tool/provider billing variance and
-currency movement still need invoice reconciliation.
+Do not activate without a funded pilot and measured invoice economics. Validate
+task success, useful answer rate, refunded/unknown cost, full-cap stops, guard
+rejections, retries and effective margin including payment/infra/support costs.
+Raise funding or reduce exposed expensive profiles only through an explicit
+product/funding decision; do not hide the constraint by shrinking answer caps.
 
-Known output exhaustion may receive one larger answer-only recovery. The
-platform funds it separately from the customer reservation. Completed evidence
-and visible partial text are carried forward; tools cannot execute again.
-Truncated tool JSON, required first-tool calls, unknown usage, disconnects,
-timeouts and other errors do not trigger recovery. A second exhaustion fails
-without a third call. Terminal failures preserve residual partial text if the
-assistant message still exists, and refund the customer. Successful recovery
-charges successful usage within the original approved ceiling; supplier usage
-records every known attempt, including refunded and recovery work. Unknown
-usage stays conservative exposure until reconciled; it never becomes free money.
-Provider completion without visible text or a tool call is a v2 failure, not a
-customer charge. Its known supplier usage is retained; it does not trigger a retry.
+## Rollout, reconciliation and release gate
 
-## Allowances and policy versions
+Migration 63 is additive and follows 62 as the single head. Historical rows default
+to held accounting; migration never changes balances or activates the flag.
+Deploy schema first, then compatible readers/writers to every API/bot worker,
+then the frontend companion, before any separately approved flag activation.
+Old binaries cannot settle a no-hold row safely: after activation, rollback the
+flag in compatible code, not the schema/binary until saved tasks are drained.
+Future flag-off requests use legacy holds; saved v2 held plans and new no-hold
+plans finish under their original policy. Increased grants remain sticky.
 
-| Offer | Shared units | Luna/background units | Price |
-| --- | ---: | ---: | ---: |
-| Trial | 750,000 | 100,000 | free |
-| Start | 1,750,000 | 290,000 | ₽490 |
-| Plus | 3,500,000 | 500,000 | ₽990 |
-| Premium | 8,750,000 | 1,000,000 | ₽2,490 |
-| Max | 35,000,000 | 3,330,000 | ₽9,990 |
+For unknown usage, investigate the persisted provider identity and supplier
+invoice/response records. Only verified usage may finish/reconcile an attempt;
+never set missing usage to zero just to reopen budgets. A failed parent stays
+refunded even when its late invoice is recorded. Pending successful tasks settle
+only after known usage, under the original account/period and approved cap.
 
-These are internal micro-USD accounting units, not withdrawable cash or a promise
-of a number of replies. Trial has access to models but cannot fund every full
-flagship profile; insufficient-capacity requests are rejected before spend.
-Paid-equivalent base capacity rises 40%; trial rises from 500k to 750k. Private
-tier mappings and public checkout restrictions are unchanged.
+What's New: required for coordinated activation (larger grants, longer answers,
+ordinary no-hold conversations and iterative research). Keep one EN/RU draft in
+documentation; do not insert inactive/beta rows in the shared feed. Check existing
+notices and publish a scoped idempotent announcement migration only after verified
+production availability. The frontend copy/error/spacing companion alone needs
+no separate announcement. Deployed versions were read as backend 2.0.2 and frontend
+`tg-mini-frontend@2.1.0+118`; proposed sources are backend 2.1.0 (compatible capability)
+and frontend 2.1.1 (compatible integration fix). Recheck baselines and consolidate
+with other pending releases before merge/deployment; verify API/bot/frontend Sentry
+release IDs after an authorized rollout. Nothing is deployed by this PR.
 
-Grant policy `2026-10-02-v2` is distinct from rate version `2026-09-18-v1`.
-Existing period accounts receive an idempotent policy adjustment, preserving
-spent usage, holds, expiry and the trial lifetime clock. A flag rollback does
-not reclaim the granted uplift. Future periods and their displayed catalog
-retain the migrated policy. Explicit plan downgrade keeps the existing behavior
-of preserving already spent/reserved amounts; it does not reset usage.
+Held English announcement: **More room for AI answers** — Your AI allowance now
+has more capacity. Ordinary conversations no longer reserve a worst-case charge
+before each reply. Research can follow up on earlier search results, and long
+answers can continue once when funding permits. Settings shows actual usage.
 
-The earlier full-redemption scenario modeled FX120, payment/tax/refund costs,
-fixed overhead and a 20% contingency; contribution estimates of roughly
-17.5–26.6% were scenarios, not measured margins. This code does not implement
-tax/refund forecasts or automatically claim margin from accounting units.
+Held Russian announcement: **Больше возможностей для ответов ИИ** — Лимит ИИ стал
+больше. Обычные запросы больше не резервируют максимальный расход перед каждым
+ответом. Поиск может уточнять результаты предыдущих запросов, а длинный ответ —
+продолжиться ещё раз, если хватает ресурсов. Фактический расход виден в настройках.
 
-## Supplier envelope and loss pool
-
-Keep `SHARED_ALLOWANCE_PROVIDER_BUDGET_UNITS` as an explicitly funded monthly
-supplier envelope. All attempts, including Luna and known failed work, count
-toward it; unknown attempts count their reserved budgets. PostgreSQL serializes
-admission across users. The default 25M-unit beta envelope is not a scalable
-production revenue policy and must be sized for the activation cohort.
-
-`SHARED_ALLOWANCE_RECOVERY_BUDGET_PERCENT=20` allocates a separate exposure/loss
-pool within that envelope. V2 admission counts failed attempts, pending/active
-requests and recovery attempts against it. Active work reserves potential loss
-before spend and frees that exposure after ordinary success. Recovery usage is
-conservatively retained in this pool even if some successful usage is charged.
-The pool therefore bounds both losses and concurrent work; its name does not
-mean unlimited retries. Exhaustion returns `provider_failure_spend_paused`
-before another billable attempt; the total envelope retains `beta_spend_paused`.
-
-Size the envelope using verified paid subscriber workload, included Luna work,
-trials/private cohorts, and explicit loss/concurrency capacity. Do not multiply
-all subscription rows or allowance grants into a supposed cash balance: private
-and free access are not payment receipts, and public checkout is still disabled.
-Automatic receipt-based envelope scaling is deferred until a verified revenue
-source exists. For now, explicitly update the configured funded envelope under
-the existing operations process as the cohort grows, and reconcile provider
-invoices. A successful migration/test run does not authorize a funding increase.
-
-## Rollout, rollback and evidence
-
-1. Review the PR and apply migration `xw0e1f2a3b62` through backend master,
-   the shared database's sole migration writer. Carry identical history to beta;
-   beta checks the schema rather than creating a second writer.
-2. Keep the flag off while checking legacy sends, estimates and idempotency.
-   Size the funded supplier envelope and loss pool for the pilot explicitly.
-3. Run paid acceptance on enabled providers: ordinary/long output, explicit
-   reasoning, long-history summaries, documents, web evidence, image work,
-   reasoning-only exhaustion and one recovery. Measure first-answer latency,
-   completed-task rate, known/unknown supplier cost, refunds and net contribution.
-   Do not restore the separate Anthropic pause as part of this PR.
-4. Verify authenticated mobile/desktop quote/confirm/send/cancel and SSE
-   reconnect/reload. Check stale quotes, low balances, private upgrades, trial
-   expiry, operational pause and duplicate sends. The local suite is not UI proof.
-5. Enable the flag only for the existing authorized shared-allowance scope.
-   On rollback, disable it for new admission. Already persisted v2 plans continue
-   with their original caps independently of the flag; grants remain sticky.
-   Do not downgrade accounting columns after v2 usage exists.
-
-Local validation uses disposable PostgreSQL with synthetic provider responses;
-no provider spend or deployment is performed. Migration tests cover upgrade,
-downgrade and legacy balances; accounting tests cover concurrent recovery,
-unknown usage, loss gating, grant upgrades and exactly-once charging. Provider
-tests inspect native budgets, caps, stable prefixes, final tool disabling and
-truncated-JSON accounting. Partial failure tests check deletion safety.
-Executed checks after private-review fixes: 270 allowance tests and 26 focused
-cancellation, availability, reasoning and provider-schema tests passed;
-changed-file Ruff and whitespace checks passed. New integration regressions use
-the real quote, send handler, reservation, provider capacity, image admission and
-settlement paths with synthetic provider streams: zero-paid Luna, a 5,100-character
-Russian image query, and the maximum four-byte UTF-8 image query bound.
-
-## Frontend handoff
-
-Current frontend main's `src/lib/api.ts`, `src/lib/allowance.ts` and
-`src/components/AllowancePlans.tsx` were read from GitHub without editing the
-dirty frontend checkout. Existing types ignore additive quote fields. The
-confirmation dialog permits halving only above `minimum_ceiling_units`, so v2's
-full-profile minimum prevents accidentally buying an unusable smaller cap.
-
-- `src/lib/api.ts` and `src/types/index.ts`: optionally send `response_length`
-  and explicit effort; keep the same payload in quote and send. Preserve
-  preparation before timeline rewrite and re-quote the truncated history.
-- `src/lib/allowance.ts`: add typed profile, cap, effort, native target and grant
-  policy fields if displayed. Do not infer them from prompt length or prices.
-- `src/components/AllowancePlans.tsx`: distinguish planned maximum capacity
-  from an expected charge (v2 returns a 0-to-capacity range), and offer changing
-  model/tools/length when a full profile cannot fit instead of halving its cap.
-- Settings surfaces: expose only provider-accepted efforts; long writing must
-  not silently increase reasoning. Refresh allowance examples for the new grants.
-- `src/lib/sseParser.ts` and `src/lib/streamRecovery.ts`: acceptance coverage for
-  partial answer plus continuation, terminal failure refund, cancel and reload.
-  No SSE event schema changes are required by this PR.
-
-These are concrete follow-ups and acceptance gates, not same-session frontend
-implementation. Existing send/quote contracts remain compatible.
-
-## Release gate and held announcement draft
-
-What's New: required when activated, because allowances and recovery are visible.
-No draft or inactive row is inserted into the shared feed. After production
-acceptance, prepare one scoped idempotent EN/RU notice migration, checking prior
-long-response notices to avoid duplicate claims. Backend version: unchanged
-in this gated PR; next activation requires a minor bump from then-live production.
-Last recorded deployed baseline was 2.0.2, so 2.1.0 is provisional and must be
-rechecked alongside other pending release scope. Frontend version: unchanged
-here; separately released UI work gets its own version decision on the shared
-major. Verify API/bot/frontend Sentry release IDs after the approved deployment.
-
-Held English draft, to revise against verified production scope:
-
-**More AI allowance and room for longer answers**
-
-Paid plans now include 40% more shared AI allowance, and the free trial includes
-more allowance too. Long responses have more room to finish. If an answer reaches
-its response limit, Lightny can try once to continue it automatically. Unsuccessful
-tasks do not consume your allowance. Your current balance is shown in Settings.
-
-Held Russian draft:
-
-**Больше лимита ИИ и места для длинных ответов**
-
-В платных тарифах общий лимит ИИ увеличился на 40%. Пробный доступ тоже получил
-больше лимита. Длинным ответам теперь выделяется больше места. Если ответ
-достигает ограничения по длине, Lightny может один раз попробовать продолжить
-его автоматически. Неудачные запросы не расходуют ваш лимит. Остаток можно
-посмотреть в настройках.
+Validation is recorded in the PR and task state. Synthetic provider tests prove
+accounting and orchestration behavior, not paid provider quality, native beta
+support or production rollout. Desktop/mobile in-app checks use the actual
+consent component with synthetic quotes; authenticated live send/stream/resume,
+Telegram cancellation, paid model quality and pilot economics remain activation gates.

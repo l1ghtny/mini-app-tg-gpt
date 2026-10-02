@@ -2,6 +2,8 @@
 
 import json
 import logging
+import asyncio
+from uuid import uuid4
 from app.services.allowance_context import compress_context
 from app.services.provider_errors import ProviderResponseError
 from app.services.model_availability import require_text_model_available
@@ -165,6 +167,13 @@ class ChatRun:
         self.recovered = False
         self.final_phase = False
         self.executed_tools = {}
+        self.owner = None
+        self.protected = 0
+        self.state = {}
+
+    @property
+    def iterative(self):
+        return (self.execution or {}).get("policy") == "iterative-v3"
 
     async def load_plan(self):
         from app.services.generation_budget import ExecutionPlan
@@ -174,20 +183,62 @@ class ChatRun:
         if row and row.execution_plan:
             self.execution = row.execution_plan
             self.plan = ExecutionPlan.load(self.execution["generation"])
+            if self.iterative:
+                from app.services import allowance_tasks
+
+                self.owner = str(uuid4())
+                async with AsyncSession(engine, expire_on_commit=False) as session:
+                    row = await allowance_tasks.claim(
+                        session, self.user_id, self.request_id, self.owner
+                    )
+                self.state = row.execution_state or {}
+                self.protected = self.execution["final_answer_units"]
 
     async def start(self, model, budget, included=False):
         self.seq += 1
+        step_key = str(self.seq)
         async with AsyncSession(engine, expire_on_commit=False) as session:
-            return await allowance.begin_attempt(
-                session,
+            params = dict(
                 user_id=self.user_id,
                 request_id=self.request_id,
-                step_key=str(self.seq),
+                step_key=step_key,
                 model=model,
                 budget=budget,
                 included=included,
                 recovery=self.recovering,
+                owner=self.owner,
+                protected=0 if self.recovering else self.protected,
             )
+            try:
+                return await allowance.begin_attempt(session, **params)
+            except Exception as exc:
+                from fastapi import HTTPException
+
+                if not (
+                    isinstance(exc, HTTPException)
+                    and self.iterative
+                    and self.protected
+                    and model == self.plan.model
+                    and not self.recovering
+                    and not getattr(self, "required_routing", False)
+                    and isinstance(exc.detail, dict)
+                    and exc.detail.get("error") in {"request_spend_limit", "beta_spend_paused", "provider_failure_spend_paused", "user_supplier_spend_paused"}
+                ):
+                    raise
+                await session.rollback()
+                self.final_phase = True
+                self.protected = 0
+                params["protected"] = 0
+                return await allowance.begin_attempt(session, **params)
+
+    async def save_state(self, **updates):
+        from app.services import allowance_tasks
+
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await allowance_tasks.state(
+                session, self.user_id, self.request_id, self.owner, updates
+            )
+        self.state.update(updates)
 
     async def finish(
         self, attempt, model, usage, provider_id=None, success=True, units=None
@@ -216,14 +267,71 @@ class ChatRun:
                 recovery=self.recovering,
             )
         if self.plan:
+            self.required_routing = bool(required)
             schemas = provider_tool_schemas(model, tools)
-            target = self.execution["recovery_tokens"] if self.recovering else self.plan.routing_tokens if required else self.plan.max_output_tokens
+            target = (
+                self.execution["recovery_tokens"]
+                if self.recovering
+                else self.plan.routing_tokens
+                if required
+                else self.plan.max_output_tokens
+            )
             keep = 0
-            if not self.recovering and not self.final_phase and tools:
+            if (
+                not self.iterative
+                and not self.recovering
+                and not self.final_phase
+                and tools
+            ):
                 keep = self.execution["final_answer_units"]
                 if not included:
                     keep += self.execution["tool_budget_units"]
-            cost = step_budget(model, messages, instructions, max_output=target, tool_schemas=schemas)
+            cost = step_budget(
+                model, messages, instructions, max_output=target, tool_schemas=schemas
+            )
+            if self.iterative:
+                from app.services.generation_budget import evidence_messages
+                from app.services.allowance_policy import input_upper_bound
+
+                context_limit = self.execution["risk_policy"]["context_tokens"]
+                input_size = input_upper_bound(
+                    messages, instructions, model=model, tool_schemas=schemas
+                )
+                if input_size + target > context_limit:
+                    from fastapi import HTTPException
+
+                    raise HTTPException(402, detail={"error": "request_spend_limit"})
+                self.protected = 0
+                if not self.recovering and not self.final_phase and tools:
+                    future = evidence_messages(
+                        messages,
+                        tokens=target
+                        + 2 * self.execution["risk_policy"]["tool_result_tokens"]
+                        + 512,
+                    )
+                    self.protected = step_budget(
+                        model,
+                        future,
+                        instructions,
+                        max_output=self.plan.max_output_tokens,
+                        tool_schemas=schemas,
+                    )
+                    if (
+                        cost + self.protected > remaining
+                        or input_size
+                        + target
+                        + self.plan.max_output_tokens
+                        + 2 * self.execution["risk_policy"]["tool_result_tokens"]
+                        + 512
+                        > context_limit
+                    ) and not required:
+                        self.final_phase = True
+                        self.protected = 0
+                if cost + self.protected > remaining:
+                    from fastapi import HTTPException
+
+                    raise HTTPException(402, detail={"error": "request_spend_limit"})
+                return target
             if cost + keep > remaining:
                 from fastapi import HTTPException
 
@@ -275,19 +383,24 @@ class ChatRun:
         )
         attempt = await self.start(model, budget, included)
         try:
-            r = await client.with_options(max_retries=0).responses.create(
-                model=model,
-                input=messages,
-                instructions=instructions,
-                max_output_tokens=max_output,
-                reasoning={"effort": "low"},
-                tools=tools,
-                tool_choice=choice,
-                max_tool_calls=2,
-                store=False,
-                service_tier="default",
-                extra_body={"prompt_cache_options": {"mode": "explicit"}},
-            )
+            async with asyncio.timeout(
+                self.execution["risk_policy"]["provider_seconds"]
+                if self.iterative
+                else 240
+            ):
+                r = await client.with_options(max_retries=0).responses.create(
+                    model=model,
+                    input=messages,
+                    instructions=instructions,
+                    max_output_tokens=max_output,
+                    reasoning={"effort": "low"},
+                    tools=tools,
+                    tool_choice=choice,
+                    max_tool_calls=2,
+                    store=False,
+                    service_tier="default",
+                    extra_body={"prompt_cache_options": {"mode": "explicit"}},
+                )
         except APIStatusError as exc:
             if exc.status_code in {400, 401, 403, 404, 422, 429}:
                 await self.finish(attempt, model, {}, success=False, units=0)
@@ -342,7 +455,7 @@ async def openai_turn(
             else "none",
             reasoning={"effort": effort},
             max_output_tokens=maximum,
-            parallel_tool_calls=False,
+            parallel_tool_calls=getattr(run, "iterative", False),
             stream=True,
             store=False,
             service_tier="default",
@@ -753,6 +866,16 @@ def tool_instructions(system, model, document_stores, required):
     return system
 
 
+def iterative_instructions(system):
+    return system + (
+        "\nResearch tools may become unavailable when the time, operation, context or funded spending limit is reached. "
+        "When tool use is disabled, finish a useful answer using evidence already present. "
+        "If no relevant evidence was retrieved, clearly state that gap and distinguish general knowledge from verified facts. "
+        "Cite only URLs or filenames actually returned, never invent citations, and never claim a blocked tool ran. "
+        "Image generation requires a deliberately selected image action; if it is unavailable, ask the user to select that action."
+    )
+
+
 async def stream_shared_response(
     messages,
     model,
@@ -842,12 +965,22 @@ async def stream_shared_response(
     system = shared_instructions(model, instructions)
     document_stores = selected.get("file_search", {}).get("vector_store_ids", [])
     system = tool_instructions(system, model, document_stores, required)
+    if run.iterative:
+        system = iterative_instructions(system)
     is_claude = MODELS[model].provider == "anthropic"
     if is_claude and required and model == "claude-fable-5-1":
         # Signed thinking blocks bind to the system prompt and tools. Keep both
         # unchanged while returning tool results in the same assistant turn.
         selected = {required: selected[required]}
     history = claude_messages(messages) if is_claude else list(messages)
+    if run.iterative:
+        from app.services.shared_chat_loop import iterative_loop
+
+        async for event in iterative_loop(
+            run, history, model, system, selected, required, effort, original
+        ):
+            yield event
+        return
     index = 0
     calls_used = 0
     document_search_used = False
