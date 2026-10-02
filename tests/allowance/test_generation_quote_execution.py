@@ -233,6 +233,109 @@ async def test_iterative_refined_retrieval_then_cited_answer(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("parallel", [False, True])
+async def test_capped_search_finishes_from_retained_evidence_without_more_research(
+    send_case, monkeypatch, parallel
+):
+    session, user, conversation, queued = send_case
+    followups = [tool_call("web_search", "capped", "two")]
+    if parallel:
+        followups += [
+            tool_call("web_search", "sibling", "three"),
+            tool_call("web_search", "blocked", "four"),
+        ]
+    payloads, _ = synthetic_client(
+        monkeypatch,
+        [
+            tool_call("web_search", "initial", "one"),
+            followups,
+            answer("Answer from https://example.test/source; follow-up evidence is limited."),
+        ],
+    )
+    main_create = provider.client.responses.create
+    searches = []
+
+    async def create(**kw):
+        if kw.get("stream"):
+            return await main_create(**kw)
+        query = kw["input"][0]["content"][0]["text"]
+        searches.append(query)
+        capped = query == "capped"
+        text = "Unverified partial helper text" if capped else query + " verified evidence"
+        output = answer(text)
+        if not capped:
+            output["content"][0]["annotations"] = [
+                {"type": "url_citation", "url": "https://example.test/source", "title": "Source"}
+            ]
+        return SimpleNamespace(
+            status="incomplete" if capped else "completed",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens") if capped else None,
+            id="search-" + query,
+            usage={"input_tokens": 100, "output_tokens": 2048 if capped else 100},
+            output_text=text,
+            output=[SimpleNamespace(model_dump=lambda **kw: output)],
+        )
+
+    provider.client.responses.create = create
+    req = NewMessageRequest(
+        client_request_id="capped-search-" + str(parallel),
+        role="user", model="gpt-5.6-terra", tool_choice=["web_search"],
+        content=[{"type": "text", "value": "Research this question"}],
+    )
+    quote, _, _ = await send_and_execute(session, user, conversation, queued, req)
+    assert searches == (["initial", "capped", "sibling"] if parallel else ["initial", "capped"])
+    final = payloads[-1]
+    assert len(payloads) == 3 and final["tool_choice"] == "none"
+    assert final["max_output_tokens"] == quote["max_output_tokens"]
+    results = {m["call_id"]: m["output"] for m in final["input"] if m.get("type") == "function_call_output"}
+    assert "initial verified evidence" in results["one"]
+    assert "https://example.test/source" in results["one"]
+    assert "output limit" in results["two"]
+    assert "Unverified partial helper text" not in str(final["input"])
+    if parallel:
+        assert "sibling verified evidence" in results["three"]
+        assert "not executed" in results["four"]
+    attempts = (await session.exec(select(ProviderAttempt))).all()
+    failed = [p for p in attempts if p.status == "failed"]
+    assert len(failed) == 1 and failed[0].supplier_units > 0 and failed[0].customer_units == 0
+    assert all(p.supplier_units is not None for p in attempts)
+    assert not any(p.recovery for p in attempts)
+    row = await allowance.request_row(session, user.id, req.client_request_id)
+    assert row.status == "complete" and row.charged == sum(p.customer_units for p in attempts)
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_search_failure_keeps_unknown_exposure_and_is_not_retried(
+    send_case, monkeypatch
+):
+    session, user, conversation, queued = send_case
+    payloads, _ = synthetic_client(monkeypatch, [tool_call("web_search", "unknown", "one")])
+    main_create = provider.client.responses.create
+    searches = 0
+
+    async def create(**kw):
+        nonlocal searches
+        if kw.get("stream"):
+            return await main_create(**kw)
+        searches += 1
+        raise RuntimeError("Provider connection ended without usage")
+
+    provider.client.responses.create = create
+    req = NewMessageRequest(
+        client_request_id="ambiguous-search", role="user", model="gpt-5.6-terra",
+        tool_choice=["web_search"], content=[{"type": "text", "value": "Research this question"}],
+    )
+    with pytest.raises(RuntimeError, match="without usage"):
+        await send_and_execute(session, user, conversation, queued, req)
+    await allowance.settle(session, user.id, req.client_request_id, success=False, release_unknown=True)
+    assert searches == len(payloads) == 1
+    attempts = (await session.exec(select(ProviderAttempt))).all()
+    assert len(attempts) == 2 and sum(p.supplier_units is None for p in attempts) == 1
+    row = await allowance.request_row(session, user.id, req.client_request_id)
+    assert row.status == "failed" and row.charged == 0
+
+
+@pytest.mark.asyncio
 async def test_parallel_duplicate_and_empty_tools_end_with_full_final(
     send_case, monkeypatch
 ):

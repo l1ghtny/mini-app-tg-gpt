@@ -1,3 +1,23 @@
+## 2026-10-02 PR20 review follow-up: capped research helpers
+
+Owner authorized implementing the first final-head review finding and requested
+options only for the second. Known output-cap failures in web/visual helpers now
+produce matched evidence-gap results and finish from retained evidence without
+retrying the helper or dispatching more research. Parallel siblings already in
+flight are collected. Known failed supplier usage remains recorded and is not
+charged to the customer; ambiguous failures keep existing exposure/failure rules.
+
+Validation: 305 allowance tests and 26 focused backend checks passed on isolated
+single-process PostgreSQL/synthetic providers, plus Ruff and whitespace checks.
+Three new regressions cover sequential caps, parallel evidence/blocked later
+calls, and unknown failures without retry or lost exposure. No paid API calls.
+
+The context forecast still assumes two result blocks while a turn can request
+six; the owner is choosing between safe early stopping, adaptive excerpts and
+protocol-safe compaction. No context-policy implementation is included here.
+Keep activation off and review this fix in existing PR20. No merge/deployment,
+funding change or additional frontend contract change.
+
 ## 2026-10-02 PR20 no-hold tasks and iterative research
 
 Owner explicitly expanded the same PR20 scope through the review chat. The

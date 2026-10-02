@@ -71,6 +71,13 @@ planning turn still counts. Refined sequential web and document searches are
 allowed. Two identical/empty retrieval payloads stop further work with that tool.
 Every emitted call receives a matched result, including a truthful blocked result.
 
+If a web/visual research helper reaches a known output cap, its failed supplier
+usage stays recorded and the helper is not retried. Return a matched evidence-gap
+result, retain successful sibling/earlier evidence, block undispatched research,
+and finish with an answer-only turn. Incomplete helper text is not treated as
+verified evidence. Unknown usage, transport failures and cancellation retain
+their existing failure/exposure behavior.
+
 The 120-second research clock starts at the first admitted actual tool operation.
 Time, operation, context and funding limits stop new research and allow a full
 answer from available evidence. Instructions require citations and explicit gaps.
@@ -80,6 +87,12 @@ filenames. Full Claude history, signatures, system and tool schemas are retained
 the 192,000-token context safety bound stops new research before final input plus
 its output cap would exceed that bound. Provider-specific live limits remain an
 activation check; this is a conservative internal bound, not a model specification.
+
+Open review limitation: the prospective context forecast currently allows two
+result blocks although a planning turn can emit six calls across successive
+batches. Near the context boundary, research can still overfill final-answer
+input. Fixing this requires the owner's choice of early stopping, adaptive
+excerpts or protocol-safe compaction; it remains an activation blocker.
 
 Supplier steps are admitted incrementally. Parallel batches commit all admissions
 before dispatch; a failed batch admission rolls back every step and counter.
