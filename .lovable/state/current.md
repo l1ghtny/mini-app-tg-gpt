@@ -1,3 +1,30 @@
+## 2026-10-03 PR20 context-space protection and compaction backlog
+
+Owner approved option 1: stop research before it consumes full-answer context
+space. Planning preflight now includes output/matched-result space. Each actual
+emitted call is checked against assembled provider history before dispatch,
+including cached results and blocked placeholders for all remaining calls.
+Only fitting fixed-size evidence executes; skipped calls still receive matching
+results and the loop finishes with its original full answer cap. Fixed result
+bounds count JSON-escaped provider input. Claude signed blocks and schemas are
+retained. No inference-based compaction or customer hold is introduced.
+
+Validation: 314 allowance tests and 26 focused backend checks passed, plus Ruff
+and whitespace checks. New regressions cover partial research at32k, early
+answer-only completion at32k/default192k, zero supplier work for skipped calls,
+original final caps, protocol matching/signature retention and JSON-escaped
+result bounds. Synthetic providers, isolated single-process test database only.
+
+Option 3 is planned future work, recorded in
+`.lovable/memory/tech/research-evidence-compaction-backlog.md` and operations docs.
+Require bounded passes/inference spend, useful triggers, preserved evidence and
+provider protocols, no compulsory per-request summary, and measured total cost/
+completion benefit before enabling it. No additional supplier funding approved.
+
+Next: review the updated PR20 with frontend companion PR27. Keep policy and
+Anthropic activation off until the existing live/provider/economics acceptance
+gates pass. No merge/deployment or frontend contract change in this follow-up.
+
 ## 2026-10-02 PR20 review follow-up: capped research helpers
 
 Owner authorized implementing the first final-head review finding and requested

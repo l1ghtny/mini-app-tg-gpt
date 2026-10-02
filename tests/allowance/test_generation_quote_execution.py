@@ -395,6 +395,76 @@ async def test_parallel_duplicate_and_empty_tools_end_with_full_final(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("context_tokens,prefill,model", [
+    (32_000, 0, LUNA),
+    (32_000, 0, "gpt-5.6-terra"),
+    (192_000, 125_000, "gpt-5.6-terra"),
+])
+async def test_context_boundary_stops_research_and_keeps_full_final_answer(
+    send_case, monkeypatch, context_tokens, prefill, model
+):
+    from app.api import document_helpers
+    from app.services.shared_chat_loop import result_tokens
+    from app.services.shared_chat_provider import provider_tool_schemas
+    from app.services.allowance_policy import input_upper_bound
+
+    session, user, conversation, queued = send_case
+    monkeypatch.setattr(settings, "SHARED_ALLOWANCE_LOOP_CONTEXT_TOKENS", context_tokens)
+    ready = AsyncMock(return_value=["store"])
+    monkeypatch.setattr(chat, "list_conversation_ready_vector_store_ids", ready)
+    monkeypatch.setattr(document_helpers, "list_conversation_ready_vector_store_ids", ready)
+    calls = [tool_call("file_search", str(i) + " " + "x " * 1100, "id" + str(i)) for i in range(6)]
+    outputs = [calls, answer("Answer from report.pdf; further evidence is unavailable.")]
+    payloads, _ = synthetic_client(monkeypatch, outputs)
+    main_create = provider.client.responses.create
+
+    async def create(**kw):
+        if kw.get("tool_choice") == "none":
+            # A real provider obeys the early answer-only phase too.
+            outputs[len(payloads)] = answer("Answer from available evidence; further research could not fit.")
+        return await main_create(**kw)
+
+    provider.client.responses.create = create
+
+    async def search(**kw):
+        text = "Source " + kw["query"][:1] + " " + " ".join("fact" + str(i) for i in range(3000))
+        return SimpleNamespace(data=[SimpleNamespace(
+            filename="report.pdf", content=[SimpleNamespace(type="text", text=text)],
+        )])
+
+    searches = AsyncMock(side_effect=search)
+    provider.client.vector_stores = SimpleNamespace(search=searches)
+    req = NewMessageRequest(
+        client_request_id="context-" + str(context_tokens) + model,
+        role="user", model=model, tool_choice=["file_search"],
+        content=[{"type": "text", "value": "Research the document " + "context " * prefill}],
+    )
+    quote, _, _ = await send_and_execute(session, user, conversation, queued, req)
+    final = payloads[-1]
+    assert final["tool_choice"] == "none"
+    assert final["max_output_tokens"] == quote["max_output_tokens"]
+    schemas = provider_tool_schemas(model, {"file_search": {"vector_store_ids": ["store"]}})
+    assert input_upper_bound(final["input"], final["instructions"], model=model, tool_schemas=schemas) + final["max_output_tokens"] <= context_tokens
+    assert searches.await_count < 6
+    if model == LUNA:
+        # Partial research, rather than disabling every tool or overflowing
+        # after all six calls. Every emitted call still receives its result.
+        assert 0 < searches.await_count < 6
+        results = [m for m in final["input"] if m.get("type") == "function_call_output"]
+        assert [m["call_id"] for m in results] == [c["call_id"] for c in calls]
+        assert any("context limit" in m["output"] for m in results)
+        assert "report.pdf" in str(final["input"])
+        assert all(result_tokens(m["output"]) <= 2048 for m in results)
+    else:
+        assert searches.await_count == 0 and len(payloads) == 1
+    row = await allowance.request_row(session, user.id, req.client_request_id)
+    assert row.status == "complete" and row.execution_state["tools"] == searches.await_count
+    attempts = (await session.exec(select(ProviderAttempt))).all()
+    assert len(attempts) == len(payloads) + searches.await_count
+    assert all(p.status == "complete" for p in attempts)
+
+
+@pytest.mark.asyncio
 async def test_research_deadline_preserves_answer_capacity(send_case, monkeypatch):
     session, user, conversation, queued = send_case
     payloads, _ = synthetic_client(

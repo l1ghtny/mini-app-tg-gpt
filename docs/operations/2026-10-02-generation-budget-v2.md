@@ -88,11 +88,22 @@ the 192,000-token context safety bound stops new research before final input plu
 its output cap would exceed that bound. Provider-specific live limits remain an
 activation check; this is a conservative internal bound, not a model specification.
 
-Open review limitation: the prospective context forecast currently allows two
-result blocks although a planning turn can emit six calls across successive
-batches. Near the context boundary, research can still overfill final-answer
-input. Fixing this requires the owner's choice of early stopping, adaptive
-excerpts or protocol-safe compaction; it remains an activation blocker.
+Context protection now includes serialized planning output and matching blocked
+results before a new planning turn. Before dispatch, count every actual emitted
+call and its matched result, including cached and skipped calls. Admit fixed-size
+evidence only while assembled input plus the full final output cap fits. Stop
+new research when it does not; never shrink the answer cap to make research fit.
+Result bounds include JSON escaping in provider input. The signed Claude history
+and stable schemas are retained; no model-based research compaction is added.
+
+Future work approved in principle: protocol-safe research evidence compaction
+(option 3), to support deeper investigations. It can incur additional inference;
+trigger it only when useful, price and cap every pass within the existing task/
+platform budgets, and measure whether it saves net cost or improves completion.
+Do not add an unbounded summarization loop or a compulsory extra call per request.
+Preserve source identifiers, evidence gaps and signed/tool protocol invariants.
+Implementation and activation remain deferred. The detailed internal backlog is
+`.lovable/memory/tech/research-evidence-compaction-backlog.md`.
 
 Supplier steps are admitted incrementally. Parallel batches commit all admissions
 before dispatch; a failed batch admission rolls back every step and counter.

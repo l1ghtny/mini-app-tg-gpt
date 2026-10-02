@@ -316,17 +316,25 @@ class ChatRun:
                         max_output=self.plan.max_output_tokens,
                         tool_schemas=schemas,
                     )
+                    # A planning output must fit alongside its matching blocked
+                    # tool results and a full final answer. Actual evidence is
+                    # admitted against assembled context before tool dispatch.
+                    projected_final_input = input_upper_bound(
+                        evidence_messages(messages, tokens=2 * target + 512),
+                        instructions, model=model, tool_schemas=schemas,
+                    )
                     if (
                         cost + self.protected > remaining
-                        or input_size
-                        + target
+                        or projected_final_input
                         + self.plan.max_output_tokens
-                        + 2 * self.execution["risk_policy"]["tool_result_tokens"]
-                        + 512
                         > context_limit
                     ) and not required:
                         self.final_phase = True
                         self.protected = 0
+                    elif projected_final_input + self.plan.max_output_tokens > context_limit:
+                        from fastapi import HTTPException
+
+                        raise HTTPException(402, detail={"error": "request_spend_limit"})
                 if cost + self.protected > remaining:
                     from fastapi import HTTPException
 

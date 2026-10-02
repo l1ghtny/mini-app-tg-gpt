@@ -17,6 +17,13 @@ admission verifies the owner; cancellation/stale cleanup fences it. Transport
 disconnect is not cancellation. Parallel tool batches commit atomically before
 dispatch. Retain protected full final capacity and match all emitted tool calls.
 
+Protect context independently of supplier money: count all emitted/cached/skipped
+tool results in their provider input shape before dispatch, admit only fixed-size
+evidence that fits with a full final answer, and stop research otherwise. No
+customer balance hold or answer-cap reduction is introduced. Future bounded
+research compaction and its inference-cost constraints are recorded separately
+in `research-evidence-compaction-backlog.md`; that feature is not implemented.
+
 Never deploy an old binary over live no-hold rows: it can subtract nonexistent
 holds. Roll back the flag in compatible code and drain saved tasks first.
 Defaults, financial scenarios and activation gates live in
