@@ -33,6 +33,7 @@ from app.core.config import settings
 from app.core.deployment_channel import blocked_beta_action
 from app.core.sentry_setup import build_sentry_openai_integrations
 from app.core.version import APP_VERSION, sentry_release
+from app.services.search_telemetry import redact_search_request_urls
 
 logger = settings.custom_logger
 CANARY_HEADER_NAME = (
@@ -72,6 +73,10 @@ if settings.SENTRY_DSN:
         integrations=build_sentry_openai_integrations(logger),
         enable_logs=True,
         stream_gen_ai_spans=True,
+        before_send=redact_search_request_urls,
+        before_send_transaction=redact_search_request_urls,
+        before_breadcrumb=redact_search_request_urls,
+        before_send_log=redact_search_request_urls,
         _experiments={
             "metrics_aggregator": True,
         },

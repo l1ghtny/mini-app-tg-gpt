@@ -17,6 +17,7 @@ from app.services.allowance_policy import (
     output_target,
     document_followup_messages,
     MAX_CHAT_TOOL_CALLS,
+    MAX_TOOL_QUERY_BYTES,
 )
 
 
@@ -32,7 +33,7 @@ def tool_names(choice):
     return set(choice)
 
 
-async def estimate(session, user, conversation, request):
+async def estimate(session, user, conversation, request, *, system_prompt=None):
     from app.services.model_availability import require_text_model_available
 
     require_text_model_available(request.model)
@@ -50,8 +51,12 @@ async def estimate(session, user, conversation, request):
             .limit(100)
         )
     ).all()
-    from app.api.chat_helpers import _build_history_for_openai, _resolve_system_prompt
-    from app.services.allowance_context import estimate_context
+    from app.api.chat_helpers import (
+        _build_history_for_openai,
+        _resolve_system_prompt,
+        _apply_image_quota_notice,
+    )
+    from app.services.allowance_context import estimate_context, summary_budget
     from app.services.shared_chat_provider import shared_instructions
 
     history = await _build_history_for_openai(
@@ -79,9 +84,16 @@ async def estimate(session, user, conversation, request):
         )
     if references:
         tools.add("inspect_image")
-    instructions = shared_instructions(
-        request.model, _resolve_system_prompt(conversation, user)
-    )
+    resolved_prompt = _resolve_system_prompt(conversation, user)
+    if settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED:
+        # Quotes mirror shared entitlements; send admission receives the exact
+        # final prompt already assembled by the handler, including notices.
+        resolved_prompt = (
+            system_prompt if system_prompt is not None else _apply_image_quota_notice(
+                resolved_prompt, image_allowed=allowance.available(a) > 0
+            )
+        )
+    instructions = shared_instructions(request.model, resolved_prompt)
     effort = request.reasoning_effort or (
         "none" if request.thinking is False else "medium"
     )
@@ -114,6 +126,20 @@ async def estimate(session, user, conversation, request):
             # Unavailable historical sources must not block unrelated generation.
             # Editing still checks availability before any image-provider spend.
             reference_tokens = refs * 120 * 120  # 3840px decoder bound.
+    if settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED:
+        from app.services.allowance_quote_v3 import estimate_plan
+
+        image_reserve = image_budget(
+            quality, prompt_bytes=MAX_TOOL_QUERY_BYTES, reference_tokens=reference_tokens
+        )
+        return await estimate_plan(
+            session, user, conversation, request, account=a, messages=messages,
+            instructions=instructions, tools=tools, document_stores=document_stores,
+            image_reserve=image_reserve, history=history,
+            references=len(references),
+            summary_units=summary_budget(history + [current], conversation),
+            consent_instructions=_resolve_system_prompt(conversation, user),
+        )
     image_reserve = image_budget(quality, reference_tokens=reference_tokens)
     # Expected usage and admission use the exact same compacted multimodal context.
     # Do not promise cache hits; unused output/tool capacity is never a charge.
@@ -273,11 +299,9 @@ async def estimate(session, user, conversation, request):
     return result
 
 
-async def admit(session, user, conversation, request):
-    e = await estimate(session, user, conversation, request)
-    if e["needs_confirmation"] and not request.estimate_reference:
-        raise HTTPException(409, detail={"error": "usage_confirmation_required", **e})
-    if request.model == LUNA and e["luna_ceiling"] < e["luna_minimum"]:
+async def admit(session, user, conversation, request, *, system_prompt=None):
+    e = await estimate(session, user, conversation, request, system_prompt=system_prompt)
+    if (request.model == LUNA or e.get("execution_plan")) and e["luna_ceiling"] < e["luna_minimum"]:
         raise HTTPException(429, detail={"error": "luna_fair_use"})
     if e["ceiling_units"] < e["minimum_ceiling_units"]:
         raise HTTPException(
@@ -288,6 +312,8 @@ async def admit(session, user, conversation, request):
                 else "allowance_insufficient"
             },
         )
+    if e["needs_confirmation"] and not request.estimate_reference:
+        raise HTTPException(409, detail={"error": "usage_confirmation_required", **e})
     return await allowance.reserve(
         session,
         user_id=user.id,
@@ -296,4 +322,6 @@ async def admit(session, user, conversation, request):
         model=request.model,
         ceiling=e["ceiling_units"],
         luna_ceiling=e["luna_ceiling"],
+        execution_plan=e.get("execution_plan"),
+        recovery_ceiling=e.get("recovery_ceiling_units", 0),
     )

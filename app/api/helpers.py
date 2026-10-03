@@ -15,7 +15,7 @@ from sqlalchemy import update as sql_update
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.models import Conversation, MessageContent, RequestLedger, State
+from app.db.models import Conversation, Message, MessageContent, RequestLedger, State
 from app.services.chat_cancellation import GenerationStopped, cancellable_events
 from app.services.openai_chain import invalidate_openai_chain_state
 from app.services.google_chain import invalidate_google_chain_state
@@ -231,6 +231,19 @@ async def generate_and_publish(
                     await session.commit()
                 except Exception:
                     logger.exception("Could not release failed chat reservation request_id=%s", request_id)
+                    await session.rollback()
+            if buffers and allowance.enabled(user_id):
+                # Flush the residual text after rollback so reload matches the
+                # streamed partial answer, including sub-checkpoint fragments.
+                try:
+                    content_cache.clear()
+                    if await session.get(Message, assistant_message_id):
+                        for ordinal, text in buffers.items():
+                            await _upsert_text(assistant_message_id, ordinal, text,
+                                               session=session, content_cache=content_cache)
+                        await session.commit()
+                except Exception:
+                    logger.exception("Could not preserve partial chat output request_id=%s", request_id)
                     await session.rollback()
             await _cleanup_partial_images(partial_image_keys)
             error_event = {

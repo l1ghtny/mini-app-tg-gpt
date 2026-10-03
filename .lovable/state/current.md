@@ -1,3 +1,127 @@
+## 2026-10-03 PR20 context-space protection and compaction backlog
+
+Owner approved option 1: stop research before it consumes full-answer context
+space. Planning preflight now includes output/matched-result space. Each actual
+emitted call is checked against assembled provider history before dispatch,
+including cached results and blocked placeholders for all remaining calls.
+Only fitting fixed-size evidence executes; skipped calls still receive matching
+results and the loop finishes with its original full answer cap. Fixed result
+bounds count JSON-escaped provider input. Claude signed blocks and schemas are
+retained. No inference-based compaction or customer hold is introduced.
+
+Validation: 314 allowance tests and 26 focused backend checks passed, plus Ruff
+and whitespace checks. New regressions cover partial research at32k, early
+answer-only completion at32k/default192k, zero supplier work for skipped calls,
+original final caps, protocol matching/signature retention and JSON-escaped
+result bounds. Synthetic providers, isolated single-process test database only.
+
+Option 3 is planned future work, recorded in
+`.lovable/memory/tech/research-evidence-compaction-backlog.md` and operations docs.
+Require bounded passes/inference spend, useful triggers, preserved evidence and
+provider protocols, no compulsory per-request summary, and measured total cost/
+completion benefit before enabling it. No additional supplier funding approved.
+
+Next: review the updated PR20 with frontend companion PR27. Keep policy and
+Anthropic activation off until the existing live/provider/economics acceptance
+gates pass. No merge/deployment or frontend contract change in this follow-up.
+
+## 2026-10-02 PR20 review follow-up: capped research helpers
+
+Owner authorized implementing the first final-head review finding and requested
+options only for the second. Known output-cap failures in web/visual helpers now
+produce matched evidence-gap results and finish from retained evidence without
+retrying the helper or dispatching more research. Parallel siblings already in
+flight are collected. Known failed supplier usage remains recorded and is not
+charged to the customer; ambiguous failures keep existing exposure/failure rules.
+
+Validation: 305 allowance tests and 26 focused backend checks passed on isolated
+single-process PostgreSQL/synthetic providers, plus Ruff and whitespace checks.
+Three new regressions cover sequential caps, parallel evidence/blocked later
+calls, and unknown failures without retry or lost exposure. No paid API calls.
+
+The context forecast still assumes two result blocks while a turn can request
+six; the owner is choosing between safe early stopping, adaptive excerpts and
+protocol-safe compaction. No context-policy implementation is included here.
+Keep activation off and review this fix in existing PR20. No merge/deployment,
+funding change or additional frontend contract change.
+
+## 2026-10-02 PR20 no-hold tasks and iterative research
+
+Owner explicitly expanded the same PR20 scope through the review chat. The
+earlier narrow fixes below are retained; their instruction to defer the broader
+redesign is superseded. Work stays in the isolated generation-budgets worktree.
+Necessary frontend integration has its own isolated companion branch. No merge,
+activation, deployment, Anthropic restoration or funded-envelope increase.
+
+Implemented: versioned no-hold customer admission; signed non-consuming caps;
+two durable logical-task slots; owner/lease fencing and explicit cancellation;
+original-period clamped settlement; net supplier loss/unknown exposure guards;
+six-operation iterative research with parallelism two, image consent/limit one,
+120-second research cutoff, duplicate/empty retrieval bounds, protected full final
+and one known-cap evidence-preserving recovery. Migration63 is additive after62.
+Saved legacy/v2 held policies remain distinct, including after flag rollback.
+
+Pilot calibration: $6 normal ceiling and separately capped recovery; grace up to
+$4; rolling user loss/exposure clamp(50% grant,$2,$5). The $2 floor is necessary
+to admit a normal Fable trial answer; it raises bounded small-plan platform risk.
+Global supplier envelope $25 and loss/exposure pool $5 are unchanged. Peak
+parallel flagship work/recovery may still pause; real quality/economics are gates.
+Exact formulas, scenarios and rollout are in the updated operations document.
+
+Validation: 302 allowance checks passed on isolated single-process PostgreSQL;
+26 focused cancellation/availability/reasoning/provider-schema checks passed.
+Migration roundtrip/single-head checks, Ruff and whitespace checks passed.
+Frontend: 127 focused Vitest checks, touched-file ESLint and production build pass.
+In-app desktop1280x900
+and mobile390x844 checks used actual consent component with synthetic quotes;
+ordinary one-unit preparation had no dialog, image consent remained explicit.
+Mobile side margins were tightened. No authenticated live/paid acceptance claimed.
+
+Release gate: What's New required for coordinated activation; no shared feed
+rows inserted. Read deployed backend2.0.2 and frontend2.1.0+118. Proposed sources
+backend2.1.0 capability and frontend2.1.1 compatible integration fix. Recheck and
+consolidate pending-release versions before an authorized deployment.
+
+Next: review PR20 and the linked frontend companion at their final heads. Keep activation false and explicitly report paid-provider,
+live-stream and funded-pilot acceptance gaps.
+
+## 2026-10-02 PR20 private-review fixes (historical narrow scope)
+
+Owner asked the review chat to request two fixes on the existing PR. Scope is
+limited to quote/execution mismatches; reservation/confirmation and tool-round
+redesign remain an open product discussion. No merge, activation or deployment.
+
+Completed: v2 estimates include image-quota notices, while send admission prices
+the exact final prompt from the handler. Luna works at zero shared balance with
+remaining fair-use capacity. Image quotes fund the permitted 8,000-character
+query's 32,000-byte UTF-8 bound; schema and execution use the same character limit.
+
+Validation: 270 allowance tests and 26 focused cancellation, availability,
+reasoning and provider-schema checks passed. Three new regressions exercise
+real isolated PostgreSQL quote/send/provider/settlement paths and the image query
+bound, with synthetic provider responses only. Ruff/whitespace checks pass.
+
+Next: review updated PR20 at its new head. Keep the v2 flag off. Broader accounting
+and sequential tool-round alternatives require a separate owner design decision.
+Existing What's New/version activation gate and frontend handoff remain unchanged.
+
+## 2026-10-02 M16 Codex review and conditional merge
+
+Owner requested Codex review of both companions and authorised merge if review and validation pass. Synced the isolated backend branch with production master; resolved only the release-helper import and retained both project status sections. Offline excerpt/telemetry checks (2 tests), Ruff and whitespace checks pass after resolution. Frontend M16/Q20 reviews are running; backend final-head review is next. Full trigram integration still needs verification.
+
+What's New: required because search context/exact-title priority and Q20 recovery change a visible workflow. Keep announcement publication held until production acceptance; no database row or announcement migration is run during review. The last verified deployed components were both 2.0.2. Provisional next-release decisions: backend 2.0.2 -> 2.1.0 for optional search metadata and frontend 2.0.2 -> 2.1.0 for the substantial search workflow. Recheck live baselines and bump each changed component once when preparing the approved deployment. Q04/Q19 are separate, unapproved merges and must not be included silently.
+
+Next: finish final-head Codex reviews and full PostgreSQL verification; merge only clean approved search PRs, with Q20 dependency reviewed first. Deployment, version changes and a single grouped EN/RU publication remain a separate release step.
+
+## 2026-10-01 M16 search context companion ready for review
+
+Objective: exact-title priority and bounded live search excerpts. Implemented in isolated `codex/ux-m16-search-context`; original checkout work is preserved. Exact normalized titles precede other results; duplicate titles and nonexact semantic order remain. Optional typed metadata preserves legacy conversation fields, verifies live ownership/current message text, and batches at most three candidate passages per result. Search URLs are redacted from Sentry hooks.
+
+Validation: five disposable PostgreSQL regression cases plus a pure excerpt check pass; two offline checks pass with one overlapping excerpt check. Ruff and compilation pass. Local `pg_trgm` is unavailable, so only trigram similarity is stubbed to zero; live PostgreSQL joins/current-text validation run unchanged. Full trigram integration and deployed acceptance are unverified.
+
+Frontend follow-up: paired M16 frontend on Q20 consumes optional metadata, renders excerpts/context/literal highlights, strips metadata before chat storage and redacts SDK search URLs. Backend-first compatible rollout; legacy title-only response remains supported. Report: docs/ux-review/2026-10-01-m16-search-context.md.
+
+Next steps: review the backend and frontend companion PRs; keep both unmerged/unreleased. No migration/version/notice publication in this batch. Future combined Q04/Q19/Q20/M16 release needs one grouped EN/RU notice after feature verification and independent component minor decisions based on then-live shared-major versions. Q07, Q11 and public sharing remain deferred.
 ## 2026-10-01 Q01–Q03 deployed; announcement publication authorised
 
 Production frontend flow 9798/build112 and beta flow9803/build223 succeeded;
@@ -1837,3 +1961,38 @@ Ship server-backed chat drafts and Favorites together with the matching frontend
 # 2026-09-21 Passkey management implemented locally
 
 Prepared isolated paired worktrees at /private/tmp/lightny-passkey-management/{backend,frontend}, branch codex/passkey-management-20260921. Localized legacy default names; added owner-only renaming, creation/last-use browser context, dates and selected-key deletion confirmation. Exposes existing RP metadata without changing domain handling. Nullable migration xw0e1f2a3b4c must precede backend deployment. Frontend contracts and evidence: docs/operations/2026-09-21-passkey-management.md. Release to production and beta authorized on 22 September, after the usage-efficiency release completes. Next: integrate both branch pairs, production migration/release, beta release, and live version checks; real registration/sign-in remains a user-device check.
+## 2026-10-02 generation budgets and allowances v2 implementation
+
+Objective: implement the approved conservative generation profiles, versioned
+allowance uplift and bounded supplier-funded recovery; raise a backend PR.
+Work is isolated in `codex/generation-budgets` from master `4ea687b`.
+
+Implemented: persisted quote/execution plans, native supported Claude task budgets,
+full-profile admission, final-answer/tool reserves, one known-cap recovery without
+tool replay, supplier loss/exposure gate, sticky allowance policy upgrades and
+residual partial-text persistence. Flag defaults off; no live grants or deployment.
+Summarization quotes now include all batches and their bounded retries.
+
+Validation complete: 267 allowance tests and 15 focused cancellation, availability
+and provider-schema tests passed; changed-file Ruff and whitespace checks passed.
+Migration upgrade/downgrade, offline SQL and single head passed. Self-review
+complete. Disposable local PostgreSQL and synthetic provider responses only.
+Provider quality and deployed UI unverified. Completed empty answers are refunded.
+
+Frontend follow-up: expose optional long response preference and returned profile,
+allow xhigh/max where supported, handle full-profile insufficient funds/operational
+pause with actionable choices, verify confirmation/send/reconnect/reload. Existing
+response and SSE fields remain supported; no frontend files changed.
+
+What's New: required at activation because allowances and response recovery change
+visible behavior. Hold drafts in operations documentation; no announcement DB rows.
+Backend version: unchanged in this gated PR; next approved activation release needs
+a minor bump from then-live production (last recorded baseline 2.0.2, provisional
+2.1.0). Frontend version: unchanged; optional UI work is a separate release.
+
+Handoff: `docs/operations/2026-10-02-generation-budget-v2.md`, including held EN/RU
+release drafts. Current frontend confirmation contract checked read-only on main.
+
+Next: backend PR review. Activation requires funded
+supplier envelope sizing, paid provider benchmarks, compatible UI acceptance and
+production version/publication gate. No deployment is authorized by this task.
