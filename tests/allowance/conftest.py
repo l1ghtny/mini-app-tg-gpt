@@ -24,6 +24,13 @@ from app.core.config import settings
 
 
 @pytest.fixture(autouse=True)
+def rebuild_test_db():
+    # Override the root fixture: db() owns an isolated schema for each test.
+    # Dropping public here breaks concurrent test runs and is unnecessary.
+    pass
+
+
+@pytest.fixture(autouse=True)
 def normal_provider_availability(monkeypatch):
     # Existing provider behavior tests simulate an operational Claude account.
     monkeypatch.setattr(settings, "ANTHROPIC_ENABLED", True)

@@ -2,9 +2,11 @@
 
 
 class ProviderResponseError(RuntimeError):
-    def __init__(self, *, status, reason):
+    def __init__(self, *, status, reason, partial_text="", has_tool_output=False):
         self.status = status
         self.reason = reason
+        self.partial_text = partial_text
+        self.has_tool_output = has_tool_output
         super().__init__(
             f"The model did not complete its response (status={status}, reason={reason})"
         )

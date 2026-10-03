@@ -341,7 +341,7 @@ async def handle_create_message(
     from app.services import allowance
     if allowance.enabled(current_user.id):
         from app.services.allowance_chat import admit
-        await admit(session, current_user, conversation, request)
+        await admit(session, current_user, conversation, request, system_prompt=system_prompt)
     try:
         user_msg = await _create_user_message(session, conversation, request, background_tasks)
         assistant_msg = await _create_assistant_message(session, conversation_id)
@@ -2215,6 +2215,7 @@ async def handle_conversation_search(
 
 async def handle_cancel_generation(*, conversation_id, message_id, session, current_user, bus):
     from app.services.chat_cancellation import cancellation_key
+    from app.services import allowance
     await _load_conversation_for_user(session, conversation_id, current_user.id)
     message = await session.get(models.Message, message_id)
     if not message or message.conversation_id != conversation_id or message.role != "assistant":
@@ -2226,6 +2227,18 @@ async def handle_cancel_generation(*, conversation_id, message_id, session, curr
         return {"status": "finished"}
     # Message ID scope makes retries safe even after a newer reply has started.
     await bus.r.set(cancellation_key(str(message_id)), "1", ex=86400)
+    # Fence the owner even if its worker died. Transport disconnection never
+    # reaches this explicit cancellation path.
+    if allowance.enabled(current_user.id):
+        ledger = (await session.exec(select(RequestLedger).where(
+            RequestLedger.user_id == current_user.id,
+            RequestLedger.assistant_message_id == message_id,
+            RequestLedger.feature == "text"))).first()
+        if ledger:
+            task = await allowance.request_row(session, current_user.id, ledger.request_id)
+            if task and task.admission_policy == "no-hold-v3":
+                await allowance.settle(session, current_user.id, ledger.request_id,
+                    success=False, release_unknown=True)
     return {"status": "requested"}
 
 
@@ -2237,7 +2250,11 @@ async def _shared_entitlements(session, user, request, conversation):
         raise HTTPException(403, detail={"error": "model_not_in_plan", "model": request.model})
     if request.image_model and request.image_model != FLARE:
         raise HTTPException(409, detail={"error": "image_model_unavailable", "image_model": FLARE})
-    if request.reasoning_effort and request.reasoning_effort not in {"none", "low", "medium", "high"}:
+    from app.core.config import settings as shared_settings
+    allowed_efforts = {"none", "low", "medium", "high"}
+    if shared_settings.SHARED_ALLOWANCE_GENERATION_V2_ENABLED:
+        allowed_efforts |= {"xhigh", "max"}
+    if request.reasoning_effort and request.reasoning_effort not in allowed_efforts:
         raise HTTPException(400, detail={"error": "reasoning_effort_not_supported_for_model"})
     if request.model == "claude-fable-5-1" and (request.thinking is False or request.reasoning_effort == "none"):
         raise HTTPException(400, detail={"error": "thinking_required_for_model"})

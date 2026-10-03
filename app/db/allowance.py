@@ -39,6 +39,7 @@ class AllowanceAccount(SQLModel, table=True):
     trial_started_at: datetime | None = Field(default=None, sa_column=Column(DateTime, nullable=True))
     plan: str
     rate_version: str
+    grant_policy_version: str = "2026-09-18-v1"
     granted: int = Field(sa_column=Column(BigInteger, nullable=False))
     spent: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     reserved: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
@@ -75,9 +76,21 @@ class AllowanceRequest(SQLModel, table=True):
     luna_ceiling: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     luna_charged: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     status: str = "reserved"
+    execution_plan: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    recovery_ceiling: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
+    admission_policy: str = "held-legacy"
+    supplier_ceiling: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
+    risk_policy: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    execution_state: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    task_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    task_deadline_at: datetime | None = None
+    admission_period_start: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow_naive)
     __table_args__ = (
         UniqueConstraint("user_id", "scope", "request_id", name="uq_allowance_request"),
+        CheckConstraint("recovery_ceiling >= 0", name="ck_allowance_recovery_ceiling"),
+        Index("ix_allowance_active_tasks", "user_id", "status", "lease_expires_at"),
     )
 
 
@@ -107,6 +120,7 @@ class ProviderAttempt(SQLModel, table=True):
     supplier_units: int | None = Field(default=None, sa_column=Column(BigInteger))
     customer_units: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     included: bool = False
+    recovery: bool = False
     input_tokens: int = 0
     cached_tokens: int = 0
     cache_write_tokens: int = 0

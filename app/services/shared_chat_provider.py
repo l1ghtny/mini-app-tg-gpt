@@ -2,6 +2,8 @@
 
 import json
 import logging
+import asyncio
+from uuid import uuid4
 from app.services.allowance_context import compress_context
 from app.services.provider_errors import ProviderResponseError
 from app.services.model_availability import require_text_model_available
@@ -24,6 +26,7 @@ from app.services.allowance_policy import (
     reference_count,
     DOCUMENT_SEARCH_TOKENS,
     MAX_CHAT_TOOL_CALLS,
+    MAX_TOOL_QUERY_CHARS,
     text_encoding,
     text_tokens,
 )
@@ -44,7 +47,7 @@ def tool_schema(name):
         return {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "maxLength": 8000},
+                "query": {"type": "string", "maxLength": MAX_TOOL_QUERY_CHARS},
                 "image_ids": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -58,7 +61,7 @@ def tool_schema(name):
         }
     schema = {
         "type": "object",
-        "properties": {"query": {"type": "string", "maxLength": 8000}},
+        "properties": {"query": {"type": "string", "maxLength": MAX_TOOL_QUERY_CHARS}},
         "required": ["query"],
         "additionalProperties": False,
     }
@@ -90,6 +93,17 @@ def normalize_openai_usage(u, output=()):
     )
 
 
+def provider_tool_schemas(model, tools):
+    claude = MODELS[model].provider == "anthropic"
+    return [
+        {"name": name, "description": TOOL_DESCRIPTIONS[name], "input_schema": tool_schema(name)}
+        if claude else
+        {"type": "function", "name": name, "description": TOOL_DESCRIPTIONS[name],
+         "parameters": tool_schema(name), "strict": True}
+        for name in sorted(tools)
+    ]
+
+
 def normalize_claude_usage(u):
     if not isinstance(u, dict) or "input_tokens" not in u or "output_tokens" not in u:
         raise ValueError("Claude omitted usage")
@@ -100,6 +114,7 @@ def normalize_claude_usage(u):
         cached_tokens=cached,
         cache_write_tokens=written,
         output_tokens=u.get("output_tokens", 0) or 0,
+        reasoning_tokens=(u.get("output_tokens_details") or {}).get("thinking_tokens"),
         search_calls=(u.get("server_tool_use") or {}).get("web_search_requests", 0),
     )
 
@@ -146,19 +161,84 @@ class ChatRun:
         self.conversation_id = conversation_id
         self.image_references = {}
         self.inspected_images = {}
+        self.execution = None
+        self.plan = None
+        self.recovering = False
+        self.recovered = False
+        self.final_phase = False
+        self.executed_tools = {}
+        self.owner = None
+        self.protected = 0
+        self.state = {}
+
+    @property
+    def iterative(self):
+        return (self.execution or {}).get("policy") == "iterative-v3"
+
+    async def load_plan(self):
+        from app.services.generation_budget import ExecutionPlan
+
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            row = await allowance.request_row(session, self.user_id, self.request_id)
+        if row and row.execution_plan:
+            self.execution = row.execution_plan
+            self.plan = ExecutionPlan.load(self.execution["generation"])
+            if self.iterative:
+                from app.services import allowance_tasks
+
+                self.owner = str(uuid4())
+                async with AsyncSession(engine, expire_on_commit=False) as session:
+                    row = await allowance_tasks.claim(
+                        session, self.user_id, self.request_id, self.owner
+                    )
+                self.state = row.execution_state or {}
+                self.protected = self.execution["final_answer_units"]
 
     async def start(self, model, budget, included=False):
         self.seq += 1
+        step_key = str(self.seq)
         async with AsyncSession(engine, expire_on_commit=False) as session:
-            return await allowance.begin_attempt(
-                session,
+            params = dict(
                 user_id=self.user_id,
                 request_id=self.request_id,
-                step_key=str(self.seq),
+                step_key=step_key,
                 model=model,
                 budget=budget,
                 included=included,
+                recovery=self.recovering,
+                owner=self.owner,
+                protected=0 if self.recovering else self.protected,
             )
+            try:
+                return await allowance.begin_attempt(session, **params)
+            except Exception as exc:
+                from fastapi import HTTPException
+
+                if not (
+                    isinstance(exc, HTTPException)
+                    and self.iterative
+                    and self.protected
+                    and model == self.plan.model
+                    and not self.recovering
+                    and not getattr(self, "required_routing", False)
+                    and isinstance(exc.detail, dict)
+                    and exc.detail.get("error") in {"request_spend_limit", "beta_spend_paused", "provider_failure_spend_paused", "user_supplier_spend_paused"}
+                ):
+                    raise
+                await session.rollback()
+                self.final_phase = True
+                self.protected = 0
+                params["protected"] = 0
+                return await allowance.begin_attempt(session, **params)
+
+    async def save_state(self, **updates):
+        from app.services import allowance_tasks
+
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await allowance_tasks.state(
+                session, self.user_id, self.request_id, self.owner, updates
+            )
+        self.state.update(updates)
 
     async def finish(
         self, attempt, model, usage, provider_id=None, success=True, units=None
@@ -183,8 +263,88 @@ class ChatRun:
         included = model == LUNA
         async with AsyncSession(engine, expire_on_commit=False) as session:
             remaining = await allowance.remaining_request_budget(
-                session, self.user_id, self.request_id, included=included
+                session, self.user_id, self.request_id, included=included,
+                recovery=self.recovering,
             )
+        if self.plan:
+            self.required_routing = bool(required)
+            schemas = provider_tool_schemas(model, tools)
+            target = (
+                self.execution["recovery_tokens"]
+                if self.recovering
+                else self.plan.routing_tokens
+                if required
+                else self.plan.max_output_tokens
+            )
+            keep = 0
+            if (
+                not self.iterative
+                and not self.recovering
+                and not self.final_phase
+                and tools
+            ):
+                keep = self.execution["final_answer_units"]
+                if not included:
+                    keep += self.execution["tool_budget_units"]
+            cost = step_budget(
+                model, messages, instructions, max_output=target, tool_schemas=schemas
+            )
+            if self.iterative:
+                from app.services.generation_budget import evidence_messages
+                from app.services.allowance_policy import input_upper_bound
+
+                context_limit = self.execution["risk_policy"]["context_tokens"]
+                input_size = input_upper_bound(
+                    messages, instructions, model=model, tool_schemas=schemas
+                )
+                if input_size + target > context_limit:
+                    from fastapi import HTTPException
+
+                    raise HTTPException(402, detail={"error": "request_spend_limit"})
+                self.protected = 0
+                if not self.recovering and not self.final_phase and tools:
+                    future = evidence_messages(
+                        messages,
+                        tokens=target
+                        + 2 * self.execution["risk_policy"]["tool_result_tokens"]
+                        + 512,
+                    )
+                    self.protected = step_budget(
+                        model,
+                        future,
+                        instructions,
+                        max_output=self.plan.max_output_tokens,
+                        tool_schemas=schemas,
+                    )
+                    # A planning output must fit alongside its matching blocked
+                    # tool results and a full final answer. Actual evidence is
+                    # admitted against assembled context before tool dispatch.
+                    projected_final_input = input_upper_bound(
+                        evidence_messages(messages, tokens=2 * target + 512),
+                        instructions, model=model, tool_schemas=schemas,
+                    )
+                    if (
+                        cost + self.protected > remaining
+                        or projected_final_input
+                        + self.plan.max_output_tokens
+                        > context_limit
+                    ) and not required:
+                        self.final_phase = True
+                        self.protected = 0
+                    elif projected_final_input + self.plan.max_output_tokens > context_limit:
+                        from fastapi import HTTPException
+
+                        raise HTTPException(402, detail={"error": "request_spend_limit"})
+                if cost + self.protected > remaining:
+                    from fastapi import HTTPException
+
+                    raise HTTPException(402, detail={"error": "request_spend_limit"})
+                return target
+            if cost + keep > remaining:
+                from fastapi import HTTPException
+
+                raise HTTPException(402, detail={"error": "request_spend_limit"})
+            return target
         keep = 0
         if required and not included:
             # Protect the requested tool and a short final answer from routing output.
@@ -231,19 +391,24 @@ class ChatRun:
         )
         attempt = await self.start(model, budget, included)
         try:
-            r = await client.with_options(max_retries=0).responses.create(
-                model=model,
-                input=messages,
-                instructions=instructions,
-                max_output_tokens=max_output,
-                reasoning={"effort": "low"},
-                tools=tools,
-                tool_choice=choice,
-                max_tool_calls=2,
-                store=False,
-                service_tier="default",
-                extra_body={"prompt_cache_options": {"mode": "explicit"}},
-            )
+            async with asyncio.timeout(
+                self.execution["risk_policy"]["provider_seconds"]
+                if self.iterative
+                else 240
+            ):
+                r = await client.with_options(max_retries=0).responses.create(
+                    model=model,
+                    input=messages,
+                    instructions=instructions,
+                    max_output_tokens=max_output,
+                    reasoning={"effort": "low"},
+                    tools=tools,
+                    tool_choice=choice,
+                    max_tool_calls=2,
+                    store=False,
+                    service_tier="default",
+                    extra_body={"prompt_cache_options": {"mode": "explicit"}},
+                )
         except APIStatusError as exc:
             if exc.status_code in {400, 401, 403, 404, 422, 429}:
                 await self.finish(attempt, model, {}, success=False, units=0)
@@ -280,7 +445,8 @@ async def openai_turn(
     maximum = await run.text_capacity(
         model, messages, instructions, effort, required, tools
     )
-    budget = step_budget(model, messages, instructions, max_output=maximum)
+    budget = step_budget(model, messages, instructions, max_output=maximum,
+                         tool_schemas=schemas if getattr(run, "plan", None) else None)
     attempt = await run.start(model, budget, included=model == LUNA)
     complete = None
     stream = None
@@ -290,14 +456,14 @@ async def openai_turn(
             input=messages,
             instructions=instructions,
             tools=schemas,
-            tool_choice={"type": "function", "name": required}
+            tool_choice="none" if getattr(run, "final_phase", False) or getattr(run, "recovering", False) else {"type": "function", "name": required}
             if required
             else "auto"
             if schemas
             else "none",
             reasoning={"effort": effort},
             max_output_tokens=maximum,
-            parallel_tool_calls=False,
+            parallel_tool_calls=getattr(run, "iterative", False),
             stream=True,
             store=False,
             service_tier="default",
@@ -322,12 +488,26 @@ async def openai_turn(
         usage["response_status"] = complete.status
         if reason:
             usage["incomplete_reason"] = reason
-        await run.finish(
-            attempt, model, usage, complete.id, success=complete.status == "completed"
+        empty_answer = bool(getattr(run, "plan", None)) and not any(
+            x.get("type") == "function_call" or (
+                x.get("type") == "message" and any(
+                    c.get("type") == "output_text" and c.get("text", "").strip()
+                    for c in x.get("content", [])
+                )
+            ) for x in output
         )
+        if empty_answer and complete.status == "completed":
+            usage["failure_reason"] = "empty_answer"
+        await run.finish(
+            attempt, model, usage, complete.id, success=complete.status == "completed" and not empty_answer
+        )
+        if complete.status == "completed" and empty_answer:
+            raise ProviderResponseError(status="incomplete", reason="empty_answer")
         if complete.status != "completed":
             raise ProviderResponseError(
-                status=complete.status, reason=reason or "unknown"
+                status=complete.status, reason=reason or "unknown",
+                partial_text="".join(c.get("text", "") for x in output if x.get("type") == "message" for c in x.get("content", []) if c.get("type") == "output_text"),
+                has_tool_output=any(x.get("type") == "function_call" for x in output),
             )
         yield {
             "type": "turn.result",
@@ -360,7 +540,8 @@ async def claude_turn(
     maximum = await run.text_capacity(
         model, messages, instructions, effort, required, tools
     )
-    budget = step_budget(model, messages, instructions, max_output=maximum)
+    budget = step_budget(model, messages, instructions, max_output=maximum,
+                         tool_schemas=provider_tool_schemas(model, tools) if getattr(run, "plan", None) else None)
     attempt = await run.start(model, budget)
     body = dict(
         model=model,
@@ -379,6 +560,10 @@ async def claude_turn(
     )
     if effort == "none" and model != "claude-fable-5-1":
         body["thinking"] = {"type": "disabled"}
+    headers = {"x-api-key": settings.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"}
+    if getattr(run, "plan", None) and run.plan.task_budget is not None:
+        body["output_config"]["task_budget"] = {"type": "tokens", "total": run.plan.task_budget}
+        headers["anthropic-beta"] = "task-budgets-2026-03-13"
     if tools:
         body["tools"] = [
             {
@@ -394,6 +579,8 @@ async def claude_turn(
                 if model == "claude-fable-5-1"
                 else {"type": "tool", "name": required}
             )
+        if getattr(run, "final_phase", False) or getattr(run, "recovering", False):
+            body["tool_choice"] = {"type": "none"}
     blocks = {}
     fragments = {}
     usage = {}
@@ -405,10 +592,7 @@ async def claude_turn(
             "POST",
             settings.ANTHROPIC_API_BASE_URL.rstrip("/") + "/v1/messages",
             json=body,
-            headers={
-                "x-api-key": settings.ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-            },
+            headers=headers,
         ) as response:
             if response.is_error:
                 if response.status_code in {400, 401, 403, 404, 422, 429}:
@@ -456,15 +640,24 @@ async def claude_turn(
                     finished = True
     if not finished:
         raise RuntimeError("Claude stream ended without completion")
-    for i, fragment in fragments.items():
-        blocks[i]["input"] = json.loads(fragment)
     output = [blocks[i] for i in sorted(blocks)]
     success = stop in {"end_turn", "tool_use", "stop_sequence"}
     normalized_usage = normalize_claude_usage(usage)
     normalized_usage["stop_reason"] = stop
+    empty_answer = bool(getattr(run, "plan", None)) and not any(
+        x.get("type") == "tool_use" or (x.get("type") == "text" and x.get("text", "").strip())
+        for x in output
+    )
+    if success and empty_answer:
+        normalized_usage["failure_reason"] = "empty_answer"
+        success = False
     await run.finish(attempt, model, normalized_usage, response_id, success=success)
     if not success:
-        raise ProviderResponseError(status="incomplete", reason=stop or "unknown")
+        raise ProviderResponseError(status="incomplete", reason="empty_answer" if normalized_usage.get("failure_reason") else stop or "unknown",
+                                    partial_text="".join(x.get("text", "") for x in output if x.get("type") == "text"),
+                                    has_tool_output=any(x.get("type") == "tool_use" for x in output))
+    for i, fragment in fragments.items():
+        blocks[i]["input"] = json.loads(fragment)
     yield {
         "type": "turn.result",
         "output": output,
@@ -484,7 +677,7 @@ async def run_tool(run, name, args, tools, messages, index):
     ):
         raise ValueError("Unavailable tool or invalid tool arguments")
     query = args["query"]
-    if not query.strip() or len(query) > 8000:
+    if not query.strip() or len(query) > MAX_TOOL_QUERY_CHARS:
         raise ValueError("Tool query is empty or too long")
     yield {
         "type": "status",
@@ -665,6 +858,32 @@ def shared_instructions(model, instructions):
     return system
 
 
+def tool_instructions(system, model, document_stores, required):
+    if document_stores:
+        system += (
+            f"\nCurrent attachment state: {len(document_stores)} ready document(s) "
+            "are attached and available through file_search. Use their retrieved contents "
+            "to answer document questions; do not ask the user to upload them again "
+            "merely because no inline file content appears in the message."
+        )
+    if required and model == "claude-fable-5-1":
+        system += (
+            f"\nThe user explicitly selected {required}. Call this tool before "
+            "answering. Do not substitute an answer from memory."
+        )
+    return system
+
+
+def iterative_instructions(system):
+    return system + (
+        "\nResearch tools may become unavailable when the time, operation, context or funded spending limit is reached. "
+        "When tool use is disabled, finish a useful answer using evidence already present. "
+        "If no relevant evidence was retrieved, clearly state that gap and distinguish general knowledge from verified facts. "
+        "Cite only URLs or filenames actually returned, never invent citations, and never claim a blocked tool ran. "
+        "Image generation requires a deliberately selected image action; if it is unavailable, ask the user to select that action."
+    )
+
+
 async def stream_shared_response(
     messages,
     model,
@@ -680,6 +899,8 @@ async def stream_shared_response(
 ):
     run = ChatRun(user_id, request_id, kwargs.get("conversation_id"))
     require_text_model_available(model)
+    if user_id is not None and request_id is not None:
+        await run.load_plan()
     input_messages = len(messages)
     input_images = sum(
         p.get("type") == "input_image" for m in messages for p in m.get("content", [])
@@ -742,30 +963,38 @@ async def stream_shared_response(
             required = tool_choice.get("type")
     if run.image_references:
         selected["inspect_image"] = {}
+    if run.execution:
+        selected = {name: spec for name, spec in selected.items() if name in run.execution["tools"]}
     effort = reasoning_effort or ("none" if thinking_enabled is False else "medium")
+    if run.plan:
+        if run.plan.model != model:
+            raise ValueError("Generation model differs from the approved plan")
+        effort = run.plan.effort
     system = shared_instructions(model, instructions)
     document_stores = selected.get("file_search", {}).get("vector_store_ids", [])
-    if document_stores:
-        system += (
-            f"\nCurrent attachment state: {len(document_stores)} ready document(s) "
-            "are attached and available through file_search. Use their retrieved contents "
-            "to answer document questions; do not ask the user to upload them again "
-            "merely because no inline file content appears in the message."
-        )
+    system = tool_instructions(system, model, document_stores, required)
+    if run.iterative:
+        system = iterative_instructions(system)
     is_claude = MODELS[model].provider == "anthropic"
     if is_claude and required and model == "claude-fable-5-1":
         # Signed thinking blocks bind to the system prompt and tools. Keep both
         # unchanged while returning tool results in the same assistant turn.
-        system += (
-            f"\nThe user explicitly selected {required}. Call this tool before "
-            "answering. Do not substitute an answer from memory."
-        )
         selected = {required: selected[required]}
     history = claude_messages(messages) if is_claude else list(messages)
+    if run.iterative:
+        from app.services.shared_chat_loop import iterative_loop
+
+        async for event in iterative_loop(
+            run, history, model, system, selected, required, effort, original
+        ):
+            yield event
+        return
     index = 0
     calls_used = 0
     document_search_used = False
     for turn in range(3):
+        if run.plan:
+            run.final_phase = turn >= run.execution["tool_rounds"]
         turn_tools = (
             selected
             if is_claude
@@ -777,7 +1006,7 @@ async def stream_shared_response(
             turn_system += "\nDocument retrieval is complete for this request. Answer from the excerpts already returned, cite their filenames, and state any evidence gaps. Do not claim the entire document was reviewed."
         fn = claude_turn if is_claude else openai_turn
         result = None
-        async for event in fn(
+        async for event in funded_turn(fn,
             run,
             history,
             model,
@@ -793,6 +1022,8 @@ async def stream_shared_response(
                 yield event
         if result is None:
             raise RuntimeError("Missing provider result")
+        if run.plan and run.final_phase and result["calls"]:
+            raise ProviderResponseError(status="incomplete", reason="unexpected_tool_call")
         if (
             turn == 0
             and required
@@ -816,14 +1047,18 @@ async def stream_shared_response(
             else:
                 calls_used += 1
                 document_search_used |= call["name"] == "file_search"
-                result_text = None
-                async for event in run_tool(
-                    run, call["name"], call["args"], selected, original, index
-                ):
-                    if event["type"] == "tool.result":
-                        result_text = event["result"]
-                    else:
-                        yield event
+                key = (call["name"], json.dumps(call["args"], sort_keys=True))
+                result_text = run.executed_tools.get(key) if run.plan else None
+                if result_text is None:
+                    async for event in run_tool(
+                        run, call["name"], call["args"], selected, original, index
+                    ):
+                        if event["type"] == "tool.result":
+                            result_text = event["result"]
+                        else:
+                            yield event
+                    if run.plan:
+                        run.executed_tools[key] = result_text
             if is_claude:
                 results.append(
                     {
@@ -844,3 +1079,37 @@ async def stream_shared_response(
             history.append({"role": "user", "content": results})
         index += 1
     raise RuntimeError("Tool cycle did not finish")
+
+
+async def funded_turn(fn, run, history, model, system, tools, required, effort, index):
+    """One recovery for a known output cap; never replay ambiguous calls or tools."""
+    try:
+        async for event in fn(run, history, model, system, tools, required, effort, index):
+            yield event
+    except ProviderResponseError as exc:
+        if (not run.plan or run.recovered or required or exc.has_tool_output
+                or exc.status != "incomplete" or exc.reason not in {"max_tokens", "max_output_tokens"}):
+            raise
+        run.recovered = True
+        run.recovering = True
+        continuation = list(history)
+        claude = MODELS[model].provider == "anthropic"
+        if exc.partial_text:
+            continuation.append({"role": "assistant", "content": [
+                {"type": "text" if claude else "output_text", "text": exc.partial_text}
+            ]})
+        continuation.append({"role": "user", "content": [{
+            "type": "text" if claude else "input_text",
+            "text": "The previous response reached its output limit. "
+                    "Continue the answer from where it stopped, without repeating earlier text. "
+                    "If no answer was produced, provide the answer now. "
+                    "Use the evidence already available; do not call or repeat tools. "
+                    "State any evidence gaps. Prioritize completing the requested answer.",
+        }]})
+        # Admission rechecks both the persisted recovery ceiling and the platform
+        # loss pool atomically. Timeout/cancellation still belong to the parent.
+        async for event in fn(run, continuation, model, system, tools, None, effort, index):
+            if event["type"] == "turn.result" and event["calls"]:
+                raise ProviderResponseError(status="incomplete", reason="unexpected_tool_call")
+            yield event
+        run.recovering = False
