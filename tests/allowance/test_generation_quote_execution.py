@@ -283,7 +283,11 @@ async def test_capped_search_finishes_from_retained_evidence_without_more_resear
         content=[{"type": "text", "value": "Research this question"}],
     )
     quote, _, _ = await send_and_execute(session, user, conversation, queued, req)
-    assert searches == (["initial", "capped", "sibling"] if parallel else ["initial", "capped"])
+    assert searches[0] == "initial"
+    if parallel:
+        assert sorted(searches[1:]) == ["capped", "sibling"]
+    else:
+        assert searches == ["initial", "capped"]
     final = payloads[-1]
     assert len(payloads) == 3 and final["tool_choice"] == "none"
     assert final["max_output_tokens"] == quote["max_output_tokens"]
