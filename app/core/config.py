@@ -33,6 +33,10 @@ _normalize_proxy_env_aliases()
 
 
 class Settings:
+    # Owner reporting uses normal authenticated identities; empty lists deny all.
+    ADMIN_DASHBOARD_USER_IDS = frozenset(value.strip().lower() for value in os.getenv("ADMIN_DASHBOARD_USER_IDS", "").split(",") if value.strip())
+    ADMIN_DASHBOARD_TELEGRAM_IDS = frozenset(value.strip() for value in os.getenv("ADMIN_DASHBOARD_TELEGRAM_IDS", "").split(",") if value.strip().isdecimal())
+    ADMIN_DASHBOARD_TEST_USER_IDS = frozenset(value.strip().lower() for value in os.getenv("ADMIN_DASHBOARD_TEST_USER_IDS", "").split(",") if value.strip())
     SHARED_ALLOWANCE_TRIAL_ENABLED = os.getenv("SHARED_ALLOWANCE_TRIAL_ENABLED", "false").lower() in ("true", "1")
     SHARED_ALLOWANCE_ENABLED = os.getenv("SHARED_ALLOWANCE_ENABLED", "false").lower() in ("true", "1")
     # Explicit rollout membership; active subscriptions remain authoritative for grants.
