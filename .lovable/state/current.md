@@ -1,3 +1,37 @@
+## 2026-10-04 owner admin dashboard — ready for paired review
+
+Owner authorized the read-only backend/frontend dashboard: overview, users,
+user detail, purchases, settings/pricing and browser page CSV exports. Normal-login
+owner UID/linked Telegram allowlists fail closed; every business route enforces
+membership independently. Repeatable-read/read-only transactions, bounded periods,
+parameterized queries, no-store responses and safe settings whitelist. No grants,
+task settlement, settings/payment mutations or changes to existing broadcasts.
+
+Validation: 23 PostgreSQL regression tests pass; Ruff passes for new code/tests.
+Coverage includes real cookie/Bearer authorization on all routes, ledger/task
+reconciliation, distinct helper costs, failed-parent spend, missing cost coverage,
+period boundaries, currencies/refunds, test-filter vs internal-guard separation,
+overlapping private grants and pure feature balance reads without grant creation.
+Frontend companion: 43 focused checks plus EN/RU desktop/mobile in-app browser
+acceptance against real local reporting/auth routes with synthetic data. No
+production DB access or provider calls; OS CSV download delivery unverified.
+
+Contract: new GET `/api/v1/admin/dashboard/*`, consumed by frontend lazy
+`/admin/usage` and Settings owner link. No existing response/stream changes.
+Definitions/coverage/access/release: docs/operations/2026-10-04-admin-dashboard.md.
+Durable rule: .lovable/memory/features/admin-dashboard.md.
+
+Release gate: What's New not required (owner-only internal reporting). Backend
+2.1.1->2.2.0, frontend2.1.1->2.2.0, compatible minor capabilities based on current
+remote bases/last verified deployed releases; recheck before release. No migration,
+merge, deployment, provider activation or funding increase authorized in this task.
+
+Next: submit paired PRs, review together; after owner approval deploy compatible API
+before/simultaneously with UI and configure owner IDs via existing backend-env /
+backend-beta-env workflow. Empty allowlists deny all until configured. Verify actual
+owner/non-owner access and freshness at release; keep invoice/audio coverage and
+fully projected uninitialized grants as separate follow-up work.
+
 ## 2026-10-03 PR20 context-space protection and compaction backlog
 
 Owner approved option 1: stop research before it consumes full-answer context
