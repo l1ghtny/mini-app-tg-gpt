@@ -616,3 +616,106 @@ async def test_missing_provider_records_are_flagged_instead_of_assumed_free(db, 
     assert overview["totals"]["untracked_cost_tasks"] == 1
     result = await reports.users(session, window, search="owner")
     assert result["items"][0]["untracked_cost_tasks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_task_reports_recorded_attempt_costs(db, window):
+    _, session = db
+    _, other, _, _ = await seed(session, window)
+    session.add(TokenUsage(
+        user_id=other.id, request_id="legacy-1", model_name="legacy-helper",
+        total_cost=Decimal(".003"), created_at=window.start,
+    ))
+    await session.commit()
+    task = (await reports.tasks(session, window, other.id, 0, 20))["items"][0]
+    assert task["source"] == "legacy"
+    assert task["attempts"] == 2
+    assert task["supplier_units"] == 5000
+    assert task["cost_scope"] == "request"
+    assert task["missing_cost"] is False
+    assert (await reports.overview(session, window))["totals"]["supplier_units"] == 5350
+
+
+@pytest.mark.asyncio
+async def test_generated_image_ledgers_share_parent_coverage_without_allocated_cost(db, window):
+    _, session = db
+    user, other, _, _ = await seed(session, window)
+    request_id = str(uuid.uuid4())
+    session.add_all([
+        RequestLedger(
+            user_id=user.id, request_id=request_id, model_name="gpt-5.6-terra",
+            feature="text", state=State.consumed, created_at=window.start,
+        ),
+        *[RequestLedger(
+            user_id=user.id, request_id=f"{request_id}:img:{ordinal}",
+            model_name="gpt-image-1.5", feature="image", state=State.consumed,
+            created_at=window.start,
+        ) for ordinal in (0, 1)],
+        TokenUsage(
+            user_id=user.id, request_id=request_id, model_name="gpt-5.6-terra",
+            images_generated=2, input_tokens=100, total_cost=Decimal(".3"),
+            created_at=window.start,
+        ),
+        # Another user's identically named child must not inherit this coverage.
+        RequestLedger(
+            user_id=other.id, request_id=f"{request_id}:img:0",
+            model_name="gpt-image-1.5", feature="image", state=State.consumed,
+            created_at=window.start,
+        ),
+    ])
+    await session.commit()
+    tasks = (await reports.tasks(session, window, user.id, 0, 20))["items"]
+    generated = [t for t in tasks if t["request_id"].startswith(request_id)]
+    parent = next(t for t in generated if t["feature"] == "text")
+    children = [t for t in generated if t["feature"] == "image"]
+    assert parent["supplier_units"] == 300000
+    assert parent["attempts"] == 1
+    assert parent["cost_scope"] == "request"
+    assert len(children) == 2
+    for child in children:
+        assert child["missing_cost"] is False
+        assert child["cost_scope"] == "bundled_parent"
+        assert child["supplier_units"] is None
+        assert child["attempts"] is None
+    other_child = next(t for t in (await reports.tasks(session, window, other.id, 0, 20))["items"]
+                       if t["request_id"].startswith(request_id))
+    assert other_child["missing_cost"] is True
+    assert other_child["cost_scope"] == "unknown"
+    totals = (await reports.overview(session, window))["totals"]
+    assert totals["supplier_units"] == 302350
+    assert totals["untracked_cost_tasks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_audio_cost_breakdown_uses_ledger_and_configured_model_identity(db, window, monkeypatch):
+    from app.api.audio import _usage_row
+
+    _, session = db
+    user, _, _, _ = await seed(session, window)
+    monkeypatch.setattr(settings, "VOICE_TRANSCRIPTION_MODEL", "current-audio-model")
+    request_id = str(uuid.uuid4())
+    session.add(RequestLedger(
+        user_id=user.id, request_id=request_id, model_name="historical-audio-model",
+        feature="transcription", cost=2, state=State.consumed, created_at=window.start,
+    ))
+    usage = _usage_row(
+        user_id=user.id, request_id=request_id, model="historical-audio-model",
+        result=None, duration_seconds=120, status_value="success",
+    )
+    usage.created_at = window.start
+    session.add_all([
+        usage,
+        TokenUsage(
+            user_id=user.id, request_id="audio-without-ledger", model_name="current-audio-model",
+            total_cost=Decimal(".001"), created_at=window.start,
+        ),
+    ])
+    await session.commit()
+    result = await reports.overview(session, window)
+    audio = [r for r in result["breakdown"] if r["model"] in
+             {"historical-audio-model", "current-audio-model"}]
+    assert len(audio) == 2
+    assert {r["feature"] for r in audio} == {"transcription"}
+    detail = await reports.user_detail(session, window, user.id)
+    assert all(r["feature"] == "transcription" for r in detail["breakdown"]
+               if r["model"] in {"historical-audio-model", "current-audio-model"})

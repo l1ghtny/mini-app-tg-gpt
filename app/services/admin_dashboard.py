@@ -39,6 +39,7 @@ class Window:
             else list(settings.ADMIN_DASHBOARD_TEST_USER_IDS),
             test_ids=list(settings.ADMIN_DASHBOARD_TEST_USER_IDS),
             scope=accounting_scope(),
+            transcription_model=settings.VOICE_TRANSCRIPTION_MODEL,
         )
 
 
@@ -58,7 +59,11 @@ WITH tasks AS (
                       WHERE r.user_id=l.user_id AND r.request_id=l.request_id)
 ), selected_tasks AS (
     SELECT t.*, (NOT EXISTS (SELECT 1 FROM allowance_provider_attempt p WHERE p.request_id::text=t.id)
-                 AND NOT EXISTS (SELECT 1 FROM tokenusage u WHERE u.user_id=t.user_id AND u.request_id=t.request_id)) AS missing_cost
+                 AND NOT EXISTS (SELECT 1 FROM tokenusage u WHERE u.user_id=t.user_id AND
+                     (u.request_id=t.request_id OR
+                      (t.source='legacy' AND t.feature='image' AND t.request_id ~ ':img:[0-9]+$'
+                       AND u.request_id=regexp_replace(t.request_id, ':img:[0-9]+$', '')
+                       AND u.images_generated>0)))) AS missing_cost
     FROM tasks t WHERE created_at >= :start AND created_at < :end
 ), task_totals AS (
     SELECT user_id, count(*) AS tasks, count(*) FILTER (WHERE status='complete') AS completed,
@@ -78,7 +83,10 @@ WITH tasks AS (
     WHERE p.created_at >= :start AND p.created_at < :end
     UNION ALL
     SELECT t.user_id, t.model_name, 'legacy',
-           CASE WHEN t.images_generated>0 THEN 'image' ELSE 'text' END,
+           CASE WHEN EXISTS (SELECT 1 FROM request_ledger l WHERE l.user_id=t.user_id
+                              AND l.request_id=t.request_id AND l.feature='transcription')
+                      OR t.model_name=:transcription_model THEN 'transcription'
+                WHEN t.images_generated>0 THEN 'image' ELSE 'text' END,
            CASE WHEN t.currency='USD' THEN ceil(t.total_cost*1000000) ELSE NULL END,
            t.currency<>'USD' OR (t.total_cost=0 AND
                t.input_tokens+t.output_tokens+t.web_search_calls+t.images_generated>0),
@@ -393,9 +401,31 @@ async def tasks(session, window, user_id, offset, limit):
         session,
         CTES
         + """
-        SELECT t.*, (SELECT count(*) FROM allowance_provider_attempt p WHERE p.request_id::text=t.id) AS attempts,
-        (SELECT sum(supplier_units) FROM allowance_provider_attempt p WHERE p.request_id::text=t.id) AS supplier_units
-        FROM selected_tasks t WHERE t.user_id=:user_id ORDER BY t.created_at DESC,t.id LIMIT :limit OFFSET :offset
+        SELECT t.*,
+               CASE WHEN t.source='shared' THEN shared.attempts
+                    WHEN direct.attempts>0 THEN direct.attempts
+                    WHEN bundled.attempts>0 THEN NULL ELSE 0 END AS attempts,
+               CASE WHEN t.source='shared' THEN shared.supplier_units
+                    WHEN direct.attempts>0 THEN direct.supplier_units ELSE NULL END AS supplier_units,
+               CASE WHEN t.source='shared' OR direct.attempts>0 THEN 'request'
+                    WHEN bundled.attempts>0 THEN 'bundled_parent' ELSE 'unknown' END AS cost_scope
+        FROM selected_tasks t
+        LEFT JOIN LATERAL (
+            SELECT count(*) AS attempts, sum(p.supplier_units) AS supplier_units
+            FROM allowance_provider_attempt p WHERE p.request_id::text=t.id
+        ) shared ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT count(*) AS attempts,
+                   sum(CASE WHEN u.currency='USD' THEN ceil(u.total_cost*1000000) ELSE NULL END) AS supplier_units
+            FROM tokenusage u WHERE t.source='legacy' AND u.user_id=t.user_id AND u.request_id=t.request_id
+        ) direct ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT count(*) AS attempts FROM tokenusage u
+            WHERE t.source='legacy' AND t.feature='image' AND t.request_id ~ ':img:[0-9]+$'
+              AND u.user_id=t.user_id AND u.images_generated>0
+              AND u.request_id=regexp_replace(t.request_id, ':img:[0-9]+$', '')
+        ) bundled ON TRUE
+        WHERE t.user_id=:user_id ORDER BY t.created_at DESC,t.id LIMIT :limit OFFSET :offset
     """,
         params,
     )

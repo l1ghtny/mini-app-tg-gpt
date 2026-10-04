@@ -39,7 +39,16 @@ The existing `/admin/panel` broadcast workflow is preserved.
    uses its stored USD `total_cost`, never today's price to reprice history. Token
    rows duplicated by a same-user/request/model child or a provider-response ID
    are excluded; distinct legacy helper models remain visible. Failed logical
-   work retains successful child/legacy attempt costs.
+   work retains successful child/legacy attempt costs. Task drill-down sums recorded
+   legacy USD usage under the same user/request identity and counts those usage rows
+   as attempts. Legacy image debit IDs ending in `:img:<ordinal>` also recognize
+   their image-bearing parent usage as coverage. Those children have
+   `cost_scope="bundled_parent"`, null `supplier_units` and null `attempts`: the
+   recorded parent estimate may cover text and multiple images, so it is shown only
+   on the parent request rather than allocated or repeated. Other task scopes are
+   `request` for directly attributed records and `unknown` for absent coverage.
+   Transcription costs use the matching ledger feature or configured transcription
+   model identity in feature breakdowns.
 4. These are **priced estimates**, not supplier invoices or subsidy reconciliation.
    Zero-priced token usage with nonzero counters and non-USD rows are explicitly
    incomplete. Tasks without provider-cost records are counted as missing coverage;
@@ -121,8 +130,8 @@ customer generation, allowance, payment or settings workflow. No shared-feed row
 or announcements are inserted. Versions: backend2.1.1 ->2.2.0;
 frontend2.1.1 ->2.2.0, compatible new capabilities, based on the last verified
 production release and current remote bases. Recheck deployed versions at release.
-There is no DB schema migration, merge, deployment or policy/provider activation
-in this implementation task. Frontend and backend PRs are companions: deploy the
+There is no new DB schema migration or policy/provider activation. After paired
+review, the owner authorized merge and deployment to production and beta. Frontend and backend PRs are companions: deploy the
 backend API before/simultaneously with frontend, then configure/verify owner access.
 
 Later scope: audited allowance/config/pricing writes; provider-invoice/subsidy

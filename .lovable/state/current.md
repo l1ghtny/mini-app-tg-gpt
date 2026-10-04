@@ -1,3 +1,26 @@
+## 2026-10-04 owner dashboard — release review complete
+
+Owner authorized merge and deployment to production and beta after review. Owner
+account was resolved from its linked Telegram username; UUID allowlist is configured
+in both existing backend environment Secrets, without storing identity in source.
+Backend/frontend independent correctness reviews and completed security diff scans
+have no remaining release-blocking findings. Review fixes cover legacy direct cost,
+image child bundled-parent coverage, transcription classification, failed-refresh
+alerts/retry with cached reports, and SDK admin-filter telemetry redaction.
+
+Checks: 26 backend PostgreSQL regressions and Ruff pass. Frontend focused tests,
+touched-file lint and production build pass; all 548 frontend tests pass. Existing
+LazySyntaxHighlighter TypeScript diagnostic remains unrelated. Prior EN/RU desktop/
+mobile in-app acceptance used synthetic data; OS CSV delivery remains unverified.
+Versions: backend/frontend 2.2.0 from deployed 2.1.1; internal owner-only capability,
+What's New not required, no announcement rows or new schema migrations. No provider
+activation or supplier funding changes. New optional cost_scope and nullable attempts
+are handled by the paired frontend; all existing customer APIs remain unchanged.
+
+Next: commit review fixes, merge paired PR23/PR28, carry production changes into
+beta while preserving Work-only code, verify exact child build revisions, workloads,
+owner/non-owner authorization and report responses on both deployments.
+
 ## 2026-10-04 owner admin dashboard — ready for paired review
 
 Owner authorized the read-only backend/frontend dashboard: overview, users,
