@@ -1127,16 +1127,11 @@ async def _delete_document_background(document_id: uuid.UUID) -> None:
                     artifact.external_file_id = None
                     artifact.external_index_id = None
                     session.add(artifact)
-                if (
-                    document.source_storage_status != _SOURCE_STORAGE_STATUS_DELETED
-                    and document.source_bucket
-                    and document.source_storage_key
-                ):
-                    await delete_document_source(
-                        bucket=document.source_bucket,
-                        key=document.source_storage_key,
-                    )
-                    document.source_storage_status = _SOURCE_STORAGE_STATUS_DELETED
+                if document.source_storage_key and document.source_storage_status != "deleted":
+                    if not document.source_bucket:
+                        raise ValueError("private document source has no bucket")
+                    await delete_document_source(bucket=document.source_bucket, key=document.source_storage_key)
+                    document.source_storage_status = "deleted"
 
         except Exception as exc:
             logging.getLogger(__name__).warning(
