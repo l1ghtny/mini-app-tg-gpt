@@ -6,9 +6,13 @@ optional follow-up; explicit refusal and all genuine failure paths preserved.
 80 focused local PostgreSQL regressions, Ruff and diff checks passed.
 Backend2.3.1->2.3.2; frontend2.3.0 unchanged. What's New required; draft stays in
 docs/operations/2026-10-05-image-completion-release.md until production verification.
-Next: commit/PR, carry scoped patch into beta without changing Work/policy activation,
-deploy through TeamCity, verify image stream/persistence/settlement and runtime
-releases, then publish one shared notice and synchronize migration history to beta.
+Production flow 9950/#126 and beta flow 9945/#232 succeeded. Actual image-only
+edits, persistence, duplicate deduplication, stream replay and resume passed in
+both. Production reproduced empty_answer after image delivery: overall complete,
+one settlement, failed optional attempt zero charge. Original remains refunded.
+Next: publish the shared notice via production migration 68 after verified
+availability, synchronize that history to beta, verify final runtime/Sentry and
+mobile UI. Two notice idempotency/rollback/head tests passed on disposable PG.
 No frontend source changes required; existing image/done contract retained.
 
 # Previous objective — 2026-10-05 UX readiness batch

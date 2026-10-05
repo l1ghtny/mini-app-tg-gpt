@@ -36,8 +36,25 @@ before persistence acknowledgement, exactly one image dispatch and idempotent
 settlement. Ruff and `git diff --check` passed.
 
 Frontend source reference confirms existing image/done parsing and recovery remain
-compatible. Real deployed image send/stream/reload, beta behavior, rollout and
-received Sentry release verification remain pending until deployment.
+compatible. Production flow 9950/#126 and beta flow 9945/#232 passed all four
+child jobs. Production deployed merge a2de1d3; beta deployed scoped cherry-pick
+89c6b5f. Both served backend 2.3.2. Production generation policy remains enabled;
+beta retains its disabled policy and Work functionality.
+
+One actual low-quality image edit in each environment produced a persisted image
+with zero text and a terminal done, with no error. Duplicate request IDs reused
+the same assistant; completed conversation resume returned 204; Last-Event-ID
+replay succeeded. Desktop images rendered through the existing proxy fallback.
+The legacy direct app.lightny.ru image host timed out/returned 504; the proxy
+returned 200 with 765903 production / 754641 beta image bytes.
+
+Production reproduced the exact empty follow-up: final attempt failed with
+empty_answer, 48 supplier units and zero customer units, while the overall request
+completed and settled once (8213 image units / 289 Luna units). Beta's image-only
+follow-up recorded a completed four-token attempt; overall completion and one
+settlement also passed (8208 image units / 332 Luna units). Each made one image
+call. The original customer request remains failed/refunded with zero charges.
+Received Sentry releases and final notice deployment verification remain pending.
 
 ## Pending notice copy
 
