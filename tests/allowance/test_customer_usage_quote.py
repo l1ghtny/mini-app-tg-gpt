@@ -41,6 +41,11 @@ async def test_luna_snapshot_is_independent_and_handles_zero_grant(db,monkeypatc
     state=await allowance.snapshot(session,user.id)
     assert state["remaining_percent"]==0 and state["luna_remaining_percent"]==75
     assert state["luna_available"]
+    account.luna_spent=account.luna_granted - 1
+    session.add(account)
+    await session.commit()
+    state=await allowance.snapshot(session,user.id)
+    assert 0 < state["luna_remaining_percent"] < 0.001 and state["luna_available"]
     account.luna_granted=account.luna_spent=0
     session.add(account)
     await session.commit()

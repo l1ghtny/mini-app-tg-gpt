@@ -393,7 +393,7 @@ async def snapshot(session, user_id):
         and access_ends <= a.period_end
     )
     luna_percent = (
-        round(100 * max(0, a.luna_granted - a.luna_spent - a.luna_reserved) / a.luna_granted, 2)
+        100 * max(0, a.luna_granted - a.luna_spent - a.luna_reserved) / a.luna_granted
         if a.luna_granted else 0
     )
     result = dict(
