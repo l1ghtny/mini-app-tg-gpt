@@ -1,3 +1,25 @@
+# Current objective — 2026-10-05 UX readiness batch
+
+Implement Q06, Q09, Q07 and focused M09, run the built-in `codex review`, then merge/deploy to production and beta if clean. After that implement M02/M03 and Q16. Preserve beta Work and unrelated primary-checkout changes.
+
+## Confirmed decisions
+- Owner approved sliding retention: renew on explicit chat/project attachment and successful document search; pinning preserves files until unpinned/deleted.
+- Give existing overdue files one full current owner-plan period at rollout. `retention_migrated_at` prevents duplicate grace, and unmigrated files remain available until grace is applied.
+- One production cleanup scheduler against the shared database; beta never grants separate grace or runs a duplicate scheduler.
+- Phase-one versions: backend 2.2.0 -> 2.3.0; frontend 2.2.0 -> 2.3.0. Notice required; draft stays in docs until actual production availability.
+
+## Progress
+- Account states and current-policy workflow labels implemented in isolated frontend.
+- Document original-name, account-scoped usage context, library controls and lifecycle implemented.
+- 39 expanded backend tests passed; 9 final library/retention tests passed after review fixes. Migration upgrade/downgrade and single head passed.
+- Frontend: 560 tests and production build passed. Rendered EN/RU mobile and desktop checks passed. Pre-existing LazySyntaxHighlighter TypeScript error remains.
+- First built-in backend review completed. Fixed upload response/background lock deadlock, failed-deletion queue starvation, and manual retry disabled by the retention kill switch. Frontend rereview left only a time-dependent fixture, fixed with a frozen clock. Backend rereview found mutable attachment renewal; fixed using the admitted request tools’ store IDs. Sixty focused document/provider/event checks passed. Final review found legacy generations could outlive the cleanup drain and supplier timeouts could starve retries; now cleanup uses the shared chat lifetime plus grace, and per-file deletion has a 15-second deadline. Twelve final retention/library regressions passed. Final rereview and deployment pending.
+
+## Next steps
+Complete checks and Codex review; fix findings, create/attach PRs, merge and validate both CI/CD releases including grace job, cleanup schedule and authenticated behavior. Publish the grouped bilingual notice only after the corresponding production frontend is available. Then implement M02/M03 and Q16.
+
+## Historical context
+
 ## 2026-10-04 owner dashboard — release review complete
 
 Owner authorized merge and deployment to production and beta after review. Owner

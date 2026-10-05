@@ -74,6 +74,8 @@ retry_aborted_rollout() {
   fi
 }
 
+BACKEND_IMAGE="${backend_image}" bash "${script_dir}/deploy_document_retention.sh"
+
 BACKEND_IMAGE="${backend_image}" AUDIO_CHANNEL=production \
   bash "${script_dir}/deploy_audio_worker.sh"
 

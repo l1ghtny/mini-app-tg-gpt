@@ -20,7 +20,7 @@ from app.services.chat_cancellation import GenerationStopped, cancellable_events
 from app.services.openai_chain import invalidate_openai_chain_state
 from app.services.google_chain import invalidate_google_chain_state
 from app.services.chat_lifetime import generation_seconds_remaining
-from app.api.document_helpers import touch_conversation_documents_last_used_in_search
+from app.api.document_helpers import touch_documents_last_used_in_search
 from app.r2.methods import delete_object, put_bytes
 from app.r2.client import R2_BUCKET
 from app.r2.settings import Settings
@@ -552,7 +552,16 @@ async def _handle_stream_event(
 
     if event_type == "file_search.used":
         if not lifecycle.get("file_search_touched"):
-            await touch_conversation_documents_last_used_in_search(session, conversation_id)
+            # These tools belong to the admitted request, not the current chat
+            # selection. Both hosted and shared search use this same store set.
+            stores = list(dict.fromkeys(
+                store
+                for tool in (tools or [])
+                if isinstance(tool, dict) and tool.get("type") == "file_search"
+                for store in (tool.get("vector_store_ids") or [])
+                if isinstance(store, str)
+            ))
+            await touch_documents_last_used_in_search(session, user_id=user_id, vector_store_ids=stores)
             lifecycle["file_search_touched"] = True
         return
 

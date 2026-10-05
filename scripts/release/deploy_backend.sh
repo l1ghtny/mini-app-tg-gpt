@@ -27,6 +27,8 @@ fi
 IMAGE_NAME="${IMAGE_NAME}" IMAGE_TAG="${IMAGE_TAG}" \
   "${script_dir}/verify_registry_image.sh"
 
+BACKEND_IMAGE="${image_ref}" bash "$(dirname "${BASH_SOURCE[0]}")/deploy_document_retention.sh"
+
 kubectl patch application "${ARGO_APPLICATION}" -n "${ARGO_NAMESPACE}" --type merge \
   -p "{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"${image_ref}\"]}}}}"
 kubectl annotate application "${ARGO_APPLICATION}" -n "${ARGO_NAMESPACE}" \

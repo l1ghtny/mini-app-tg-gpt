@@ -681,7 +681,12 @@ async def _map_openai_event(
             )
         return out
 
-    if et == "response.output_item.done" and getattr(event, "item", None) and event.item.type == "file_search_call":
+    if (
+        et == "response.output_item.done"
+        and getattr(event, "item", None)
+        and event.item.type == "file_search_call"
+        and getattr(event.item, "status", None) == "completed"
+    ):
         out.append(
             _build_status_event(
                 stage="file_search.completed",

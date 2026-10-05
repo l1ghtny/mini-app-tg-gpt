@@ -122,3 +122,23 @@ async def test_generate_and_publish_emits_public_activity_without_reasoning(monk
     assert any(ev.get("type") == "activity.upsert" for ev in published)
     assert not any(ev.get("type") == "reasoning.summary.delta" for ev in published)
     assert not any(ev.get("type") == "reasoning.summary.done" for ev in published)
+
+
+@pytest.mark.asyncio
+async def test_file_search_renewal_uses_the_admitted_request_stores_once(monkeypatch):
+    from unittest.mock import AsyncMock
+    touch = AsyncMock()
+    monkeypatch.setattr(helpers, "touch_documents_last_used_in_search", touch)
+    owner = uuid.uuid4()
+    session = _DummySession()
+    arguments = dict(
+        ev={"type": "file_search.used"}, assistant_message_id=uuid.uuid4(),
+        session=session, request_id="captured", user_id=owner, conversation_id=uuid.uuid4(),
+        tools=[{"type": "file_search", "vector_store_ids": ["vs-admitted"]}], bus=FakeBus(),
+        image_entitlement_tier_id=None, image_entitlement_pack_id=None,
+        buffers={}, last_ckpt={}, content_cache={}, partial_image_keys={}, lifecycle={},
+        chain_context_fingerprint=None,
+    )
+    await helpers._handle_stream_event(**arguments)
+    await helpers._handle_stream_event(**arguments)
+    touch.assert_awaited_once_with(session, user_id=owner, vector_store_ids=["vs-admitted"])
