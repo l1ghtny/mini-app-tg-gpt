@@ -11,6 +11,6 @@ class MessageUsage(BaseModel):
     estimated_min_percent: float | None = None
     estimated_max_percent: float | None = None
     maximum_percent: float | None = None
-    basis: Literal["admission", "period"] | None = None
+    basis: Literal["admission"] | None = None
     period_start: datetime | None = None
     period_end: datetime | None = None

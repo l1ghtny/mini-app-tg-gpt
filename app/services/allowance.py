@@ -514,10 +514,7 @@ async def reserve(
         luna_ceiling=luna_ceiling,
         execution_plan=execution_plan,
         recovery_ceiling=recovery_ceiling,
-        customer_quote=(
-            {**customer_quote, "granted_units": a.granted, "luna_granted_units": a.luna_granted}
-            if customer_quote is not None else None
-        ),
+        customer_quote=customer_quote,
     )
     if no_hold:
         policy = execution_plan["risk_policy"]

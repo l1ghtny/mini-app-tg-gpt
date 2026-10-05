@@ -1,6 +1,4 @@
 """Owner-scoped customer accounting for one saved answer; never supplier spend."""
-from datetime import UTC
-
 from fastapi import HTTPException
 from sqlmodel import select
 
@@ -8,9 +6,6 @@ from app.db.allowance import AllowanceAccount, AllowanceRequest
 from app.db.models import Conversation, Message, RequestLedger
 from app.schemas.message_usage import MessageUsage
 
-
-def _utc(value):
-    return value.replace(tzinfo=UTC) if value is not None else None
 
 
 async def message_usage(session, *, user_id, conversation_id, message_id):
@@ -38,9 +33,13 @@ async def message_usage(session, *, user_id, conversation_id, message_id):
     status = {"reserved": "in_progress", "pending": "pending", "complete": "complete", "failed": "failed"}.get(request.status)
     if status is None:
         return MessageUsage(status="unavailable")
-    quote = request.customer_quote or {}
-    granted = quote.get("granted_units", account.granted)
-    luna_granted = quote.get("luna_granted_units", account.luna_granted)
+    quote = request.customer_quote
+    # An account can be upgraded or realigned; its current grant and dates cannot
+    # reconstruct an old answer's admission basis.
+    if not quote:
+        return MessageUsage(status="unavailable")
+    granted = quote["granted_units"]
+    luna_granted = quote["luna_granted_units"]
     settled = status in ("complete", "failed")
     return MessageUsage(
         status=status,
@@ -49,7 +48,7 @@ async def message_usage(session, *, user_id, conversation_id, message_id):
         estimated_min_percent=quote.get("estimated_min_percent"),
         estimated_max_percent=quote.get("estimated_max_percent"),
         maximum_percent=quote.get("maximum_percent"),
-        basis="admission" if quote else "period",
-        period_start=_utc(account.trial_started_at if account.plan == "starter" else request.admission_period_start or account.period_start),
-        period_end=_utc(account.period_end) if account.plan != "starter" or account.trial_started_at else None,
+        basis="admission",
+        period_start=quote.get("period_start"),
+        period_end=quote.get("period_end"),
     )

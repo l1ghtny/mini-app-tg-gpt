@@ -34,7 +34,8 @@ async def seed(session, *, status="complete", quote=True):
         luna_charged=2000 if status == "complete" else 0, status=status,
         customer_quote={"granted_units": 1000000, "luna_granted_units": 2000000,
                         "estimated_min_percent": 0.1, "estimated_max_percent": 1.5,
-                        "maximum_percent": 2} if quote else None,
+                        "maximum_percent": 2, "period_start": "2026-09-01T00:00:00Z",
+                        "period_end": "2026-10-01T00:00:00Z"} if quote else None,
         execution_plan={"supplier_ceiling":987654321,"risk_policy":{"secret":True}})
     ledger = RequestLedger(user_id=owner.id, conversation_id=chat.id, assistant_message_id=message.id,
         request_id=request.request_id, feature="text", model_name=request.model)
@@ -55,6 +56,14 @@ async def test_usage_is_owner_scoped_and_uses_immutable_quote_basis():
         assert result.maximum_percent == 2 and result.basis == "admission"
         assert result.period_start.year == 2026 and result.period_end.month == 10
         assert response.headers["cache-control"] == "private, no-store"
+        account.granted *= 2
+        account.luna_granted *= 2
+        account.period_start = datetime(2026, 9, 22)
+        account.period_end = datetime(2026, 10, 22)
+        session.add(account)
+        await session.commit()
+        after = await message_usage(session,user_id=owner.id,conversation_id=chat.id,message_id=message.id)
+        assert after == result
         payload = result.model_dump()
         assert not {"supplier_ceiling", "execution_plan", "risk_policy", "granted_units"} & payload.keys()
         for user_id, cid, mid in [(other.id,chat.id,message.id),(owner.id,foreign.id,message.id),
@@ -80,8 +89,14 @@ async def test_legacy_usage_has_no_invented_quote_and_missing_ledger_is_unavaila
     async with AsyncSession(engine, expire_on_commit=False) as session:
         owner, other, chat, _, message, _, request, account = await seed(session, quote=False)
         result = await message_usage(session,user_id=owner.id,conversation_id=chat.id,message_id=message.id)
-        assert result.basis == "period" and result.estimated_max_percent is None
-        assert result.shared_percent == 0.00005
+        assert result.model_dump(exclude_none=True) == {"status":"unavailable"}
+        account.granted *= 2
+        account.period_start = datetime(2026, 9, 22)
+        account.period_end = datetime(2026, 10, 22)
+        session.add(account)
+        await session.commit()
+        after = await message_usage(session,user_id=owner.id,conversation_id=chat.id,message_id=message.id)
+        assert after == result
         # A corrupt cross-owner relationship must not leak billing data.
         request.user_id = other.id
         session.add(request)

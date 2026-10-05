@@ -1,5 +1,7 @@
 """Admission and estimates share the same server-owned context and policy."""
 
+from datetime import UTC
+
 import hashlib
 import hmac
 import json
@@ -33,13 +35,36 @@ def tool_names(choice):
     return set(choice)
 
 
-async def estimate(session, user, conversation, request, *, system_prompt=None):
+def _customer_quote(estimate, basis, request):
+    return {
+        **basis,
+        "estimated_min_percent": estimate["estimated_min_percent"],
+        "estimated_max_percent": estimate["estimated_max_percent"],
+        "maximum_percent": estimate["ceiling_units"] * 100 / basis["granted_units"]
+        if estimate["needs_confirmation"] or request.spend_limit_units is not None else None,
+    }
+
+
+async def estimate(session, user, conversation, request, *, system_prompt=None, include_customer_quote=False):
     from app.services.model_availability import require_text_model_available
 
     require_text_model_available(request.model)
     allowance.require_enabled(user.id)
     a = await allowance.account(session, user.id)
     allowance.require_active(a)
+    # Capture before either estimator commits: an overlapping grant can expire
+    # before reserve reacquires the account, but the customer quote must not mix bases.
+    basis = {
+        "granted_units": a.granted,
+        "luna_granted_units": a.luna_granted,
+        "period_start": (
+            (a.trial_started_at if a.plan == "starter" else a.period_start)
+            .replace(tzinfo=UTC).isoformat()
+            if a.plan != "starter" or a.trial_started_at else None
+        ),
+        "period_end": a.period_end.replace(tzinfo=UTC).isoformat()
+        if a.plan != "starter" or a.trial_started_at else None,
+    } if include_customer_quote else None
     if request.model not in allowance.model_access(a.plan):
         raise HTTPException(403, detail={"error": "model_not_in_plan"})
     rows = (
@@ -132,7 +157,7 @@ async def estimate(session, user, conversation, request, *, system_prompt=None):
         image_reserve = image_budget(
             quality, prompt_bytes=MAX_TOOL_QUERY_BYTES, reference_tokens=reference_tokens
         )
-        return await estimate_plan(
+        result = await estimate_plan(
             session, user, conversation, request, account=a, messages=messages,
             instructions=instructions, tools=tools, document_stores=document_stores,
             image_reserve=image_reserve, history=history,
@@ -140,6 +165,9 @@ async def estimate(session, user, conversation, request, *, system_prompt=None):
             summary_units=summary_budget(history + [current], conversation),
             consent_instructions=_resolve_system_prompt(conversation, user),
         )
+        if basis is not None:
+            result["customer_quote"] = _customer_quote(result, basis, request)
+        return result
     image_reserve = image_budget(quality, reference_tokens=reference_tokens)
     # Expected usage and admission use the exact same compacted multimodal context.
     # Do not promise cache hits; unused output/tool capacity is never a charge.
@@ -295,12 +323,14 @@ async def estimate(session, user, conversation, request, *, system_prompt=None):
             max(0, a.luna_granted - a.luna_spent - a.luna_reserved),
         ),
     )
+    if basis is not None:
+        result["customer_quote"] = _customer_quote(result, basis, request)
     await session.commit()
     return result
 
 
 async def admit(session, user, conversation, request, *, system_prompt=None):
-    e = await estimate(session, user, conversation, request, system_prompt=system_prompt)
+    e = await estimate(session, user, conversation, request, system_prompt=system_prompt, include_customer_quote=True)
     if (request.model == LUNA or e.get("execution_plan")) and e["luna_ceiling"] < e["luna_minimum"]:
         raise HTTPException(429, detail={"error": "luna_fair_use"})
     if e["ceiling_units"] < e["minimum_ceiling_units"]:
@@ -324,10 +354,5 @@ async def admit(session, user, conversation, request, *, system_prompt=None):
         luna_ceiling=e["luna_ceiling"],
         execution_plan=e.get("execution_plan"),
         recovery_ceiling=e.get("recovery_ceiling_units", 0),
-        customer_quote={
-            "estimated_min_percent": e["estimated_min_percent"],
-            "estimated_max_percent": e["estimated_max_percent"],
-            "maximum_percent": e["ceiling_percent"]
-            if e["needs_confirmation"] or request.spend_limit_units is not None else None,
-        },
+        customer_quote=e["customer_quote"],
     )
