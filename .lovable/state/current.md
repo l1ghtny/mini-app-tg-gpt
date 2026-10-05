@@ -15,6 +15,10 @@ Implement Q06, Q09, Q07 and focused M09, run the built-in `codex review`, then m
 - Frontend: 560 tests and production build passed. Rendered EN/RU mobile and desktop checks passed. Pre-existing LazySyntaxHighlighter TypeScript error remains.
 - First built-in backend review completed. Fixed upload response/background lock deadlock, failed-deletion queue starvation, and manual retry disabled by the retention kill switch. Frontend rereview left only a time-dependent fixture, fixed with a frozen clock. Backend rereview found mutable attachment renewal; fixed using the admitted request tools’ store IDs. Sixty focused document/provider/event checks passed. Final review found legacy generations could outlive the cleanup drain and supplier timeouts could starve retries; now cleanup uses the shared chat lifetime plus grace, and per-file deletion has a 15-second deadline. Twelve final retention/library regressions passed. Final rereview and deployment pending.
 
+## Release checkpoint
+
+PRs backend #24 and frontend #29 merged after clean final built-in reviews. Production flow 9902/#123 uses backend 94f592a and frontend cb08712, still in progress. Beta merge preserved Work and its private-source deletion path. Found 12 live source-backed files in the shared database: source-aware production cleanup compatibility is being tested/reviewed separately, with scheduler suspension arranged before declaring cleanup ready. Backend follow-up version 2.3.1; frontend 2.3.0. No phase-two implementation yet.
+
 ## Next steps
 Complete checks and Codex review; fix findings, create/attach PRs, merge and validate both CI/CD releases including grace job, cleanup schedule and authenticated behavior. Publish the grouped bilingual notice only after the corresponding production frontend is available. Then implement M02/M03 and Q16.
 
