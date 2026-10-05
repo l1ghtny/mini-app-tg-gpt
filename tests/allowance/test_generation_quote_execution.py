@@ -649,6 +649,54 @@ async def test_multibyte_image_query_fits_quote_after_real_routing_admission(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("final_output", [[], answer(" ")])
+async def test_image_with_empty_followup_completes_and_settles_once(
+    send_case, monkeypatch, final_output
+):
+    from app.db.allowance import AllowanceEvent
+
+    session, user, conversation, queued = send_case
+    image_response = SimpleNamespace(
+        data=[SimpleNamespace(b64_json="synthetic-image")],
+        usage=SimpleNamespace(model_dump=lambda: {
+            "input_tokens": 100, "output_tokens": 196,
+            "input_tokens_details": {"text_tokens": 100, "image_tokens": 0},
+        }), _request_id="synthetic-image-id",
+    )
+    payloads, images = synthetic_client(monkeypatch, [
+        {"type": "function_call", "call_id": "image-call", "name": "image_generation",
+         "arguments": json.dumps({"query": "A blue circle", "reference_mode": "none"})},
+        final_output,
+    ], image_response)
+    request = NewMessageRequest(
+        client_request_id="image-empty-followup", role="user", model=LUNA,
+        tool_choice=["image_generation"], required_tool="image_generation", image_quality="low",
+        content=[{"type": "text", "value": "Draw a blue circle"}],
+    )
+    quote, _, events = await send_and_execute(session, user, conversation, queued, request)
+    assert [event["type"] for event in events].count("image.ready") == 1
+    assert [event["type"] for event in events].count("done") == 1
+    assert len(payloads) == 2
+    images.generate.assert_awaited_once()
+    images.edit.assert_not_awaited()
+    attempts = (await session.exec(select(ProviderAttempt).order_by(ProviderAttempt.created_at))).all()
+    assert [row.status for row in attempts] == ["complete", "complete", "failed"]
+    assert attempts[-1].usage_details["failure_reason"] == "empty_answer"
+    assert attempts[-1].customer_units == 0 and not attempts[-1].recovery
+    row = await allowance.request_row(session, user.id, request.client_request_id)
+    assert row.status == "complete" and 0 < row.charged <= quote["ceiling_units"]
+    assert row.charged == attempts[1].customer_units
+    first_charge = (row.charged, row.luna_charged)
+    await allowance.settle(session, user.id, request.client_request_id, success=True)
+    row = await allowance.request_row(session, user.id, request.client_request_id)
+    assert (row.charged, row.luna_charged) == first_charge
+    settles = (await session.exec(select(AllowanceEvent).where(
+        AllowanceEvent.request_id == row.id, AllowanceEvent.kind == "settle"
+    ))).all()
+    assert len(settles) == 1
+
+
+@pytest.mark.asyncio
 async def test_image_quote_funds_schema_bound_in_four_byte_utf8(
     estimate_case, monkeypatch
 ):

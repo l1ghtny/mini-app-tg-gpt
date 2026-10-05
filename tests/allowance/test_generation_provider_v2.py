@@ -231,6 +231,115 @@ async def test_completed_claude_without_visible_answer_is_not_customer_success(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delivered,reason,required,accepted",
+    [
+        (True, "empty_answer", None, True),
+        (False, "empty_answer", None, False),
+        (True, "refusal", None, False),
+        (True, "empty_answer", "image_generation", False),
+        (True, "content_filter", None, False),
+    ],
+)
+async def test_empty_optional_followup_accepts_only_a_delivered_image(
+    delivered, reason, required, accepted
+):
+    calls = []
+
+    async def empty(*args):
+        calls.append(args)
+        if False:
+            yield
+        raise ProviderResponseError(status="incomplete", reason=reason)
+
+    run = SimpleNamespace(plan=True, recovered=False, image_delivered=delivered)
+    events = provider.funded_turn(empty, run, [], "gpt-5.6-luna", "", {}, required, "low", 2)
+    if accepted:
+        assert [event async for event in events] == [
+            {"type": "turn.result", "output": [], "calls": []}
+        ]
+    else:
+        with pytest.raises(ProviderResponseError, match=reason):
+            _ = [event async for event in events]
+    assert len(calls) == 1 and not run.recovered
+
+
+@pytest.mark.asyncio
+async def test_openai_refusal_after_an_image_is_not_empty_answer(monkeypatch):
+    class Stream:
+        def __aiter__(self):
+            async def events():
+                yield SimpleNamespace(type="response.completed", response=SimpleNamespace(
+                    id="synthetic-refusal", status="completed",
+                    output=[SimpleNamespace(model_dump=lambda **kw: {
+                        "type": "message", "content": [{"type": "refusal", "refusal": "synthetic refusal"}]
+                    })], usage={"input_tokens": 100, "output_tokens": 4},
+                ))
+            return events()
+
+        async def close(self):
+            pass
+
+    create = AsyncMock(return_value=Stream())
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    client.with_options = lambda **kw: client
+    monkeypatch.setattr(provider, "client", client)
+    run = fake_run("gpt-5.6-luna")
+    run.image_delivered, run.recovered = True, False
+    with pytest.raises(ProviderResponseError, match="refusal"):
+        _ = [event async for event in provider.funded_turn(
+            provider.openai_turn, run, [], run.plan.model, "System", {}, None, "low", 2
+        )]
+    create.assert_awaited_once()
+    assert run.finish.call_args.args[2]["failure_reason"] == "refusal"
+    assert run.finish.call_args.kwargs["success"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persistence_failed", [False, True])
+async def test_saved_legacy_image_plan_marks_delivery_only_after_consumer_resumes(
+    monkeypatch, persistence_failed
+):
+    monkeypatch.setattr(provider, "compress_context", AsyncMock(return_value=[]))
+
+    async def load(run):
+        run.plan = execution_plan("gpt-5.6-luna", [])
+        run.execution = {"tools": ["image_generation"], "tool_rounds": 2}
+
+    monkeypatch.setattr(provider.ChatRun, "load_plan", load)
+    turns = []
+
+    async def turn(run, *args):
+        turns.append(run)
+        if len(turns) == 1:
+            yield {"type": "turn.result", "output": [], "calls": [
+                {"id": "image", "name": "image_generation", "args": {"query": "synthetic"}}
+            ]}
+        else:
+            raise ProviderResponseError(status="incomplete", reason="empty_answer")
+
+    async def tool(*args):
+        yield {"type": "image.ready", "index": 1, "data": "synthetic-image"}
+        yield {"type": "tool.result", "result": "Image generated and displayed to the user."}
+
+    monkeypatch.setattr(provider, "openai_turn", turn)
+    monkeypatch.setattr(provider, "run_tool", tool)
+    stream = provider.stream_shared_response(
+        [], "gpt-5.6-luna", user_id="synthetic-user", request_id="saved-image-request",
+        tools=[{"type": "image_generation"}], tool_choice={"type": "image_generation"},
+    )
+    while (await anext(stream))["type"] != "image.ready":
+        pass
+    assert not turns[0].image_delivered
+    if persistence_failed:
+        await stream.aclose()
+        assert not turns[0].image_delivered and len(turns) == 1
+    else:
+        assert [event async for event in stream][-1] == {"type": "done"}
+        assert turns[0].image_delivered and len(turns) == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("partial", ["", "partial answer"])
 async def test_recovery_failure_does_not_start_a_third_call(partial):
     calls = []
