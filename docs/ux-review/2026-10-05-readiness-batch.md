@@ -4,7 +4,7 @@ Scope: Q06, Q09, Q07 and focused M09. Account data must distinguish loading/fail
 
 Approved retention: unpinned files renew on explicit attachment or successful file search. Pinned files remain until unpinned/deleted. Existing overdue files receive one full current-plan period, once. Old filenames are retained when the true original was never stored; no guesswork strips user-created names.
 
-The grace job runs before rollout and before a single production cleanup CronJob is enabled. Files without the migration marker remain usable and cannot be auto-purged. Expired migrated files cannot be attached/retrieved; provider deletion waits at least 30 minutes (or configured request lifetime plus 60 seconds). Manual deletion removes chat/project links; supplier 404 is idempotent and other failures remain queued for retry. Storage stays occupied until deletion completes.
+The grace job runs before rollout and before a single production cleanup CronJob is enabled. Files without the migration marker remain usable and cannot be auto-purged. Expired migrated files cannot be attached/retrieved; provider deletion waits the supported 24-hour legacy generation lifetime plus its five-minute cleanup grace (or a longer configured shared request lifetime plus 60 seconds). Manual deletion removes chat/project links; supplier 404 is idempotent and other failures remain queued for retry. Storage stays occupied until deletion completes. Each provider deletion is bounded to 15 seconds so failures commit and the 50-record cleanup batch can advance within the 1,200-second job deadline.
 
 Versions: backend 2.2.0 -> 2.3.0; frontend 2.2.0 -> 2.3.0. Both retain shared major 2.
 

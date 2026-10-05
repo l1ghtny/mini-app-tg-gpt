@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 import re
@@ -898,6 +899,10 @@ async def _delete_provider_file(file_id: str) -> None:
         pass
 
 
+# 50 cleanup records fit within the 1,200-second job deadline, including retries.
+DOCUMENT_DELETION_TIMEOUT_SECONDS = 15
+
+
 async def _delete_document_background(document_id: uuid.UUID) -> None:
     async with AsyncSession(engine, expire_on_commit=False) as session:
         document = (
@@ -912,19 +917,20 @@ async def _delete_document_background(document_id: uuid.UUID) -> None:
             return
 
         try:
-            for artifact in document.provider_artifacts:
-                if artifact.deleted_at is not None or artifact.status == DocumentProviderArtifactStatus.deleted.value:
-                    continue
-                if artifact.provider == DOCUMENT_PROVIDER_OPENAI:
-                    if artifact.external_index_id:
-                        await _delete_provider_index(artifact.external_index_id)
-                    if artifact.external_file_id:
-                        await _delete_provider_file(artifact.external_file_id)
-                artifact.status = DocumentProviderArtifactStatus.deleted.value
-                artifact.deleted_at = _utcnow_naive()
-                artifact.external_file_id = None
-                artifact.external_index_id = None
-                session.add(artifact)
+            async with asyncio.timeout(DOCUMENT_DELETION_TIMEOUT_SECONDS):
+                for artifact in document.provider_artifacts:
+                    if artifact.deleted_at is not None or artifact.status == DocumentProviderArtifactStatus.deleted.value:
+                        continue
+                    if artifact.provider == DOCUMENT_PROVIDER_OPENAI:
+                        if artifact.external_index_id:
+                            await _delete_provider_index(artifact.external_index_id)
+                        if artifact.external_file_id:
+                            await _delete_provider_file(artifact.external_file_id)
+                    artifact.status = DocumentProviderArtifactStatus.deleted.value
+                    artifact.deleted_at = _utcnow_naive()
+                    artifact.external_file_id = None
+                    artifact.external_index_id = None
+                    session.add(artifact)
         except Exception as exc:
             logging.getLogger(__name__).warning(
                 "Document deletion queued for retry",

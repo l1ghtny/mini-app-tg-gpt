@@ -96,7 +96,7 @@ async def test_cleanup_detaches_all_context_and_retries_provider_failure_without
     async with AsyncSession(engine, expire_on_commit=False) as session:
         user = AppUser(telegram_id=321004); session.add(user); await session.flush()
         conversation = Conversation(user_id=user.id); project = ChatFolder(user_id=user.id, name="Launch")
-        file = UserDocument(user_id=user.id, filename="Expired.txt", status="ready", expires_at=now-timedelta(hours=2), retention_migrated_at=now, provider_artifacts=[])
+        file = UserDocument(user_id=user.id, filename="Expired.txt", status="ready", expires_at=now-timedelta(days=2), retention_migrated_at=now, provider_artifacts=[])
         pinned = UserDocument(user_id=user.id, filename="Pinned.txt", status="ready", is_pinned=True, expires_at=now-timedelta(days=1), retention_migrated_at=now)
         legacy = UserDocument(user_id=user.id, filename="Legacy.txt", status="ready", expires_at=now-timedelta(days=1))
         session.add_all([conversation, project, file, pinned, legacy]); await session.flush()
@@ -237,3 +237,54 @@ async def test_search_renews_its_captured_files_after_detachment_and_mid_request
         assert searched.expires_at == finished_at+timedelta(hours=120)
         assert replacement.last_used_in_search is None and replacement.expires_at == replacement_expiry
         assert foreign.last_used_in_search is None and queued.last_used_in_search is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_files_until_legacy_generation_deadline(monkeypatch):
+    monkeypatch.setattr(settings, "DOCUMENT_RETENTION_ENFORCED", True)
+    delete = AsyncMock()
+    monkeypatch.setattr("jobs.cleanup_documents._delete_document_background", delete)
+    now = documents._utcnow_naive()
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=321010)
+        session.add(user)
+        await session.flush()
+        recent = UserDocument(user_id=user.id, filename="In-flight.txt", status="ready", expires_at=now-timedelta(hours=23), retention_migrated_at=now)
+        drained = UserDocument(user_id=user.id, filename="Drained.txt", status="ready", expires_at=now-timedelta(hours=25), retention_migrated_at=now)
+        session.add_all([recent, drained])
+        await session.commit()
+        await cleanup()
+        await session.refresh(recent)
+        assert recent.status == "ready"
+        delete.assert_awaited_once_with(drained.id)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_commits_timeout_and_continues_to_next_file(monkeypatch):
+    monkeypatch.setattr(settings, "DOCUMENT_RETENTION_ENFORCED", False)
+    monkeypatch.setattr(documents, "DOCUMENT_DELETION_TIMEOUT_SECONDS", 0.02)
+    now = documents._utcnow_naive()
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=321011)
+        session.add(user)
+        await session.flush()
+        older = UserDocument(user_id=user.id, filename="Timeout.txt", status="delete_queued", updated_at=now-timedelta(days=2), provider_artifacts=[])
+        newer = UserDocument(user_id=user.id, filename="Next.txt", status="delete_queued", updated_at=now-timedelta(days=1), provider_artifacts=[])
+        session.add_all([older, newer])
+        await session.flush()
+        for file in (older, newer):
+            file.provider_artifacts.append(DocumentProviderArtifact(document_id=file.id, status="delete_queued", external_file_id=str(file.id)))
+            session.add(file)
+        await session.commit()
+        async def remove(file_id):
+            if file_id == str(older.id):
+                await asyncio.sleep(10)
+        delete = AsyncMock(side_effect=remove)
+        monkeypatch.setattr(documents, "_delete_provider_file", delete)
+        await asyncio.wait_for(cleanup(batch_size=2), timeout=5)
+        await session.refresh(older)
+        await session.refresh(newer)
+        assert older.status == "delete_queued" and older.error_code == "document_delete_failed"
+        assert older.updated_at >= now
+        assert newer.status == "deleted"
+        assert delete.await_count == 2

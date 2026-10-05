@@ -10,6 +10,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app.api.document_helpers import _delete_document_background, _queue_document_deletion, _utcnow_naive
 from app.core.config import settings
+from app.services.chat_lifetime import CHAT_GENERATION_LIFETIME, CHAT_CLEANUP_GRACE
 from app.db.database import engine
 from app.db.models import UserDocument
 from sqlalchemy.orm import selectinload
@@ -19,7 +20,10 @@ from jobs.migrate_document_retention import migrate_batch
 async def main(batch_size: int = 50) -> None:
     batch_size = max(1, min(batch_size, 100))
     eligible = UserDocument.status == "delete_queued"
-    drain_seconds = max(1800, settings.SHARED_ALLOWANCE_REQUEST_SECONDS + 60)
+    drain_seconds = max(
+        (CHAT_GENERATION_LIFETIME + CHAT_CLEANUP_GRACE).total_seconds(),
+        settings.SHARED_ALLOWANCE_REQUEST_SECONDS + 60,
+    )
     cutoff = _utcnow_naive() - timedelta(seconds=drain_seconds)
     if settings.DOCUMENT_RETENTION_ENFORCED:
         # Old pods can still upload during a rolling release. Grant those
