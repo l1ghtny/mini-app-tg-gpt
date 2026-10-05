@@ -18,7 +18,7 @@ async def migrate_batch(session: AsyncSession, batch_size: int = 100) -> int:
         UserDocument.retention_migrated_at.is_(None),
         UserDocument.deleted_at.is_(None),
         UserDocument.status.not_in(("delete_queued", "deleted")),
-    ).order_by(UserDocument.id).limit(batch_size).with_for_update())).all()
+    ).order_by(UserDocument.id).limit(max(1, min(batch_size, 100))).with_for_update(skip_locked=True))).all()
     now = _utcnow_naive()
     limits = {}
     for document in documents:

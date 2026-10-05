@@ -115,6 +115,8 @@ async def test_cleanup_detaches_all_context_and_retries_provider_failure_without
         assert file.status == "deleted" and file.deleted_at is not None
         assert pinned.status == "ready" and pinned.deleted_at is None
         assert legacy.status == "ready" and legacy.deleted_at is None
+        assert legacy.retention_migrated_at is not None
+        assert legacy.expires_at > now
         assert (await documents.get_document_capabilities(session, user)).active_doc_count == 2
 
 
@@ -150,3 +152,56 @@ async def test_ingestion_cannot_overwrite_a_concurrent_deletion(monkeypatch, tmp
         assert file.status == "delete_queued"
         upload.assert_not_awaited()
         assert not file_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_response_read_does_not_block_its_background_worker(monkeypatch, tmp_path):
+    upload = AsyncMock()
+    monkeypatch.setattr(documents, "_ingest_openai_artifact", upload)
+    file_path = tmp_path / "response.txt"
+    file_path.write_text("fixture")
+    async with AsyncSession(engine, expire_on_commit=False) as request_session:
+        user = AppUser(telegram_id=321006)
+        request_session.add(user)
+        await request_session.flush()
+        file = UserDocument(user_id=user.id, filename="Response.txt", status="uploading", provider_artifacts=[])
+        request_session.add(file)
+        await request_session.commit()
+        # FastAPI keeps this request dependency open until BackgroundTasks finish.
+        response_file = await documents._load_document_for_user(request_session, user_id=user.id, document_id=file.id)
+        assert response_file is not None
+        await asyncio.wait_for(documents._ingest_document_background(file.id, str(file_path), ["openai"]), timeout=5)
+        upload.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_manual_deletions_rotate_without_retention_enforcement(monkeypatch):
+    monkeypatch.setattr(settings, "DOCUMENT_RETENTION_ENFORCED", False)
+    delete_file = AsyncMock(side_effect=RuntimeError("supplier unavailable"))
+    monkeypatch.setattr(documents, "_delete_provider_file", delete_file)
+    now = documents._utcnow_naive()
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=321007)
+        session.add(user)
+        await session.flush()
+        older = UserDocument(user_id=user.id, filename="Older.txt", status="delete_queued", updated_at=now-timedelta(days=2), provider_artifacts=[])
+        newer = UserDocument(user_id=user.id, filename="Newer.txt", status="delete_queued", updated_at=now-timedelta(days=1), provider_artifacts=[])
+        expired = UserDocument(user_id=user.id, filename="Expired.txt", status="ready", expires_at=now-timedelta(days=3), retention_migrated_at=now)
+        session.add_all([older, newer, expired])
+        await session.flush()
+        for file in [older, newer]:
+            file.provider_artifacts.append(DocumentProviderArtifact(document_id=file.id, status="delete_queued", external_file_id=str(file.id)))
+            session.add(file)
+        await session.commit()
+        await cleanup(batch_size=1)
+        await session.refresh(older)
+        first_retry = older.updated_at
+        assert first_retry >= now
+        await cleanup(batch_size=1)
+        assert delete_file.await_args_list[0].args == (str(older.id),)
+        assert delete_file.await_args_list[1].args == (str(newer.id),)
+        await cleanup(batch_size=1)
+        await session.refresh(older)
+        assert older.updated_at > first_retry
+        await session.refresh(expired)
+        assert expired.status == "ready" and expired.deleted_at is None

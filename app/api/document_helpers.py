@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import uuid
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -604,20 +605,21 @@ async def _load_document_for_user(
     *,
     user_id: uuid.UUID,
     document_id: uuid.UUID,
+    for_update: bool = False,
 ) -> UserDocument | None:
-    return (
-        await session.exec(
-            select(UserDocument)
-            .where(
-                UserDocument.id == document_id,
-                UserDocument.user_id == user_id,
-                UserDocument.deleted_at.is_(None),
-            )
-            .options(selectinload(UserDocument.provider_artifacts))
-            .with_for_update()
-            .execution_options(populate_existing=True)
+    query = (
+        select(UserDocument)
+        .where(
+            UserDocument.id == document_id,
+            UserDocument.user_id == user_id,
+            UserDocument.deleted_at.is_(None),
         )
-    ).first()
+        .options(selectinload(UserDocument.provider_artifacts))
+        .execution_options(populate_existing=True)
+    )
+    if for_update:
+        query = query.with_for_update()
+    return (await session.exec(query)).first()
 
 
 def _ensure_artifact(document: UserDocument, provider: str) -> DocumentProviderArtifact:
@@ -846,7 +848,7 @@ async def delete_document(
     document_id: uuid.UUID,
     background_tasks: BackgroundTasks,
 ) -> None:
-    document = await _load_document_for_user(session, user_id=user.id, document_id=document_id)
+    document = await _load_document_for_user(session, user_id=user.id, document_id=document_id, for_update=True)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -924,6 +926,11 @@ async def _delete_document_background(document_id: uuid.UUID) -> None:
                 artifact.external_index_id = None
                 session.add(artifact)
         except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Document deletion queued for retry",
+                extra={"document_id": str(document.id), "error_type": type(exc).__name__},
+            )
+            document.updated_at = _utcnow_naive()
             document.status = DOCUMENT_STATUS_DELETE_QUEUED
             document.error_code = "document_delete_failed"
             document.error_message = "File removal could not finish. It will be retried."
@@ -948,7 +955,7 @@ async def set_document_pin_state(
     document_id: uuid.UUID,
     pin: bool,
 ) -> UserDocumentResponse:
-    document = await _load_document_for_user(session, user_id=user.id, document_id=document_id)
+    document = await _load_document_for_user(session, user_id=user.id, document_id=document_id, for_update=True)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 

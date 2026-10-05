@@ -11,8 +11,9 @@ Implement Q06, Q09, Q07 and focused M09, run the built-in `codex review`, then m
 ## Progress
 - Account states and current-policy workflow labels implemented in isolated frontend.
 - Document original-name, account-scoped usage context, library controls and lifecycle implemented.
-- 13 focused backend checks passed; expanded tests, full frontend run and rendered checks in progress.
-- Built-in review and deployment have not run yet.
+- 39 expanded backend tests passed; 9 final library/retention tests passed after review fixes. Migration upgrade/downgrade and single head passed.
+- Frontend: 560 tests and production build passed. Rendered EN/RU mobile and desktop checks passed. Pre-existing LazySyntaxHighlighter TypeScript error remains.
+- First built-in backend review completed. Fixed upload response/background lock deadlock, failed-deletion queue starvation, and manual retry disabled by the retention kill switch. Frontend review running; final backend rereview and deployment pending.
 
 ## Next steps
 Complete checks and Codex review; fix findings, create/attach PRs, merge and validate both CI/CD releases including grace job, cleanup schedule and authenticated behavior. Publish the grouped bilingual notice only after the corresponding production frontend is available. Then implement M02/M03 and Q16.
