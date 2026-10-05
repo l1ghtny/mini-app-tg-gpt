@@ -324,4 +324,10 @@ async def admit(session, user, conversation, request, *, system_prompt=None):
         luna_ceiling=e["luna_ceiling"],
         execution_plan=e.get("execution_plan"),
         recovery_ceiling=e.get("recovery_ceiling_units", 0),
+        customer_quote={
+            "estimated_min_percent": e["estimated_min_percent"],
+            "estimated_max_percent": e["estimated_max_percent"],
+            "maximum_percent": e["ceiling_percent"]
+            if e["needs_confirmation"] or request.spend_limit_units is not None else None,
+        },
     )

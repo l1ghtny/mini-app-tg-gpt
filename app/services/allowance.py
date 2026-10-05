@@ -392,13 +392,17 @@ async def snapshot(session, user_id):
         and access_ends is not None
         and access_ends <= a.period_end
     )
+    luna_percent = (
+        round(100 * max(0, a.luna_granted - a.luna_spent - a.luna_reserved) / a.luna_granted, 2)
+        if a.luna_granted else 0
+    )
     result = dict(
         trial=(dict(
             state="expired" if trial_expired(a) else ("active" if a.trial_started_at else "ready"),
             duration_days=7,
             started_at=a.trial_started_at.replace(tzinfo=UTC).isoformat() if a.trial_started_at else None,
             expires_at=a.period_end.replace(tzinfo=UTC).isoformat() if a.trial_started_at else None,
-            luna_remaining_percent=round(100 * max(0, a.luna_granted-a.luna_spent-a.luna_reserved) / a.luna_granted, 2),
+            luna_remaining_percent=luna_percent,
         ) if trial else None),
         enabled=True,
         mode="trial" if trial else "shared" if str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS else "beta",
@@ -419,6 +423,7 @@ async def snapshot(session, user_id):
         models=model_access(a.plan),
         default_model="claude-sonnet-5" if trial else "gpt-5.6-terra",
         image_model="gpt-image-2.5-flare",
+        luna_remaining_percent=luna_percent,
         luna_available=not trial_expired(a) and a.luna_granted - a.luna_spent - a.luna_reserved > 0,
         image_output_units={k: v * 30 for k, v in IMAGE_OUTPUT_TOKENS.items()},
         catalog=catalog(),
@@ -441,7 +446,7 @@ async def snapshot(session, user_id):
 
 async def reserve(
     session, *, user_id, conversation_id, request_id, model, ceiling, luna_ceiling=0,
-    execution_plan=None, recovery_ceiling=0,
+    execution_plan=None, recovery_ceiling=0, customer_quote=None,
 ):
     from app.services import allowance_tasks
     from app.services.allowance_task_policy import ITERATIVE, NO_HOLD
@@ -509,6 +514,10 @@ async def reserve(
         luna_ceiling=luna_ceiling,
         execution_plan=execution_plan,
         recovery_ceiling=recovery_ceiling,
+        customer_quote=(
+            {**customer_quote, "granted_units": a.granted, "luna_granted_units": a.luna_granted}
+            if customer_quote is not None else None
+        ),
     )
     if no_hold:
         policy = execution_plan["risk_policy"]

@@ -31,6 +31,7 @@ from app.schemas.chat import (
     UpdateConversationSettingsRequest,
     ConversationInfo,
 )
+from app.schemas.message_usage import MessageUsage
 from app.schemas.documents import (
     ConversationDocumentsUpdateRequest,
     ConversationDocumentsUpdateResponse,
@@ -39,6 +40,23 @@ from app.schemas.documents import (
 router = APIRouter()
 
 router.include_router(history_router)
+
+
+
+@router.get("/conversations/{conversation_id}/messages/{message_id}/usage", response_model=MessageUsage)
+async def get_message_usage(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    response: Response,
+    session: AsyncSession = Depends(get_read_session),
+    current_user: AppUser = Depends(get_current_user),
+):
+    from app.services.message_usage import message_usage
+
+    response.headers["Cache-Control"] = "private, no-store"
+    return await message_usage(session, user_id=current_user.id,
+                               conversation_id=conversation_id, message_id=message_id)
+
 
 
 @router.post(
