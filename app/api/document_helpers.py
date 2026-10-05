@@ -1233,35 +1233,50 @@ async def count_conversation_pending_indexing_documents(
     return count
 
 
-async def touch_conversation_documents_last_used_in_search(
+async def touch_documents_last_used_in_search(
     session: AsyncSession,
-    conversation_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID,
+    vector_store_ids: list[str],
 ) -> None:
-    links = (
-        await session.exec(
-            select(ConversationDocument).where(ConversationDocument.conversation_id == conversation_id)
-        )
-    ).all()
-    if not links:
+    if not vector_store_ids:
         return
-
-    now = _utcnow_naive()
-    doc_ids = [link.document_id for link in links]
+    # Store IDs are captured by admission and carried by the successful search
+    # event. Current attachments may have changed while that request was running.
+    # An admitted search can finish just after expiry; never revive deleted or
+    # deletion-queued files, and never touch another account's records.
+    artifact_documents = select(DocumentProviderArtifact.document_id).where(
+        DocumentProviderArtifact.provider == DOCUMENT_PROVIDER_OPENAI,
+        DocumentProviderArtifact.external_index_id.in_(vector_store_ids),
+        DocumentProviderArtifact.deleted_at.is_(None),
+    )
     docs = (
         await session.exec(
-            select(UserDocument).where(UserDocument.id.in_(doc_ids), *_document_available_predicates()).order_by(UserDocument.id).with_for_update().execution_options(populate_existing=True)
+            select(UserDocument)
+            .where(
+                UserDocument.user_id == user_id,
+                UserDocument.deleted_at.is_(None),
+                UserDocument.status.not_in((DOCUMENT_STATUS_DELETE_QUEUED, DOCUMENT_STATUS_DELETED)),
+                or_(
+                    UserDocument.id.in_(artifact_documents),
+                    UserDocument.openai_vector_store_id.in_(vector_store_ids),
+                ),
+            )
+            .order_by(UserDocument.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).all()
-
-    retention_by_user: dict[uuid.UUID, int] = {}
+    now = _utcnow_naive()
+    retention_hours: int | None = None
     for document in docs:
         if settings.DOCUMENT_RETENTION_ENFORCED and not document.is_pinned:
-            if document.user_id not in retention_by_user:
-                owner = await session.get(AppUser, document.user_id)
+            if retention_hours is None:
+                owner = await session.get(AppUser, user_id)
                 if owner is None:
-                    continue
-                retention_by_user[owner.id] = (await _document_limits_for_user(session, owner)).doc_retention_hours
-            _refresh_expiration(document, retention_by_user[document.user_id])
+                    return
+                retention_hours = (await _document_limits_for_user(session, owner)).doc_retention_hours
+            _refresh_expiration(document, retention_hours)
         document.last_used_in_search = now
         session.add(document)
     await session.commit()

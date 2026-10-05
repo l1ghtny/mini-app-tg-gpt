@@ -13,7 +13,7 @@ Implement Q06, Q09, Q07 and focused M09, run the built-in `codex review`, then m
 - Document original-name, account-scoped usage context, library controls and lifecycle implemented.
 - 39 expanded backend tests passed; 9 final library/retention tests passed after review fixes. Migration upgrade/downgrade and single head passed.
 - Frontend: 560 tests and production build passed. Rendered EN/RU mobile and desktop checks passed. Pre-existing LazySyntaxHighlighter TypeScript error remains.
-- First built-in backend review completed. Fixed upload response/background lock deadlock, failed-deletion queue starvation, and manual retry disabled by the retention kill switch. Frontend review running; final backend rereview and deployment pending.
+- First built-in backend review completed. Fixed upload response/background lock deadlock, failed-deletion queue starvation, and manual retry disabled by the retention kill switch. Frontend rereview left only a time-dependent fixture, fixed with a frozen clock. Backend rereview found mutable attachment renewal; fixed using the admitted request tools’ store IDs. Sixty focused document/provider/event checks passed; final review and deployment pending.
 
 ## Next steps
 Complete checks and Codex review; fix findings, create/attach PRs, merge and validate both CI/CD releases including grace job, cleanup schedule and authenticated behavior. Publish the grouped bilingual notice only after the corresponding production frontend is available. Then implement M02/M03 and Q16.

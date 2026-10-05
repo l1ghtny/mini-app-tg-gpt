@@ -25,3 +25,5 @@ Validation: 39 expanded backend checks passed before the final locking fix; all 
 The bounded production cleanup job also grants one-time grace to unmarked files left by old pods during rollout. This closes the interval between the initial grace job and completion of production/beta deployment without ever expiring an unmarked file.
 
 Built-in backend review fixes: response reads do not retain mutation locks while FastAPI runs background ingestion; failed deletion advances the retry timestamp to prevent queue starvation; explicit deletion retries keep running if automatic expiry is disabled. Nine final lifecycle/library regressions pass, and the full frontend run now passes all 560 tests.
+
+Search renewal uses the admitted request tools’ immutable store set, not current chat attachments. Ownership and deletion state are rechecked under the row lock, and a valid in-flight search may renew a file that expires during the reply. Failed/incomplete OpenAI search items do not emit successful-use events. No frontend stream-contract change is needed. Sixty focused document/provider/event regressions passed after this review fix.

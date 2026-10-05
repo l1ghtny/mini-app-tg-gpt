@@ -66,19 +66,19 @@ async def test_expired_files_cannot_be_attached_searched_or_pinned_but_pinned_fi
 
 
 @pytest.mark.asyncio
-async def test_successful_search_renews_retention_without_reviving_expired_files(monkeypatch):
+async def test_successful_search_renews_only_captured_stores(monkeypatch):
     monkeypatch.setattr(settings, "DOCUMENT_RETENTION_ENFORCED", True)
     monkeypatch.setattr(documents, "_document_limits_for_user", AsyncMock(return_value=SimpleNamespace(doc_retention_hours=120)))
     now = documents._utcnow_naive()
     async with AsyncSession(engine, expire_on_commit=False) as session:
         user = AppUser(telegram_id=321003); session.add(user); await session.flush()
         conversation = Conversation(user_id=user.id)
-        file = UserDocument(user_id=user.id, filename="Active.txt", status="ready", expires_at=now+timedelta(hours=1), retention_migrated_at=now)
+        file = UserDocument(user_id=user.id, filename="Active.txt", status="ready", openai_vector_store_id="vs-active", expires_at=now+timedelta(hours=1), retention_migrated_at=now)
         expired = UserDocument(user_id=user.id, filename="Expired.txt", status="ready", expires_at=now-timedelta(hours=1), retention_migrated_at=now)
         session.add_all([conversation, file, expired]); await session.flush()
         session.add_all([ConversationDocument(conversation_id=conversation.id, document_id=doc.id) for doc in [file, expired]])
         await session.commit()
-        await documents.touch_conversation_documents_last_used_in_search(session, conversation.id)
+        await documents.touch_documents_last_used_in_search(session, user_id=user.id, vector_store_ids=["vs-active"])
         await session.refresh(file); await session.refresh(expired)
         assert file.expires_at >= now+timedelta(hours=120)
         assert file.last_used_in_search is not None
@@ -205,3 +205,35 @@ async def test_failed_manual_deletions_rotate_without_retention_enforcement(monk
         assert older.updated_at > first_retry
         await session.refresh(expired)
         assert expired.status == "ready" and expired.deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_search_renews_its_captured_files_after_detachment_and_mid_request_expiry(monkeypatch):
+    monkeypatch.setattr(settings, "DOCUMENT_RETENTION_ENFORCED", True)
+    monkeypatch.setattr(documents, "_document_limits_for_user", AsyncMock(return_value=SimpleNamespace(doc_retention_hours=120)))
+    admitted_at = documents._utcnow_naive()
+    finished_at = admitted_at + timedelta(seconds=45)
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=321008)
+        other = AppUser(telegram_id=321009)
+        session.add_all([user, other])
+        await session.flush()
+        conversation = Conversation(user_id=user.id)
+        searched = UserDocument(user_id=user.id, filename="Searched.txt", status="ready", openai_vector_store_id="vs-searched", expires_at=admitted_at+timedelta(seconds=30), retention_migrated_at=admitted_at)
+        replacement = UserDocument(user_id=user.id, filename="Replacement.txt", status="ready", openai_vector_store_id="vs-replacement", expires_at=admitted_at+timedelta(hours=1), retention_migrated_at=admitted_at)
+        foreign = UserDocument(user_id=other.id, filename="Foreign.txt", status="ready", openai_vector_store_id="vs-foreign", expires_at=admitted_at+timedelta(hours=1), retention_migrated_at=admitted_at)
+        queued = UserDocument(user_id=user.id, filename="Deleted.txt", status="delete_queued", openai_vector_store_id="vs-deleted", expires_at=admitted_at+timedelta(hours=1), retention_migrated_at=admitted_at)
+        session.add_all([conversation, searched, replacement, foreign, queued])
+        await session.flush()
+        # Selection has changed after admission: A is detached and B attached.
+        session.add(ConversationDocument(conversation_id=conversation.id, document_id=replacement.id))
+        await session.commit()
+        replacement_expiry = replacement.expires_at
+        monkeypatch.setattr(documents, "_utcnow_naive", lambda: finished_at)
+        await documents.touch_documents_last_used_in_search(session, user_id=user.id, vector_store_ids=["vs-searched", "vs-foreign", "vs-deleted"])
+        for file in [searched, replacement, foreign, queued]:
+            await session.refresh(file)
+        assert searched.last_used_in_search == finished_at
+        assert searched.expires_at == finished_at+timedelta(hours=120)
+        assert replacement.last_used_in_search is None and replacement.expires_at == replacement_expiry
+        assert foreign.last_used_in_search is None and queued.last_used_in_search is None
