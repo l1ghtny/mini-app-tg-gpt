@@ -167,6 +167,7 @@ class ChatRun:
         self.recovered = False
         self.final_phase = False
         self.executed_tools = {}
+        self.image_delivered = False
         self.owner = None
         self.protected = 0
         self.state = {}
@@ -497,12 +498,16 @@ async def openai_turn(
             ) for x in output
         )
         if empty_answer and complete.status == "completed":
-            usage["failure_reason"] = "empty_answer"
+            usage["failure_reason"] = "refusal" if any(
+                c.get("type") == "refusal" and c.get("refusal", "").strip()
+                for x in output if x.get("type") == "message"
+                for c in x.get("content", [])
+            ) else "empty_answer"
         await run.finish(
             attempt, model, usage, complete.id, success=complete.status == "completed" and not empty_answer
         )
         if complete.status == "completed" and empty_answer:
-            raise ProviderResponseError(status="incomplete", reason="empty_answer")
+            raise ProviderResponseError(status="incomplete", reason=usage["failure_reason"])
         if complete.status != "completed":
             raise ProviderResponseError(
                 status=complete.status, reason=reason or "unknown",
@@ -1057,6 +1062,8 @@ async def stream_shared_response(
                             result_text = event["result"]
                         else:
                             yield event
+                            if event["type"] == "image.ready":
+                                run.image_delivered = True
                     if run.plan:
                         run.executed_tools[key] = result_text
             if is_claude:
@@ -1087,6 +1094,11 @@ async def funded_turn(fn, run, history, model, system, tools, required, effort, 
         async for event in fn(run, history, model, system, tools, required, effort, index):
             yield event
     except ProviderResponseError as exc:
+        if (run.plan and getattr(run, "image_delivered", False) and not required
+                and not exc.has_tool_output and exc.status == "incomplete"
+                and exc.reason == "empty_answer"):
+            yield {"type": "turn.result", "output": [], "calls": []}
+            return
         if (not run.plan or run.recovered or required or exc.has_tool_output
                 or exc.status != "incomplete" or exc.reason not in {"max_tokens", "max_output_tokens"}):
             raise
