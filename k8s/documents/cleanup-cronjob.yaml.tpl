@@ -4,6 +4,7 @@ metadata:
   name: cleanup-documents
 spec:
   schedule: "17 * * * *"
+  suspend: false
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 1
