@@ -33,6 +33,8 @@ _normalize_proxy_env_aliases()
 
 
 class Settings:
+    # Legacy files remain available until their one-time grace marker is set.
+    DOCUMENT_RETENTION_ENFORCED = os.getenv("DOCUMENT_RETENTION_ENFORCED", "true").lower() in ("true", "1")
     # Owner reporting uses normal authenticated identities; empty lists deny all.
     ADMIN_DASHBOARD_USER_IDS = frozenset(value.strip().lower() for value in os.getenv("ADMIN_DASHBOARD_USER_IDS", "").split(",") if value.strip())
     ADMIN_DASHBOARD_TELEGRAM_IDS = frozenset(value.strip() for value in os.getenv("ADMIN_DASHBOARD_TELEGRAM_IDS", "").split(",") if value.strip().isdecimal())
