@@ -288,3 +288,29 @@ async def test_cleanup_commits_timeout_and_continues_to_next_file(monkeypatch):
         assert older.updated_at >= now
         assert newer.status == "deleted"
         assert delete.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_private_source_queued_until_original_is_removed(monkeypatch):
+    monkeypatch.setattr(settings, "DOCUMENT_RETENTION_ENFORCED", True)
+    remove = AsyncMock(side_effect=[RuntimeError("private storage unavailable"), None])
+    monkeypatch.setattr(documents, "delete_document_source", remove)
+    now = documents._utcnow_naive()
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        user = AppUser(telegram_id=321012)
+        session.add(user)
+        await session.flush()
+        file = UserDocument(user_id=user.id, filename="Work.csv", status="ready", expires_at=now-timedelta(days=2), retention_migrated_at=now, source_bucket="private-documents", source_storage_key="documents/test/source.csv", source_storage_status="stored")
+        session.add(file)
+        await session.commit()
+        await cleanup()
+        await session.refresh(file)
+        assert file.status == "delete_queued" and file.deleted_at is None
+        assert file.source_storage_status == "stored"
+        assert (await documents.get_document_capabilities(session, user)).active_doc_count == 1
+        await cleanup()
+        await session.refresh(file)
+        assert file.status == "deleted" and file.source_storage_status == "deleted"
+        assert (await documents.get_document_capabilities(session, user)).active_doc_count == 0
+        assert remove.await_count == 2
+        remove.assert_awaited_with(bucket="private-documents", key="documents/test/source.csv")

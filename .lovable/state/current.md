@@ -15,6 +15,10 @@ Implement Q06, Q09, Q07 and focused M09, run the built-in `codex review`, then m
 - Frontend: 560 tests and production build passed. Rendered EN/RU mobile and desktop checks passed. Pre-existing LazySyntaxHighlighter TypeScript error remains.
 - First built-in backend review completed. Fixed upload response/background lock deadlock, failed-deletion queue starvation, and manual retry disabled by the retention kill switch. Frontend rereview left only a time-dependent fixture, fixed with a frozen clock. Backend rereview found mutable attachment renewal; fixed using the admitted request tools’ store IDs. Sixty focused document/provider/event checks passed. Final review found legacy generations could outlive the cleanup drain and supplier timeouts could starve retries; now cleanup uses the shared chat lifetime plus grace, and per-file deletion has a 15-second deadline. Twelve final retention/library regressions passed. Final rereview and deployment pending.
 
+## Release checkpoint
+
+PRs backend #24 and frontend #29 merged after clean final built-in reviews. Production flow 9902/#123 completed all four children on backend 94f592a / frontend cb08712; both rollouts healthy and authenticated file/account UI verified. Beta integration preserved Work; 604 frontend tests/build and 18 document/source tests passed. Beta flow 9907/#230 completed all four children. Shared grace migrated 22 files once. Found 12 live private originals: source-aware cleanup PR #25 passed built-in review and 16 direct PostgreSQL/storage regressions, with the scheduler suspended until that correction is deployed. Backend follow-up 2.3.1; frontend 2.3.0. Notice migration 66 was prepared after actual production UI proof; eight announcement regressions and one head passed, final notice review pending. Phase-two implementation has not begun.
+
 ## Next steps
 Complete checks and Codex review; fix findings, create/attach PRs, merge and validate both CI/CD releases including grace job, cleanup schedule and authenticated behavior. Publish the grouped bilingual notice only after the corresponding production frontend is available. Then implement M02/M03 and Q16.
 
