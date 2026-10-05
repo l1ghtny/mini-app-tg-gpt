@@ -27,14 +27,24 @@ class DocumentProviderArtifactResponse(BaseModel):
     indexed_at: Optional[datetime] = None
 
 
+class DocumentUsageLocation(BaseModel):
+    kind: Literal["chat", "project"]
+    id: uuid.UUID
+    title: str
+
+
 class UserDocumentResponse(BaseModel):
     id: uuid.UUID
     filename: str
+    original_filename: Optional[str] = None
+    used_in: list[DocumentUsageLocation] = []
     mime_type: Optional[str] = None
     size_bytes: int
     usage_bytes: int
     status: DocumentStatus
     is_pinned: bool
+    retention_state: Literal["active", "pinned", "overdue", "expired"] = "active"
+    retention_enforced: bool = False
     last_used_in_search: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     created_at: datetime
@@ -66,6 +76,7 @@ class DocumentCapabilitiesResponse(BaseModel):
     remaining_storage_bytes: int
     max_file_size_bytes: int
     doc_retention_hours: int
+    retention_refreshes_on_search: bool = False
 
 
 class ConversationDocumentsUpdateRequest(BaseModel):

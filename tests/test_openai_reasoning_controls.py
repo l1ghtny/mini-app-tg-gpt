@@ -352,3 +352,13 @@ async def test_openai_final_answer_still_streams_after_commentary():
     assert combined[0] == {"type": "part.start", "index": 0, "content_type": "text"}
     assert {"type": "text.delta", "index": 0, "text": "The setup is strong."} in combined
     assert {"type": "text.done", "index": 0} in combined
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,used", [("completed", True), ("incomplete", False), ("failed", False)])
+async def test_only_successful_file_search_emits_retention_usage(status, used):
+    events = await openai_service._map_openai_event(
+        event=SimpleNamespace(type="response.output_item.done", item=SimpleNamespace(type="file_search_call", status=status)),
+        state=openai_service.StreamState(), usage=openai_service.UsageTracker(),
+    )
+    assert any(event.get("type") == "file_search.used" for event in events) is used

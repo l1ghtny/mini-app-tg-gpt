@@ -1121,6 +1121,8 @@ class UserDocument(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
     filename: str
+    original_filename: Optional[str] = Field(default=None)
+    retention_migrated_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime, index=True))
     mime_type: Optional[str] = Field(default=None)
     size_bytes: int = Field(
         default=0, sa_column=Column(BigInteger, nullable=False, default=0)

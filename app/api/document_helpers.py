@@ -4,14 +4,15 @@ import os
 import re
 import tempfile
 import uuid
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import BackgroundTasks, HTTPException, UploadFile
-from openai import AsyncOpenAI
-from sqlalchemy import case
+from openai import AsyncOpenAI, NotFoundError
+from sqlalchemy import case, or_
 from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -21,6 +22,8 @@ from app.core.metrics import track_event
 from app.db.database import engine
 from app.db.models import (
     AppUser,
+    ChatFolder,
+    ChatFolderDocument,
     Conversation,
     ConversationDocument,
     DocumentProvider,
@@ -42,6 +45,7 @@ from app.schemas.documents import (
     ConversationDocumentsUpdateResponse,
     DocumentCapabilitiesResponse,
     DocumentSourceDownloadResponse,
+    DocumentUsageLocation,
     DocumentProviderArtifactResponse,
     DocumentsListResponse,
     UserDocumentResponse,
@@ -317,6 +321,8 @@ def _artifact_response(artifact: DocumentProviderArtifact) -> DocumentProviderAr
 
 
 def _sync_document_from_artifacts(document: UserDocument) -> None:
+    if document.deleted_at is not None or document.status in {DOCUMENT_STATUS_DELETE_QUEUED, DOCUMENT_STATUS_DELETED}:
+        return
     artifacts = _active_provider_artifacts(document)
     if not artifacts:
         return
@@ -373,6 +379,29 @@ def _document_primary_provider(document: UserDocument, preferred_provider: str |
     return DOCUMENT_PROVIDER_OPENAI
 
 
+def _document_expired(document: UserDocument, *, now: datetime | None = None) -> bool:
+    return bool(not document.is_pinned and document.expires_at is not None and document.expires_at <= (now or _utcnow_naive()))
+
+
+def _document_retention_enforced(document: UserDocument) -> bool:
+    return settings.DOCUMENT_RETENTION_ENFORCED and document.retention_migrated_at is not None
+
+
+def _document_retention_state(document: UserDocument) -> str:
+    if document.is_pinned:
+        return "pinned"
+    if _document_expired(document):
+        return "expired" if _document_retention_enforced(document) else "overdue"
+    return "active"
+
+
+def _document_available_predicates():
+    predicates = [UserDocument.deleted_at.is_(None), UserDocument.status.not_in((DOCUMENT_STATUS_DELETE_QUEUED, DOCUMENT_STATUS_DELETED))]
+    if settings.DOCUMENT_RETENTION_ENFORCED:
+        predicates.append(or_(UserDocument.retention_migrated_at.is_(None), UserDocument.is_pinned.is_(True), UserDocument.expires_at.is_(None), UserDocument.expires_at > _utcnow_naive()))
+    return predicates
+
+
 def _document_to_response(
     document: UserDocument,
     *,
@@ -383,11 +412,14 @@ def _document_to_response(
     return UserDocumentResponse(
         id=document.id,
         filename=document.filename,
+        original_filename=document.original_filename,
         mime_type=document.mime_type,
         size_bytes=int(document.size_bytes or 0),
         usage_bytes=int(document.usage_bytes or 0),
         status=document.status,  # type: ignore[arg-type]
         is_pinned=bool(document.is_pinned),
+        retention_state=_document_retention_state(document),
+        retention_enforced=_document_retention_enforced(document),
         last_used_in_search=document.last_used_in_search,
         expires_at=document.expires_at,
         created_at=document.created_at,
@@ -463,18 +495,39 @@ async def get_document_capabilities(
         remaining_storage_bytes=max(0, limits.max_storage_bytes - int(used_storage)),
         max_file_size_bytes=min(limits.max_file_size_bytes, _OPENAI_FILE_LIMIT_BYTES),
         doc_retention_hours=limits.doc_retention_hours,
+        retention_refreshes_on_search=settings.DOCUMENT_RETENTION_ENFORCED,
     )
 
 
 async def list_documents(session: AsyncSession, user: AppUser) -> DocumentsListResponse:
     preferred_provider, _, _ = _resolve_document_provider(user=user, strict=False)
     documents = (await session.exec(_active_documents_query(user.id))).all()
-    return DocumentsListResponse(
-        documents=[
-            _document_to_response(doc, preferred_provider=preferred_provider)
-            for doc in documents
-        ]
-    )
+    locations: dict[uuid.UUID, list[DocumentUsageLocation]] = {}
+    document_ids = [doc.id for doc in documents]
+    if document_ids:
+        # Batch by account, with ownership checks on both sides of each relationship.
+        chats = (await session.exec(
+            select(ConversationDocument.document_id, Conversation.id, Conversation.title)
+            .join(Conversation, Conversation.id == ConversationDocument.conversation_id)
+            .where(ConversationDocument.document_id.in_(document_ids), Conversation.user_id == user.id)
+            .order_by(Conversation.title, Conversation.id)
+        )).all()
+        projects = (await session.exec(
+            select(ChatFolderDocument.document_id, ChatFolder.id, ChatFolder.name)
+            .join(ChatFolder, ChatFolder.id == ChatFolderDocument.folder_id)
+            .where(ChatFolderDocument.document_id.in_(document_ids), ChatFolder.user_id == user.id)
+            .order_by(ChatFolder.name, ChatFolder.id)
+        )).all()
+        for kind, rows in (("chat", chats), ("project", projects)):
+            for document_id, location_id, title in rows:
+                locations.setdefault(document_id, []).append(DocumentUsageLocation(kind=kind, id=location_id, title=title or ""))
+    responses = []
+    for doc in documents:
+        response = _document_to_response(doc, preferred_provider=preferred_provider)
+        response.used_in = locations.get(doc.id, [])
+        responses.append(response)
+    return DocumentsListResponse(documents=responses)
+
 
 
 async def get_document_source_download(
@@ -682,18 +735,21 @@ async def _load_document_for_user(
     *,
     user_id: uuid.UUID,
     document_id: uuid.UUID,
+    for_update: bool = False,
 ) -> UserDocument | None:
-    return (
-        await session.exec(
-            select(UserDocument)
-            .where(
-                UserDocument.id == document_id,
-                UserDocument.user_id == user_id,
-                UserDocument.deleted_at.is_(None),
-            )
-            .options(selectinload(UserDocument.provider_artifacts))
+    query = (
+        select(UserDocument)
+        .where(
+            UserDocument.id == document_id,
+            UserDocument.user_id == user_id,
+            UserDocument.deleted_at.is_(None),
         )
-    ).first()
+        .options(selectinload(UserDocument.provider_artifacts))
+        .execution_options(populate_existing=True)
+    )
+    if for_update:
+        query = query.with_for_update()
+    return (await session.exec(query)).first()
 
 
 def _ensure_artifact(document: UserDocument, provider: str) -> DocumentProviderArtifact:
@@ -787,6 +843,8 @@ async def upload_document(
     document = UserDocument(
         user_id=user.id,
         filename=filename,
+        original_filename=Path(original_filename.replace("\\", "/")).name[:255],
+        retention_migrated_at=_utcnow_naive(),
         mime_type=upload.content_type,
         size_bytes=size_bytes,
         usage_bytes=size_bytes,
@@ -915,9 +973,10 @@ async def _ingest_document_background(
                     select(UserDocument)
                     .where(UserDocument.id == document_id)
                     .options(selectinload(UserDocument.provider_artifacts))
+                    .with_for_update()
                 )
             ).first()
-            if not document:
+            if not document or document.deleted_at is not None or document.status == DOCUMENT_STATUS_DELETE_QUEUED:
                 return
 
             if tmp_path is None:
@@ -945,6 +1004,17 @@ async def _ingest_document_background(
             session.add(document)
             await session.commit()
 
+            # Serialize ingestion with deletion so remote IDs cannot be orphaned or
+            # a completed deletion overwritten by an in-flight provider upload.
+            current_status = (
+                await session.exec(
+                    select(UserDocument.status)
+                    .where(UserDocument.id == document_id)
+                    .with_for_update()
+                )
+            ).first()
+            if current_status in {DOCUMENT_STATUS_DELETE_QUEUED, DOCUMENT_STATUS_DELETED}:
+                return
             for provider in artifact_providers:
                 artifact = _ensure_artifact(document, provider)
                 try:
@@ -975,10 +1045,21 @@ async def delete_document(
     document_id: uuid.UUID,
     background_tasks: BackgroundTasks,
 ) -> None:
-    document = await _load_document_for_user(session, user_id=user.id, document_id=document_id)
+    document = await _load_document_for_user(session, user_id=user.id, document_id=document_id, for_update=True)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    await _queue_document_deletion(session, document)
+
+    await session.commit()
+    background_tasks.add_task(_delete_document_background, document.id)
+
+
+async def _queue_document_deletion(session: AsyncSession, document: UserDocument) -> None:
+    if not document.provider_artifacts:
+        legacy = _legacy_openai_artifact(document)
+        if legacy is not None:
+            document.provider_artifacts.append(legacy)
     document.status = DOCUMENT_STATUS_DELETE_QUEUED
     for artifact in document.provider_artifacts:
         if artifact.deleted_at is None and artifact.status != DocumentProviderArtifactStatus.deleted.value:
@@ -994,8 +1075,28 @@ async def delete_document(
     for link in links:
         await session.delete(link)
 
-    await session.commit()
-    background_tasks.add_task(_delete_document_background, document.id)
+    project_links = (await session.exec(select(ChatFolderDocument).where(ChatFolderDocument.document_id == document.id))).all()
+    for link in project_links:
+        await session.delete(link)
+
+
+
+async def _delete_provider_index(index_id: str) -> None:
+    try:
+        await _openai_client.vector_stores.delete(vector_store_id=index_id)
+    except NotFoundError:
+        pass
+
+
+async def _delete_provider_file(file_id: str) -> None:
+    try:
+        await _openai_client.files.delete(file_id=file_id)
+    except NotFoundError:
+        pass
+
+
+# 50 cleanup records fit within the 1,200-second job deadline, including retries.
+DOCUMENT_DELETION_TIMEOUT_SECONDS = 15
 
 
 async def _delete_document_background(document_id: uuid.UUID) -> None:
@@ -1005,39 +1106,47 @@ async def _delete_document_background(document_id: uuid.UUID) -> None:
                 select(UserDocument)
                 .where(UserDocument.id == document_id)
                 .options(selectinload(UserDocument.provider_artifacts))
+                .with_for_update(skip_locked=True)
             )
         ).first()
-        if not document or document.deleted_at is not None:
+        if not document or document.deleted_at is not None or document.status != DOCUMENT_STATUS_DELETE_QUEUED:
             return
 
         try:
-            for artifact in document.provider_artifacts:
-                if artifact.deleted_at is not None or artifact.status == DocumentProviderArtifactStatus.deleted.value:
-                    continue
-                if artifact.provider == DOCUMENT_PROVIDER_OPENAI:
-                    if artifact.external_index_id:
-                        await _openai_client.vector_stores.delete(vector_store_id=artifact.external_index_id)
-                    if artifact.external_file_id:
-                        await _openai_client.files.delete(file_id=artifact.external_file_id)
-                artifact.status = DocumentProviderArtifactStatus.deleted.value
-                artifact.deleted_at = _utcnow_naive()
-                artifact.external_file_id = None
-                artifact.external_index_id = None
-                session.add(artifact)
-            if (
-                document.source_storage_status != _SOURCE_STORAGE_STATUS_DELETED
-                and document.source_bucket
-                and document.source_storage_key
-            ):
-                await delete_document_source(
-                    bucket=document.source_bucket,
-                    key=document.source_storage_key,
-                )
-                document.source_storage_status = _SOURCE_STORAGE_STATUS_DELETED
+            async with asyncio.timeout(DOCUMENT_DELETION_TIMEOUT_SECONDS):
+                for artifact in document.provider_artifacts:
+                    if artifact.deleted_at is not None or artifact.status == DocumentProviderArtifactStatus.deleted.value:
+                        continue
+                    if artifact.provider == DOCUMENT_PROVIDER_OPENAI:
+                        if artifact.external_index_id:
+                            await _delete_provider_index(artifact.external_index_id)
+                        if artifact.external_file_id:
+                            await _delete_provider_file(artifact.external_file_id)
+                    artifact.status = DocumentProviderArtifactStatus.deleted.value
+                    artifact.deleted_at = _utcnow_naive()
+                    artifact.external_file_id = None
+                    artifact.external_index_id = None
+                    session.add(artifact)
+                if (
+                    document.source_storage_status != _SOURCE_STORAGE_STATUS_DELETED
+                    and document.source_bucket
+                    and document.source_storage_key
+                ):
+                    await delete_document_source(
+                        bucket=document.source_bucket,
+                        key=document.source_storage_key,
+                    )
+                    document.source_storage_status = _SOURCE_STORAGE_STATUS_DELETED
+
         except Exception as exc:
-            document.status = DOCUMENT_STATUS_FAILED
+            logging.getLogger(__name__).warning(
+                "Document deletion queued for retry",
+                extra={"document_id": str(document.id), "error_type": type(exc).__name__},
+            )
+            document.updated_at = _utcnow_naive()
+            document.status = DOCUMENT_STATUS_DELETE_QUEUED
             document.error_code = "document_delete_failed"
-            document.error_message = str(exc)[:1000]
+            document.error_message = "File removal could not finish. It will be retried."
             session.add(document)
             await session.commit()
             return
@@ -1059,9 +1168,12 @@ async def set_document_pin_state(
     document_id: uuid.UUID,
     pin: bool,
 ) -> UserDocumentResponse:
-    document = await _load_document_for_user(session, user_id=user.id, document_id=document_id)
+    document = await _load_document_for_user(session, user_id=user.id, document_id=document_id, for_update=True)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    if document.status in {DOCUMENT_STATUS_DELETE_QUEUED, DOCUMENT_STATUS_DELETED} or (_document_retention_enforced(document) and _document_expired(document)):
+        raise HTTPException(status_code=409, detail={"error": "document_expired_or_deleting"})
 
     capabilities = await get_document_capabilities(session, user)
     if pin and capabilities.max_pinned_docs <= 0:
@@ -1084,6 +1196,10 @@ async def set_document_pin_state(
 
 
 def _document_has_attachable_state(document: UserDocument, provider: str) -> bool:
+    if document.deleted_at is not None or document.status in {DOCUMENT_STATUS_DELETE_QUEUED, DOCUMENT_STATUS_DELETED}:
+        return False
+    if _document_retention_enforced(document) and _document_expired(document):
+        return False
     artifacts = _active_provider_artifacts(document)
     if not artifacts:
         return document.status in _ATTACHABLE_STATUSES
@@ -1133,6 +1249,9 @@ async def replace_conversation_documents(
                     UserDocument.deleted_at.is_(None),
                 )
                 .options(selectinload(UserDocument.provider_artifacts))
+                .order_by(UserDocument.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).all()
         found_ids = {doc.id for doc in docs if _document_has_attachable_state(doc, effective_provider)}
@@ -1253,7 +1372,7 @@ async def list_conversation_ready_vector_store_ids(
             .join(ConversationDocument, ConversationDocument.document_id == UserDocument.id)
             .where(
                 ConversationDocument.conversation_id == conversation_id,
-                UserDocument.deleted_at.is_(None),
+                *_document_available_predicates(),
                 DocumentProviderArtifact.deleted_at.is_(None),
                 DocumentProviderArtifact.provider == provider_for_search,
                 DocumentProviderArtifact.status == DocumentProviderArtifactStatus.ready.value,
@@ -1267,7 +1386,7 @@ async def list_conversation_ready_vector_store_ids(
             .join(ConversationDocument, ConversationDocument.document_id == UserDocument.id)
             .where(
                 ConversationDocument.conversation_id == conversation_id,
-                UserDocument.deleted_at.is_(None),
+                *_document_available_predicates(),
                 UserDocument.status == DOCUMENT_STATUS_READY,
                 UserDocument.openai_vector_store_id.is_not(None),
             )
@@ -1306,7 +1425,7 @@ async def count_conversation_pending_indexing_documents(
             .join(ConversationDocument, ConversationDocument.document_id == UserDocument.id)
             .where(
                 ConversationDocument.conversation_id == conversation_id,
-                UserDocument.deleted_at.is_(None),
+                *_document_available_predicates(),
             )
             .options(selectinload(UserDocument.provider_artifacts))
         )
@@ -1327,27 +1446,50 @@ async def count_conversation_pending_indexing_documents(
     return count
 
 
-async def touch_conversation_documents_last_used_in_search(
+async def touch_documents_last_used_in_search(
     session: AsyncSession,
-    conversation_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID,
+    vector_store_ids: list[str],
 ) -> None:
-    links = (
-        await session.exec(
-            select(ConversationDocument).where(ConversationDocument.conversation_id == conversation_id)
-        )
-    ).all()
-    if not links:
+    if not vector_store_ids:
         return
-
-    now = _utcnow_naive()
-    doc_ids = [link.document_id for link in links]
+    # Store IDs are captured by admission and carried by the successful search
+    # event. Current attachments may have changed while that request was running.
+    # An admitted search can finish just after expiry; never revive deleted or
+    # deletion-queued files, and never touch another account's records.
+    artifact_documents = select(DocumentProviderArtifact.document_id).where(
+        DocumentProviderArtifact.provider == DOCUMENT_PROVIDER_OPENAI,
+        DocumentProviderArtifact.external_index_id.in_(vector_store_ids),
+        DocumentProviderArtifact.deleted_at.is_(None),
+    )
     docs = (
         await session.exec(
-            select(UserDocument).where(UserDocument.id.in_(doc_ids), UserDocument.deleted_at.is_(None))
+            select(UserDocument)
+            .where(
+                UserDocument.user_id == user_id,
+                UserDocument.deleted_at.is_(None),
+                UserDocument.status.not_in((DOCUMENT_STATUS_DELETE_QUEUED, DOCUMENT_STATUS_DELETED)),
+                or_(
+                    UserDocument.id.in_(artifact_documents),
+                    UserDocument.openai_vector_store_id.in_(vector_store_ids),
+                ),
+            )
+            .order_by(UserDocument.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).all()
-
+    now = _utcnow_naive()
+    retention_hours: int | None = None
     for document in docs:
+        if settings.DOCUMENT_RETENTION_ENFORCED and not document.is_pinned:
+            if retention_hours is None:
+                owner = await session.get(AppUser, user_id)
+                if owner is None:
+                    return
+                retention_hours = (await _document_limits_for_user(session, owner)).doc_retention_hours
+            _refresh_expiration(document, retention_hours)
         document.last_used_in_search = now
         session.add(document)
     await session.commit()

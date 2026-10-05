@@ -9,6 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import AppUser, ChatFolder, ChatFolderDocument, Conversation, UserDocument
+from app.api.document_helpers import _document_available_predicates, _document_limits_for_user, _refresh_expiration
 from app.schemas.chat_folders import ChatFolderCreate, ChatFolderUpdate
 
 async def handle_create_folder(
@@ -197,20 +198,28 @@ async def _replace_folder_documents(
 ) -> None:
     normalized_ids = list(dict.fromkeys(document_ids))
     if normalized_ids:
-        owned_ids = set((await session.exec(
-            select(UserDocument.id).where(
+        documents = (await session.exec(
+            select(UserDocument).where(
                 UserDocument.id.in_(normalized_ids),
                 UserDocument.user_id == user_id,
-                UserDocument.deleted_at.is_(None),
+                *_document_available_predicates(),
                 UserDocument.status == "ready",
-            )
-        )).all())
+            ).order_by(UserDocument.id).with_for_update().execution_options(populate_existing=True)
+        )).all()
+        owned_ids = {document.id for document in documents}
         missing = [str(document_id) for document_id in normalized_ids if document_id not in owned_ids]
         if missing:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "project_documents_not_ready_or_not_owned", "document_ids": missing},
             )
+
+    if normalized_ids:
+        owner = await session.get(AppUser, user_id)
+        retention_hours = (await _document_limits_for_user(session, owner)).doc_retention_hours
+        for document in documents:
+            _refresh_expiration(document, retention_hours)
+            session.add(document)
 
     await session.exec(delete(ChatFolderDocument).where(ChatFolderDocument.folder_id == folder.id))
     for document_id in normalized_ids:
