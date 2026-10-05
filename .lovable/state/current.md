@@ -1,4 +1,17 @@
-# Current objective — 2026-10-05 UX readiness batch
+# Current objective — 2026-10-05 image completion hotfix
+
+Owner authorized production and beta fix/deployment for backend7Q/frontend5R.
+Implemented delivered-image acknowledgement and successful completion for an empty
+optional follow-up; explicit refusal and all genuine failure paths preserved.
+80 focused local PostgreSQL regressions, Ruff and diff checks passed.
+Backend2.3.1->2.3.2; frontend2.3.0 unchanged. What's New required; draft stays in
+docs/operations/2026-10-05-image-completion-release.md until production verification.
+Next: commit/PR, carry scoped patch into beta without changing Work/policy activation,
+deploy through TeamCity, verify image stream/persistence/settlement and runtime
+releases, then publish one shared notice and synchronize migration history to beta.
+No frontend source changes required; existing image/done contract retained.
+
+# Previous objective — 2026-10-05 UX readiness batch
 
 Implement Q06, Q09, Q07 and focused M09, run the built-in `codex review`, then merge/deploy to production and beta if clean. After that implement M02/M03 and Q16. Preserve beta Work and unrelated primary-checkout changes.
 
