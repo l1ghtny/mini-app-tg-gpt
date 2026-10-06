@@ -12,8 +12,8 @@ requests in the same chat can create a new version after the model reads the
 complete original source. Old clients and chats with tools disabled receive no
 document tools. XLSX, PPTX and a visual document editor are outside this scope.
 
-Text-writing tokens use the normal model allowance. Rendering and private
-storage are local operations with known zero supplier cost. Files are bounded
+Text-writing tokens use the normal model allowance. Rendering and file handling
+incur no AI-provider charge; hosting and private storage remain infrastructure costs. Files are bounded
 to 5 MB, structured source to 100 KB, and active storage to 40 files/20 MB per
 account. Unsupported PDF characters or oversized table cells return a limitation;
 the model must preserve the content and offer DOCX or a smaller document.
@@ -45,7 +45,10 @@ Schema 71 adds payment lifecycle fields and maps historical Basic to Start;
 schema 72 adds private chat results. No historical payment times/links are
 fabricated. Deploy the frontend first, then the backend/migrations with document
 generation disabled. Enable `CHAT_DOCUMENT_GENERATION_ENABLED` in the existing
-production/beta environment Secrets only after both binaries are available.
+production/beta environment Secrets only after both binaries are available and
+private storage is configured. Production references the same three dedicated
+private-storage Secret keys already used for audio and cleanup; no credentials
+are copied into source or broadened.
 Verify live create, revise, reload/replay, ownership and download bytes before
 publishing the announcement. Roll back by disabling the feature; retain schema
 and metadata so existing files remain downloadable until expiry.
@@ -53,8 +56,11 @@ and metadata so existing files remain downloadable until expiry.
 Backend version: deployed 2.4.1 -> 2.5.0, compatible capability plus payment fixes.
 Frontend version: deployed 2.4.0 -> 2.5.0, file results and pending refund states.
 What's New: required, grouped document capability and refund behavior. Draft below;
-no feed migration until production availability. Preserve beta Work and the shared
-migration history.
+schema73 stages the feed item inactive. The release operator activates only
+`2026-10-06-chat-documents`, setting publication/update times to the activation
+time, after live acceptance passes. Preserve beta Work and the shared migration
+history. Backend2.5.1 adds the missing production storage references; frontend
+stays2.5.0 for this configuration correction.
 
 ## Announcement draft
 

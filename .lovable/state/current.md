@@ -1,4 +1,32 @@
-# Current objective — 2026-10-06 document/payment release
+# Current objective — 2026-10-06 live document acceptance
+
+Backend PR31/33/34 and frontend PR31/32 are merged. Production flow10114/#132
+targets backend master db2244a (image132) and frontend c870cb57 (reused image130),
+both2.5.0. Shared database schema72 is already verified. Earlier flows130/131
+timed out during cold image pulls; migration131 later succeeded. Tested PR35
+extends migration waiting to1200s without changing app behavior (2 tests passed).
+Production132 is still running; document generation remains disabled until both
+components are live. Beta sync PR32/backend and PR33/frontend merged while
+preserving Work; beta flow10119/#236 is running. Beta Redis is healthy again.
+
+Prior shipped baseline: backend2.4.1/image129, frontend2.4.0/image128, schema70;
+beta235. Registry publishing retries recovered after one slow PUT timeout.
+All four cluster nodes are Ready; no forced disk failover or reboot performed.
+Website CI10113/#22 passed for d10ecb9. Its verified immutable digest b34d5e1f
+is being rolled out to lightnyai-website; noindex and checkout closure stay in place.
+
+Beta236 completed all four jobs. The production2.5.0 canary is on schema72;
+private document storage is absent there while beta has it configured. A focused
+backend2.5.1 correction adds three explicit Secret refs using the existing audio
+private storage credentials. Schema73 stages the grouped announcement inactive;
+the release operator must activate it only after acceptance. Manifest refs and
+hidden/idempotent/scoped-rollback migration test pass.
+
+Next: release the storage correction, verify production/beta jobs and runtime versions, enable document generation,
+then prove create/revise/private-download/reload in the live app before publishing
+What's New. Owner renewal/prices and Metrica/ad-budget answers remain pending.
+
+## Earlier document/payment checkpoint
 
 Usage/settings and notice are live on production/beta (production129, beta235).
 Payment foundations are integrated at a2e9a46. Document migration is72 after payment71;
