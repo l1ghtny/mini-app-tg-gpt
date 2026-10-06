@@ -1160,6 +1160,14 @@ class Payment(SQLModel, table=True):
         default=None, foreign_key="payment_methods.id", index=True
     )
     flow_kind: str = Field(default="purchase", index=True)
+    confirmation_applied: bool = False
+    confirmed_at: Optional[datetime] = None
+    subscription_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user_subscription.id", index=True)
+    subscription_period_start: Optional[datetime] = None
+    subscription_period_end: Optional[datetime] = None
+    refund_requested_at: Optional[datetime] = None
+    refunded_at: Optional[datetime] = None
+    refund_applied: bool = False
     renewal_failure_reason: Optional[str] = Field(default=None, index=True)
     bound_method_snapshot: Optional[dict] = Field(
         default=None, sa_column=Column(JSONB, nullable=True)

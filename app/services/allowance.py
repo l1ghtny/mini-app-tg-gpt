@@ -74,13 +74,19 @@ async def private_access(session, user_id, *, now=None):
                UserSubscription.started_at <= now,
                (UserSubscription.expires_at.is_(None)) | (UserSubscription.expires_at > now),
                SubscriptionTier.is_active.is_(True),
-               SubscriptionTier.name.in_(list(PRIVATE_PLANS)))
+               SubscriptionTier.name.in_(list(PRIVATE_PLANS)) | SubscriptionTier.allowance_plan_key.in_(("start", "plus", "premium", "max")))
     )).all()
     if not rows:
         if rollout_member:
             raise HTTPException(403, detail={"error": "private_allowance_inactive"})
         return None
-    tier, _ = max(rows, key=lambda pair: (PLANS[PRIVATE_PLANS[pair[0].name]]["multiple"], pair[0].name))
+    def plan_for(tier):
+        return tier.allowance_plan_key if tier.allowance_plan_key in {"start", "plus", "premium", "max"} else PRIVATE_PLANS[tier.name]
+    tier, paid_subscription = max(rows, key=lambda pair: (PLANS[plan_for(pair[0])]["multiple"], bool(pair[0].allowance_plan_key), pair[1].started_at if pair[0].allowance_plan_key else datetime.min, pair[0].name))
+    if tier.allowance_plan_key:
+        return PrivateAccess(plan=tier.allowance_plan_key, tier_name=tier.name,
+            started_at=paid_subscription.started_at, expires_at=paid_subscription.expires_at)
+    rows = [(t, s) for t, s in rows if not t.allowance_plan_key]
     # Capacity follows the highest tier; overlapping grants share one clock.
     expiry = (
         None

@@ -69,6 +69,14 @@ TERMINAL_FAILURE_REASONS = {
 }
 
 
+def _require_legacy_checkout_available(user):
+    from app.services import allowance
+    # Legacy reply-pack checkout cannot grant shared capacity. A closed public
+    # catalog must also stay closed at the API, before any bank operation.
+    if allowance.enabled(user.id):
+        raise HTTPException(409, detail={"error":"public_checkout_unavailable"})
+
+
 def _tier_slug(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
     return slug or "tier"
@@ -79,7 +87,9 @@ def _utcnow_naive() -> datetime:
 
 
 def _format_ts(dt: datetime | None) -> str | None:
-    return dt.isoformat(timespec="seconds") if dt else None
+    if dt is None:
+        return None
+    return (dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)).isoformat(timespec="seconds")
 
 
 def _serialize_method_snapshot(method: PaymentMethod) -> dict:
@@ -157,7 +167,7 @@ async def _first_purchase_available(session: AsyncSession, user_id: uuid.UUID) -
             Payment.user_id == user_id,
             Payment.product_type == PaymentProductType.subscription,
             Payment.amount > 0,
-            Payment.tbank_status == "CONFIRMED",
+            Payment.confirmation_applied.is_(True) | Payment.tbank_status.in_(("CONFIRMED", "REFUNDING", "REFUNDED", "PARTIAL_REFUNDED")),
         )
     )
     return existing_paid_subscription.first() is None
@@ -238,10 +248,10 @@ async def _get_current_paid_subscription(
 ) -> UserSubscription | None:
     now = _utcnow_naive()
     return (await session.exec(
-        select(UserSubscription).where(
+        select(UserSubscription).join(SubscriptionTier).where(
             UserSubscription.user_id == user_id,
+            SubscriptionTier.price_cents > 0,
             UserSubscription.status == SubscriptionStatus.active,
-            UserSubscription.auto_renew_enabled == True,  # noqa: E712
             (UserSubscription.expires_at.is_(None))
             | (UserSubscription.expires_at > now)
             | (
@@ -258,6 +268,7 @@ async def _get_subscription_payment_context(
     user_id: uuid.UUID,
     tier_name: str,
     started_at: datetime,
+    subscription_id: uuid.UUID,
 ) -> tuple[Payment | None, str | None]:
     refund_lookup_floor = started_at - timedelta(hours=REFUND_WINDOW_HOURS)
     payment = (await session.exec(
@@ -265,12 +276,13 @@ async def _get_subscription_payment_context(
             Payment.user_id == user_id,
             Payment.product_type == PaymentProductType.subscription,
             Payment.tier_name == tier_name,
+            (Payment.subscription_id == subscription_id) | Payment.subscription_id.is_(None),
             (
                 Payment.created_at >= refund_lookup_floor
             ) | (
                 Payment.updated_at >= refund_lookup_floor
             ),
-        ).order_by(Payment.created_at.desc())
+        ).order_by(Payment.created_at.desc()).with_for_update()
     )).first()
     if not payment:
         return None, "no_subscription_payment"
@@ -282,7 +294,7 @@ async def _get_subscription_payment_context(
 
 
 def _refund_deadline(payment: Payment) -> datetime:
-    return payment.created_at + timedelta(hours=REFUND_WINDOW_HOURS)
+    return (payment.confirmed_at or payment.created_at) + timedelta(hours=REFUND_WINDOW_HOURS)
 
 
 async def _apply_subscription_refund_effect(
@@ -292,13 +304,20 @@ async def _apply_subscription_refund_effect(
     subscription: UserSubscription,
 ) -> None:
     now = _utcnow_naive()
+    if payment.subscription_id is not None and payment.subscription_id != subscription.id:
+        raise ValueError("Refund does not belong to this subscription")
+    if payment.subscription_period_end and subscription.expires_at and subscription.expires_at > payment.subscription_period_end and payment.subscription_period_end <= now:
+        # A late refund of a finished month cannot remove later paid access.
+        return
     subscription.auto_renew_enabled = False
     subscription.renewal_grace_until = None
     subscription.last_renewal_failure_reason = None
     subscription.last_renewal_attempt_at = now
 
     if payment.flow_kind == "renewal" and subscription.expires_at:
-        reversed_expiry = subscription.expires_at - relativedelta(months=1)
+        # New payments carry the exact purchased interval. Calendar subtraction
+        # loses days around month ends and can reverse another renewal's period.
+        reversed_expiry = subscription.expires_at - (payment.subscription_period_end - payment.subscription_period_start) if payment.subscription_period_end and payment.subscription_period_start else subscription.expires_at - relativedelta(months=1)
         subscription.expires_at = reversed_expiry
         if reversed_expiry <= now:
             subscription.status = SubscriptionStatus.expired
@@ -314,7 +333,7 @@ async def _unset_default_payment_methods(session: AsyncSession, user_id: uuid.UU
     methods = (await session.exec(
         select(PaymentMethod).where(
             PaymentMethod.user_id == user_id,
-            PaymentMethod.is_default == True,
+            PaymentMethod.is_default.is_(True),
         )
     )).all()
     for method in methods:
@@ -434,6 +453,7 @@ async def init_subscription_binding(
     user: AppUser,
     payload: SubscriptionBindingInitRequest,
 ) -> SubscriptionBindingInitResponse:
+    _require_legacy_checkout_available(user)
     tier = await _get_subscription_tier(session, payload.tier_name)
     method_type = _binding_method_type(payload.method_type)
 
@@ -662,6 +682,14 @@ async def _create_subscription_payment(
         flow_kind=flow_kind,
         bound_method_snapshot=_serialize_method_snapshot(method),
     )
+    if flow_kind == "renewal":
+        subscription = (await session.exec(select(UserSubscription).where(
+            UserSubscription.user_id == user.id, UserSubscription.tier_id == tier.id,
+            UserSubscription.status == SubscriptionStatus.active,
+        ).order_by(UserSubscription.started_at.desc()))).first()
+        if not subscription:
+            raise HTTPException(409, detail={"error":"renewal_subscription_missing"})
+        payment.subscription_id = subscription.id
     session.add(payment)
     await session.commit()
     await session.refresh(payment)
@@ -721,6 +749,7 @@ async def charge_bound_subscription(
     user: AppUser,
     payload: BoundSubscriptionChargeRequest,
 ) -> BoundSubscriptionChargeResponse:
+    _require_legacy_checkout_available(user)
     tier = await _get_subscription_tier(session, payload.tier_name)
 
     if payload.binding_id:
@@ -845,6 +874,7 @@ async def get_current_subscription_refund_status(
         user_id=user.id,
         tier_name=tier.name,
         started_at=subscription.started_at,
+        subscription_id=subscription.id,
     )
     if not payment:
         return CurrentSubscriptionRefundStatusResponse(
@@ -863,7 +893,7 @@ async def get_current_subscription_refund_status(
             payment_id=str(payment.id),
             tier_name=tier.name,
             amount_cents=payment.amount,
-            purchased_at=_format_ts(payment.created_at),
+            purchased_at=_format_ts(payment.confirmed_at or payment.created_at),
             refund_deadline_at=_format_ts(deadline),
         )
 
@@ -874,7 +904,7 @@ async def get_current_subscription_refund_status(
         payment_id=str(payment.id),
         tier_name=tier.name,
         amount_cents=payment.amount,
-        purchased_at=_format_ts(payment.created_at),
+        purchased_at=_format_ts(payment.confirmed_at or payment.created_at),
         refund_deadline_at=_format_ts(deadline),
     )
 
@@ -883,6 +913,7 @@ async def refund_current_subscription(
     session: AsyncSession,
     user: AppUser,
 ) -> CurrentSubscriptionRefundResponse:
+    await session.exec(select(AppUser).where(AppUser.id == user.id).with_for_update())
     subscription = await _get_current_paid_subscription(session, user.id)
     if not subscription:
         raise HTTPException(status_code=409, detail={"error": "no_active_subscription"})
@@ -893,6 +924,7 @@ async def refund_current_subscription(
         user_id=user.id,
         tier_name=tier.name,
         started_at=subscription.started_at,
+        subscription_id=subscription.id,
     )
     if not payment:
         raise HTTPException(status_code=409, detail={"error": reason or "no_subscription_payment"})
@@ -904,29 +936,37 @@ async def refund_current_subscription(
         raise HTTPException(status_code=409, detail={"error": "missing_provider_payment_id"})
 
     try:
-        await tbank_service.cancel_payment(payment.tbank_payment_id, amount=payment.amount)
+        result = await tbank_service.cancel_payment(payment.tbank_payment_id, amount=payment.amount)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail={"error": "refund_failed", "message": str(exc).strip() or "refund_failed"},
         )
 
-    refunded_at = _utcnow_naive()
-    payment.tbank_status = "REFUNDED"
-    payment.updated_at = refunded_at
+    if not result.get("Success") or str(result.get("PaymentId")) != payment.tbank_payment_id or result.get("Status") not in {"REFUNDED", "REFUNDING"}:
+        raise HTTPException(502, detail={"error":"refund_unconfirmed"})
+    requested_at = _utcnow_naive()
+    payment.subscription_id = subscription.id
+    payment.confirmation_applied = True
+    payment.refund_requested_at = requested_at
+    payment.tbank_status = result["Status"]
+    payment.updated_at = requested_at
+    if result["Status"] == "REFUNDED":
+        payment.refunded_at = requested_at
     session.add(payment)
     await _apply_subscription_refund_effect(
         session,
         payment=payment,
         subscription=subscription,
     )
+    payment.refund_applied = True
     await session.commit()
 
     return CurrentSubscriptionRefundResponse(
         payment_id=str(payment.id),
         status=payment.tbank_status,
         subscription_status=subscription.status,
-        refunded_at=_format_ts(refunded_at) or refunded_at.isoformat(timespec="seconds"),
+        refunded_at=_format_ts(payment.refunded_at),
     )
 
 
@@ -945,6 +985,7 @@ async def init_usage_pack_payment(
     user,
     payload: InitUsagePackPaymentRequest,
 ) -> PaymentInitResponse:
+    _require_legacy_checkout_available(user)
     try:
         pack_id = uuid.UUID(payload.pack_id)
     except ValueError:
@@ -953,8 +994,8 @@ async def init_usage_pack_payment(
     pack = (await session.exec(
         select(UsagePack).where(
             UsagePack.id == pack_id,
-            UsagePack.is_active == True,
-            UsagePack.is_public == True,
+            UsagePack.is_active.is_(True),
+            UsagePack.is_public.is_(True),
         )
     )).first()
     if not pack:
@@ -1008,8 +1049,7 @@ async def _activate_or_renew_subscription(
 ) -> None:
     tier = (await session.exec(select(SubscriptionTier).where(SubscriptionTier.name == payment.tier_name))).first()
     if not tier:
-        logger.info("Tier %s not found during activation", payment.tier_name)
-        return
+        raise RuntimeError("Paid tier is missing; payment fulfillment must be retried")
 
     now = _utcnow_naive()
     if existing_subscription is None:
@@ -1022,8 +1062,14 @@ async def _activate_or_renew_subscription(
         )).first()
 
     if payment.flow_kind == "renewal" and existing_subscription is not None:
+        if existing_subscription.user_id != payment.user_id or existing_subscription.tier_id != tier.id:
+            raise ValueError("Renewal does not belong to this subscription tier")
         base_expiry = existing_subscription.expires_at if existing_subscription.expires_at and existing_subscription.expires_at > now else now
         existing_subscription.expires_at = base_expiry + relativedelta(months=1)
+        payment.subscription_id = existing_subscription.id
+        payment.subscription_period_start = base_expiry
+        payment.subscription_period_end = existing_subscription.expires_at
+        session.add(payment)
         existing_subscription.renewal_grace_until = None
         existing_subscription.last_renewal_failure_reason = None
         existing_subscription.last_renewal_attempt_at = now
@@ -1038,6 +1084,9 @@ async def _activate_or_renew_subscription(
         )
     )).all()
     for sub in active_subs:
+        existing_tier = await session.get(SubscriptionTier, sub.tier_id)
+        if tier.allowance_plan_key and existing_tier and not existing_tier.allowance_plan_key:
+            continue
         sub.status = SubscriptionStatus.cancelled
         session.add(sub)
 
@@ -1047,12 +1096,17 @@ async def _activate_or_renew_subscription(
         status=SubscriptionStatus.active,
         started_at=now,
         expires_at=now + relativedelta(months=1),
-        auto_renew_enabled=True,
+        auto_renew_enabled=bool(tier.is_recurring),
         renewal_grace_until=None,
         last_renewal_attempt_at=now,
         last_renewal_failure_reason=None,
     )
     session.add(new_sub)
+    await session.flush()
+    payment.subscription_id = new_sub.id
+    payment.subscription_period_start = new_sub.started_at
+    payment.subscription_period_end = new_sub.expires_at
+    session.add(payment)
 
 
 async def activate_usage_pack(session: AsyncSession, payment: Payment) -> None:
@@ -1079,12 +1133,14 @@ async def handle_tbank_webhook(
     data: dict,
 ) -> Response:
     if not tbank_service.verify_notification(data):
-        logger.error("Webhook signature verification failed. Data: %s", data)
+        logger.error("Payment webhook signature verification failed")
         return Response(content="OK", media_type="text/plain")
 
     order_id = data.get("OrderId")
     new_status = data.get("Status")
     success = data.get("Success", False)
+    if not isinstance(new_status, str) or not new_status or len(new_status) > 64:
+        return Response(content="OK", media_type="text/plain")
 
     if order_id:
         try:
@@ -1093,16 +1149,45 @@ async def handle_tbank_webhook(
             payment_uuid = None
         if payment_uuid:
             payment = (await session.exec(
-                select(Payment).where(Payment.id == payment_uuid).with_for_update()
+                select(Payment).where(Payment.id == payment_uuid)
             )).first()
             if payment:
-                if payment.tbank_status in FINAL_PAYMENT_STATES:
+                owner = (await session.exec(select(AppUser).where(AppUser.id == payment.user_id).with_for_update())).first()
+                payment = (await session.exec(select(Payment).where(Payment.id == payment_uuid).with_for_update().execution_options(populate_existing=True))).one()
+                provider_id = str(data.get("PaymentId", ""))
+                if not provider_id or (payment.tbank_payment_id and provider_id != payment.tbank_payment_id):
+                    logger.warning("Payment notification provider ID mismatch order=%s", payment.id)
                     return Response(content="OK", media_type="text/plain")
+                captured = payment.confirmation_applied or payment.tbank_status in {"CONFIRMED", "REFUNDING", "REFUNDED", "PARTIAL_REFUNDED"}
+                if new_status == "CONFIRMED":
+                    raw_amount = data.get("Amount")
+                    amount = int(raw_amount) if type(raw_amount) is int or (isinstance(raw_amount, str) and re.fullmatch(r"[0-9]{1,12}", raw_amount)) else None
+                    if captured or payment.tbank_status in {"REJECTED", "CANCELED"} or success is not True or amount != payment.amount:
+                        return Response(content="OK", media_type="text/plain")
+                    # Different order IDs for the same user must serialize grant
+                    # activation too, not just duplicates of one payment row.
+                    await session.exec(select(AppUser).where(AppUser.id == payment.user_id).with_for_update())
+                    payment.confirmation_applied = True
+                    payment.confirmed_at = _utcnow_naive()
+                elif new_status in {"REFUNDED", "REFUNDING", "PARTIAL_REFUNDED"}:
+                    if not captured or success is not True or payment.tbank_status == "REFUNDED":
+                        return Response(content="OK", media_type="text/plain")
+                    payment.confirmation_applied = True
+                    if new_status == "REFUNDED":
+                        payment.refunded_at = _utcnow_naive()
+                elif captured or payment.tbank_status in FINAL_PAYMENT_STATES:
+                    return Response(content="OK", media_type="text/plain")
+                payment.tbank_payment_id = provider_id
 
                 payment.tbank_status = new_status
                 payment.updated_at = _utcnow_naive()
                 payment.renewal_failure_reason = None
                 session.add(payment)
+                if new_status == "CONFIRMED" and owner and owner.deleted_at is not None:
+                    payment.renewal_failure_reason = "account_deleted"
+                    logger.error("Confirmed payment for deleted account requires refund reconciliation order=%s", payment.id)
+                    await session.commit()
+                    return Response(content="OK", media_type="text/plain")
 
                 if payment.payment_method_id:
                     method = await session.get(PaymentMethod, payment.payment_method_id)
@@ -1128,9 +1213,10 @@ async def handle_tbank_webhook(
                     else:
                         active_sub = None
                         if payment.flow_kind == "renewal":
-                            active_sub = (await session.exec(
+                            active_sub = await session.get(UserSubscription, payment.subscription_id) if payment.subscription_id else (await session.exec(
                                 select(UserSubscription).where(
                                     UserSubscription.user_id == payment.user_id,
+                                    UserSubscription.tier_id == select(SubscriptionTier.id).where(SubscriptionTier.name == payment.tier_name).scalar_subquery(),
                                     UserSubscription.status == SubscriptionStatus.active,
                                     UserSubscription.auto_renew_enabled == True,  # noqa: E712
                                 )
@@ -1161,24 +1247,22 @@ async def handle_tbank_webhook(
                     background_tasks.add_task(
                         track_value,
                         "revenue",
-                        float(payment.amount),
+                        float(payment.amount) / 100,
                         str(payment.user_id),
                         {"tier": payment.tier_name},
                         unit="rub",
                     )
                 elif new_status == "REFUNDED" and payment.product_type == PaymentProductType.subscription:
-                    active_sub = (await session.exec(
-                        select(UserSubscription).where(
-                            UserSubscription.user_id == payment.user_id,
-                            UserSubscription.status == SubscriptionStatus.active,
-                        ).order_by(UserSubscription.started_at.desc())
-                    )).first()
-                    if active_sub:
+                    active_sub = await session.get(UserSubscription, payment.subscription_id) if payment.subscription_id else None
+                    if active_sub and active_sub.user_id == payment.user_id and not payment.refund_applied:
                         await _apply_subscription_refund_effect(
                             session,
                             payment=payment,
                             subscription=active_sub,
                         )
+                        payment.refund_applied = True
+                    elif not payment.subscription_id:
+                        logger.warning("Refund requires reconciliation: legacy payment has no subscription link order=%s", payment.id)
 
                 await session.commit()
                 return Response(content="OK", media_type="text/plain")
