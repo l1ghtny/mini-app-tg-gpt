@@ -445,6 +445,27 @@ class Message(SQLModel, table=True):
     )
 
 
+class ChatDocument(SQLModel, table=True):
+    __tablename__ = "chat_document"
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    conversation_id: uuid.UUID = Field(index=True)
+    request_key: str = Field(unique=True)
+    filename: str
+    format: str
+    spec: dict = Field(sa_column=Column(JSONB, nullable=False))
+    parent_id: Optional[uuid.UUID] = Field(default=None)
+    version: int = 1
+    size_bytes: int = 0
+    bucket: str
+    key: str
+    status: str = "storing"
+    created_at: datetime = Field(default_factory=utcnow_naive)
+    expires_at: datetime = Field(sa_column=Column(DateTime, nullable=False, index=True))
+    cleanup_attempted_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
+
+
 class MessageActivityEvent(SQLModel, table=True):
     __tablename__ = "message_activity_event"
     __table_args__ = (

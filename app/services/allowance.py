@@ -411,6 +411,7 @@ async def snapshot(session, user_id):
             luna_remaining_percent=luna_percent,
         ) if trial else None),
         enabled=True,
+        document_generation_available=settings.CHAT_DOCUMENT_GENERATION_ENABLED,
         mode="trial" if trial else "shared" if str(user_id).lower() in settings.SHARED_ALLOWANCE_PRIVATE_USER_IDS else "beta",
         tier_name=access.tier_name if access else None,
         plan=a.plan,

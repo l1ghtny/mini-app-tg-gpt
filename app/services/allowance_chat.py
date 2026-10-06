@@ -29,7 +29,7 @@ def tool_names(choice):
         or choice is None
         or (isinstance(choice, list) and "auto" in choice)
     ):
-        return {"web_search", "file_search", "image_generation"}
+        return {"web_search", "file_search", "image_generation"} | ({"create_document", "read_document"} if settings.CHAT_DOCUMENT_GENERATION_ENABLED else set())
     if isinstance(choice, str):
         return {choice} if choice != "none" else set()
     return set(choice)
@@ -100,6 +100,8 @@ async def estimate(session, user, conversation, request, *, system_prompt=None, 
         history + [current], conversation
     )
     tools = tool_names(request.tool_choice)
+    if not getattr(request, "document_output_supported", False):
+        tools -= {"create_document", "read_document"}
     document_stores = []
     if "file_search" in tools:
         from app.api.document_helpers import list_conversation_ready_vector_store_ids
