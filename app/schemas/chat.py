@@ -146,6 +146,7 @@ class NewMessageRequest(BaseModel):
     estimate_reference: str | None = None
     spend_limit_units: int | None = Field(default=None, ge=0, le=100_000_000)
     response_length: Literal["auto", "long"] = "auto"
+    document_output_supported: bool = False
 
     client_request_id: str
     role: Literal["user"]

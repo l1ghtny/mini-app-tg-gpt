@@ -12,7 +12,7 @@ from sqlmodel import select
 from app.api import chat_helpers as chat
 from app.core.config import settings
 from app.db.allowance import ProviderAttempt
-from app.db.models import ChatFolder, Conversation, Message, MessageContent
+from app.db.models import ChatDocument, ChatFolder, Conversation, Message, MessageContent
 from app.schemas.chat import NewMessageRequest
 from app.services import allowance, allowance_chat, allowance_context, openai_service
 from app.services import shared_chat_provider as provider, allowance_tasks
@@ -29,13 +29,15 @@ from app.services.allowance_policy import (
 async def send_case(db, monkeypatch):
     engine, session, user = db
     async with engine.begin() as conn:
-        for model in (ChatFolder, Conversation, Message, MessageContent):
+        for model in (ChatFolder, Conversation, Message, MessageContent, ChatDocument):
             await conn.run_sync(lambda c, m=model: m.__table__.create(c))
     monkeypatch.setattr(settings, "SHARED_ALLOWANCE_GENERATION_V2_ENABLED", True)
     monkeypatch.setattr(provider, "engine", engine)
     from app.services import shared_chat_loop
 
     monkeypatch.setattr(shared_chat_loop, "engine", engine)
+    from app.services import chat_documents
+    monkeypatch.setattr(chat_documents, "engine", engine)
     monkeypatch.setattr(allowance_context, "engine", engine)
     for name in (
         "queue_message_reindex",
@@ -812,3 +814,56 @@ async def test_duplicate_planning_turns_are_bounded_without_extra_retrieval(
     )
     assert len(payloads) == 7 and payloads[-1]["tool_choice"] == "none"
     assert payloads[-1]["max_output_tokens"] == quote["max_output_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_generated_document_survives_empty_followup_and_is_persisted_before_sse(send_case, monkeypatch):
+    from app.api import helpers
+    from app.services import chat_documents
+    session, user, conversation, queued = send_case
+    monkeypatch.setattr(settings, "CHAT_DOCUMENT_GENERATION_ENABLED", True)
+    monkeypatch.setattr(chat_documents.storage, "get_private_documents_bucket", lambda: "synthetic-private")
+    upload = AsyncMock()
+    monkeypatch.setattr(chat_documents.storage, "upload_document_source", upload)
+    arguments = {"query":"Create a DOCX", "format":"docx", "parent_document_id":None,
+        "title":"План", "blocks":[{"kind":"paragraph", "text":"Последняя строка сохранена", "items":[], "rows":[]}]}
+    output = {"type":"function_call", "call_id":"doc-one", "name":"create_document", "arguments":json.dumps(arguments)}
+    payloads, _ = synthetic_client(monkeypatch, [output, answer("")])
+    request = NewMessageRequest(client_request_id="document-result", role="user", model=LUNA,
+        tool_choice="auto", document_output_supported=True, content=[{"type":"text", "value":"Create a DOCX"}])
+    _, args, events = await send_and_execute(session, user, conversation, queued, request)
+    document_event = next(event for event in events if event["type"] == "document.ready")
+    assert len(payloads) == 2 and upload.await_count == 1
+    assert any(tool.get("name") == "create_document" for tool in payloads[0]["tools"])
+    row = await allowance.request_row(session, user.id, request.client_request_id)
+    assert row.status == "complete"
+    assistant = (await session.exec(select(Message).where(Message.conversation_id == conversation.id, Message.role == "assistant"))).one()
+    published = []
+    async def publish(channel, event):
+        # A consumer reconnecting after the event sees the same durable part.
+        from sqlmodel.ext.asyncio.session import AsyncSession
+        async with AsyncSession(chat_documents.engine) as reader:
+            parts = (await reader.exec(select(MessageContent).where(MessageContent.message_id == assistant.id, MessageContent.type == "generated_document"))).all()
+            assert len(parts) == 1 and parts[0].data["id"] == event["document"]["id"]
+        published.append(event)
+    for _ in range(2):
+        await helpers._handle_stream_event(ev=document_event, assistant_message_id=assistant.id,
+            session=session, request_id=request.client_request_id, user_id=user.id, conversation_id=conversation.id,
+            tools=args["tools"], bus=SimpleNamespace(publish=publish), image_entitlement_tier_id=None,
+            image_entitlement_pack_id=None, buffers={}, last_ckpt={}, content_cache={}, partial_image_keys={},
+            lifecycle={"shared_allowance":True}, chain_context_fingerprint=None)
+    assert all(event["message_id"] == str(assistant.id) for event in published)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supported", [False, True])
+async def test_document_tools_require_client_capability_even_with_auto_tools(send_case, monkeypatch, supported):
+    session, user, conversation, queued = send_case
+    monkeypatch.setattr(settings, "CHAT_DOCUMENT_GENERATION_ENABLED", True)
+    payloads, _ = synthetic_client(monkeypatch, [answer("Hello")])
+    request = NewMessageRequest(client_request_id="capability-check", role="user", model=LUNA,
+        tool_choice="auto", document_output_supported=supported, content=[{"type":"text", "value":"Hello"}])
+    await send_and_execute(session, user, conversation, queued, request)
+    names = {tool.get("name") for tool in payloads[0]["tools"]}
+    assert ("create_document" in names) == supported
+    assert ("read_document" in names) == supported

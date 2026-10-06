@@ -1,5 +1,6 @@
 """Bounded retention cleanup with one-time legacy grace and idempotent retries."""
 import asyncio
+import logging
 import os
 import sys
 from datetime import timedelta
@@ -16,9 +17,18 @@ from app.db.models import UserDocument
 from sqlalchemy.orm import selectinload
 from jobs.migrate_document_retention import migrate_batch
 
+logger = logging.getLogger(__name__)
+
 
 async def main(batch_size: int = 50) -> None:
     batch_size = max(1, min(batch_size, 100))
+    from app.services.chat_documents import delete_chat_documents
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await delete_chat_documents(session, batch_size=batch_size)
+            await session.commit()
+    except Exception:
+        logger.exception("Generated document cleanup batch failed")
     eligible = UserDocument.status == "delete_queued"
     drain_seconds = max(
         (CHAT_GENERATION_LIFETIME + CHAT_CLEANUP_GRACE).total_seconds(),

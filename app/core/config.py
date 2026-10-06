@@ -318,4 +318,7 @@ class Settings:
     ).lower() in ("true", "1")
 
 
+    CHAT_DOCUMENT_GENERATION_ENABLED: bool = os.getenv("CHAT_DOCUMENT_GENERATION_ENABLED", "false").lower() in ("true", "1")
+
+
 settings = Settings()

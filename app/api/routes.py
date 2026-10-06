@@ -10,6 +10,7 @@ from app.api import chat_helpers
 from app.api import document_helpers
 from app.api.work_runs import work_runs
 from app.api.history_management import router as history_router
+from app.api.chat_documents import router as chat_documents_router
 from app.api.dependencies import get_bus, get_current_user, get_redis, rate_limit_check
 from app.db.models import AppUser, Conversation
 from app.db.database import get_read_session, get_session
@@ -42,6 +43,7 @@ router = APIRouter()
 router.include_router(work_runs)
 
 router.include_router(history_router)
+router.include_router(chat_documents_router)
 
 
 

@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # - libheif1 for HEIC -> PNG/JPEG via pillow-heif
 # - curl for healthchecks / debugging
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libheif1 ca-certificates curl ffmpeg && \
+    libheif1 ca-certificates curl ffmpeg fonts-dejavu-core && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
