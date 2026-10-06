@@ -4,6 +4,7 @@ import os
 import uuid
 import pytest
 import pytest_asyncio
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from app.services import allowance_chat as estimates
@@ -96,6 +97,8 @@ def estimate_case(monkeypatch):
         AsyncMock(
             return_value=SimpleNamespace(
                 plan="start",
+                period_start=datetime(2026, 10, 1),
+                period_end=datetime(2026, 11, 1),
                 granted=1250000,
                 spent=0,
                 reserved=0,

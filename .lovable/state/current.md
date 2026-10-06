@@ -1,3 +1,41 @@
+# Current objective — 2026-10-06 production usage reconciliation into beta
+
+Merged current production master into beta in isolation, preserving Work routes/worker/artifact contracts and beta access/Redis isolation. Target backend2.4.1/frontend2.4.0, shared schema70, same production notice history. No beta-only feed item or public payment enablement. 388 backend usage/allowance/retention/Work/artifact checks passed. Next: publish beta reconciliation with the paired tested frontend, verify CI child revisions and live Work/usage availability. Production usage flow128 and API/bot2.4.0 telemetry already verified; notice-only production flow remains pending.
+
+## Prior checkpoints
+
+# Current objective — 2026-10-06 first paid launch
+
+Usage/settings PR27 and PR30 merged. Production VCS-triggered flow10031/#128 succeeded with all four children, backend/frontend images128 and versions2.4.0. Live backend migration69/customer_quote column and both Healthy2/2 rollouts verified. Fresh production UI shows independent shared AI/Luna/audio balances and the focused settings categories.
+
+Required bilingual grouped notice is now prepared at migration70, following69, after UI availability. Notice-only backend patch2.4.1; frontend2.4.0 unchanged. Six announcement/migration checks pass on disposable PostgreSQL. No draft or beta-only notice. Next: publish notice, reconcile production into beta preserving Work, and verify feed plus telemetry. DOCX/PDF work remains isolated and uncommitted in the attached managed worktree; purchase policy/prices still await owner answers.
+
+Owner authorized completing the pending usage/settings release, payment/entitlement correctness and ordinary-chat DOCX/PDF generation. Purchase renewal policy and public prices await the owner's answers; keep checkout closed until those are resolved. Indexing and Yandex ad funding follow launch acceptance and remain gated.
+
+Usage PR27 is reconciled with current production backend 2.3.2 and schema68. Customer quote migration is now69, sole head. Target versions: backend2.4.0/frontend2.4.0 (compatible minor, shared major2). Required grouped What's New remains draft until production UI availability.
+
+Current verification: 337 backend allowance/API/migration checks passed against disposable PostgreSQL; 580 frontend tests passed, production build and touched-file lint passed. EN/RU 390px phone and 1280px desktop renders checked with synthetic local account data; independent balances, private tier identity, tiny positive charges and actual dirty AI form protection verified. This is local UI proof, not deployed workflow proof.
+
+Next: merge and verify paired PR27/PR30 release and production/beta migration/rollout, publish notice only after live acceptance, then implement payments and DOCX/PDF. Preserve primary checkout changes and beta Work. No payment/provider mutations performed.
+
+## Prior checkpoints
+
+# Current objective — 2026-10-05 usage details and settings
+
+First batch Q06/Q09/Q07/focused M09 is merged and deployed: backend 2.3.1, frontend 2.3.0. Production flow9924/#125 and beta flow9919/#231 succeeded with all child jobs. Shared schema 66; rollout grace touched 22 files once, later jobs zero. Production cleanup scheduler enabled and completed a scheduled run; synthetic private-object create/head/delete/404 proof passed. Authenticated production/beta file views and published notice verified. API/bot Sentry runtime release configuration and received 2.3.1 telemetry verified: 11 API spans and 2 bot log entries in the two-hour aggregate query.
+
+Phase two M02/M03/Q16 is implemented in isolated codex/usage-details-settings-20261005 branches. Customer per-answer usage links the owned answer to its settled ledger, keeps supplier costs private, stores the complete admission quote snapshot, and distinguishes pending from zero. Separate Luna capacity/recovery and audio minutes stay independent. Mobile settings uses the desktop categories, focused pages and dirty AI preference guards.
+
+Validation: 325 backend regressions, Ruff and migration upgrade/downgrade proof pass. Frontend 577 full-suite tests plus the added API-route regression and corrected navigation tests pass; production build passes. TypeScript retains only the pre-existing LazySyntaxHighlighter error. Rendered EN/RU desktop/mobile checks pass with synthetic data. Final backend built-in review reports no actionable regressions and independently passed all 325 targeted tests. Frontend full review findings and final preset/precision corrections are resolved; final incremental built-in review reports no actionable regression and passes 46 focused checks. Backend precision delta review passes seven arithmetic/JSON checks; its sandbox could not run PostgreSQL tests, while the primary session directly passed both affected database regressions. No paid calls or production user mutations for phase two.
+
+Versions: both 2.4.0, compatible minor from deployed backend 2.3.1/frontend 2.3.0. What's New required, draft in docs/ux-review/2026-10-05-usage-details-settings.md; no feed row before production availability.
+
+Paired review-ready PRs: backend https://github.com/l1ghtny/mini-app-tg-gpt/pull/27 and frontend https://github.com/l1ghtny/chat-bot-telegram/pull/30. No phase-two merge/deployment. Next: owner review of the paired PRs, then coordinated release when authorized. Apply schema 67 before deploying the new backend and deploy backend before frontend. Keep legacy responses explicitly unavailable ; do not fabricate old quotes. Preserve beta Work and primary dirty changes. Reassess remaining launch gaps after this scope is reviewable.
+
+## Previous checkpoints
+
+# Current objective — 2026-10-05 UX readiness batch
+## Previously shipped image completion hotfix
 # Current objective — 2026-10-05 image completion hotfix
 
 Owner authorized production and beta fix/deployment for backend7Q/frontend5R.

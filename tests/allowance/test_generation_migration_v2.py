@@ -84,5 +84,5 @@ def test_generation_migration_offline_sql_and_single_head():
     assert "add column execution_plan" in sql and "check (recovery_ceiling >= 0)" in sql
     assert "update allowance" not in sql and "whats_new" not in sql
     assert ScriptDirectory.from_config(Config("alembic.ini")).get_heads() == [
-        "xw0e1f2a3b63"
+        "xw0e1f2a3b70"
     ]
