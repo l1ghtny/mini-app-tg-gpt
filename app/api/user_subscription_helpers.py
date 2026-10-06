@@ -61,7 +61,7 @@ async def get_active_subscription(session: AsyncSession, user) -> ActiveSubscrip
     default_payment_method = await session.exec(
         select(PaymentMethod).where(
             PaymentMethod.user_id == user.id,
-            PaymentMethod.is_default == True,
+            PaymentMethod.is_default.is_(True),
         )
     )
     default_payment_method = default_payment_method.first()
@@ -190,7 +190,7 @@ async def _first_purchase_available(session: AsyncSession, user_id) -> bool:
             Payment.user_id == user_id,
             Payment.product_type == PaymentProductType.subscription,
             Payment.amount > 0,
-            Payment.tbank_status == "CONFIRMED",
+            Payment.confirmation_applied.is_(True) | Payment.tbank_status.in_(("CONFIRMED", "REFUNDING", "REFUNDED", "PARTIAL_REFUNDED")),
         )
     )
     return existing_paid_subscription.first() is None

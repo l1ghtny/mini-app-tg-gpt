@@ -71,6 +71,16 @@ def tool_budget(call, tools):
         raise ValueError("Invalid or oversized tool query")
     if name == "file_search":
         return LUNA, 2500 * len(tools[name].get("vector_store_ids", []))
+    if name in {"create_document", "read_document"}:
+        from app.schemas.chat_documents import CreateDocumentArguments
+        if name == "create_document":
+            CreateDocumentArguments.model_validate(args)
+        else:
+            import uuid
+            uuid.UUID(args["document_id"])
+            if type(args.get("offset")) is not int or args["offset"] < 0:
+                raise ValueError("Invalid document offset")
+        return LUNA, 0
     if name == "web_search":
         messages = [
             {"role": "user", "content": [{"type": "input_text", "text": query}]}
@@ -385,8 +395,8 @@ async def iterative_loop(
                 if key in keys or (
                     batch
                     and (
-                        call["name"] == "image_generation"
-                        or batch[0]["name"] == "image_generation"
+                        call["name"] in {"image_generation", "create_document", "read_document"}
+                        or batch[0]["name"] in {"image_generation", "create_document", "read_document"}
                     )
                 ):
                     break
@@ -404,7 +414,7 @@ async def iterative_loop(
                 keys.append(key)
                 position += 1
                 if (
-                    call["name"] == "image_generation"
+                    call["name"] in {"image_generation", "create_document", "read_document"}
                     or len(batch) >= policy["parallelism"]
                 ):
                     break
@@ -463,7 +473,7 @@ async def iterative_loop(
                                 )
                             elif event["type"] != "status":
                                 yield event
-                                if event["type"] == "image.ready":
+                                if event["type"] in {"image.ready", "document.ready"}:
                                     run.image_delivered = True
                         run.executed_tools[key] = value
                         context_values[call["id"]] = value

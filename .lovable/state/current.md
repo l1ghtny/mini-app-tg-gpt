@@ -1,3 +1,43 @@
+# Current objective — 2026-10-06 document/payment release
+
+Usage/settings and notice are live on production/beta (production129, beta235).
+Payment foundations are integrated at a2e9a46. Document migration is72 after payment71;
+both target components2.5.0. Public checkout stays closed pending the owner's required
+purchase-policy/pricing answers. Metrica counter/ad budget have also been requested.
+
+Verification:398 integrated backend checks pass; final renderer/storage/migration
+suite17 passes.590 frontend checks pass with three workers, build/touched lint pass.
+The existing LazySyntaxHighlighter TS2322 remains; its test passes independently
+and in the final suite after one contention failure in the first full run.
+EN/RU955px desktop and actual390px iframe views checked. All generated Russian
+DOCX/PDF pages inspected; PDF table rows now stay together to preserve word spacing.
+Oversized PDF cells/unsupported glyphs fail explicitly with a DOCX alternative.
+Full chat generation, empty follow-up, durable publication-before-SSE and duplicate
+replay checked. Client capability gating prevents output to older clients.
+
+What's New required; draft in docs/operations/2026-10-06-chat-documents-payments.md.
+No document notice is published before production generation is verified. Flag
+CHAT_DOCUMENT_GENERATION_ENABLED stays false until both binaries/schema are live.
+Next: publish paired PRs, release with flag disabled, then enable and verify actual
+private create/revise/download/reload; publish notice and reconcile beta preserving
+Work. Launch remains gated on owner business inputs and acquisition acceptance.
+
+## Prior checkpoints
+
+# Current objective — 2026-10-06 first paid launch implementation
+
+Usage/settings is shipped: backend PR27/frontend PR30, production10031/#128 (backend/frontend2.4.0, images128, schema69) with all four jobs successful and live controls verified. Announcement backend PR30 merged at2ecc658; production10051/#129 succeeded, targetbackend2.4.1/schema70. Beta reconciliation a2134aa backend/37f6d74 frontend is pushed; automatic10057/#235 succeeded, both beta images235 and Work worker available. Beta checks:388 backend,618 frontend,build pass. Work is preserved. API2.4.0 received427 Sentry spans and bot2.4.0 received2 logs; frontend received telemetry was not found in the span query.
+
+Ordinary-chat DOCX/PDF implemented but uncommitted here and in /private/tmp/lightny-first-paid-frontend-20261006. Bounded structured content, deterministic renderer with Unicode fonts, private R2, account/chat ownership, idempotent publication, full paged-source reads before revisions, five-day expiry, cleanup and account export/deletion. Persistent MessageContent plus message-ID-bound SSE metadata renders files with name/type/version/download deadline. Download URL uses authenticated POST and five-minute signed attachment link. Flag CHAT_DOCUMENT_GENERATION_ENABLED remains false. No Work code promoted into production.
+
+Document checks:363 backend allowance/storage/renderer/retention/account checks passed;586 frontend full suite plus latest event precision checks passed;build/lint pass, only prior LazySyntaxHighlighter TS2322. Rendered DOCX/PDF samples with Russian text and long tables; title rule removed, short DOCX rows kept intact. Fresh local Russian390px iframe and desktop955px file cards checked; OS download event was not captured in IAB. Latest locked ReportLab4.5.1 still needs final rendered-page inspection. Document migration currently71 must become72 after the payment migration lands; versiontargets2.5.0 both. Docs feature notice remains draft until live generation.
+
+Payment foundation is uncommitted in /private/tmp/lightny-usage-notice-20261006 on codex/payment-refund-boundaries-20261006, based on production2ecc658. Adds confirmation/refund application markers, exact subscription/interval links, valid-provider/amount checks, late-state protection, capture/refund deduplication, pending refund truth and revenue rubles conversion. Legacy unlinked refunds require reconciliation instead of cancelling a guessed subscription. New migration71; backendtarget2.4.2.28 payment/binding/discount/auth/token checks pass. Frontend refund-pending toast is in the document checkout and must ship with or before this API behavior. Public checkout remains closed; owner renewal policy and prices are required and unanswered.
+
+Next: finish payment migration/concurrency/renewal checks and closed-catalog gating; validate document migration, full chat tool execution and final render/download UI. Publish reviewable paired PRs, release/verify the unblocked document capability and reconcile beta. Complete public checkout activation only after owner purchase policy/prices and bank acceptance. Indexing/Yandex funding remain after launch acceptance; no funds moved or paid bank test performed. Preserve all primary dirty changes.
+
+## Prior checkpoints
+
 # Current objective — 2026-10-06 first paid launch
 
 Usage/settings PR27 and PR30 merged. Production VCS-triggered flow10031/#128 succeeded with all four children, backend/frontend images128 and versions2.4.0. Live backend migration69/customer_quote column and both Healthy2/2 rollouts verified. Fresh production UI shows independent shared AI/Luna/audio balances and the focused settings categories.
