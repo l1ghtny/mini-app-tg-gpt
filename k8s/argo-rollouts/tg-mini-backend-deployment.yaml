@@ -90,6 +90,21 @@ spec:
             secretKeyRef:
               name: backend-env
               key: R2_ENDPOINT
+        - name: R2_PRIVATE_DOCUMENTS_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: tg-mini-beta-work-runs-r2
+              key: R2_PRIVATE_DOCUMENTS_BUCKET
+        - name: R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: tg-mini-beta-work-runs-r2
+              key: R2_PRIVATE_DOCUMENTS_ACCESS_KEY_ID
+        - name: R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: tg-mini-beta-work-runs-r2
+              key: R2_PRIVATE_DOCUMENTS_SECRET_ACCESS_KEY
         envFrom:
         - secretRef:
             name: backend-env

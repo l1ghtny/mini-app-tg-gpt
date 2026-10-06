@@ -1,25 +1,48 @@
-# Current objective — 2026-10-06 beta document integration prepared
+# Current objective — 2026-10-06 beta storage/notice reconciliation
 
-Merged production8734270 into this isolated beta branch, retaining Work routes,
-worker/artifact contracts, openpyxl and prometheus-client. Poetry2.4.1 resolved the
-combined lock without package-version churn; check --lock passes.558 integrated
-backend checks pass, plus the existing worker startup check passes separately in
-its intended non-test-mode configuration. Frontend companion passes628 checks/build.
+Beta236 completed all four jobs at2.5.0; private storage and document generation
+are enabled. Work worker remains ready on beta236 and Work source is preserved.
+Merging production caf0127 adds backend2.5.1/configuration and hidden notice73.
+Hold this new beta deployment until production schema73 is verified. Production
+132 remains in its final frontend canary; the storage correction is merged.
+Combined integration previously passed558 checks plus worker startup; the new
+hidden/idempotent/scoped-rollback notice check passes in disposable Postgres.
 
-Hold the beta merge/deployment until production schema72 is verified. TeamCity
-is unavailable: new-node stopped reporting at14:24UTC and replacement server disks
-remain attached to its old pod. Beta Redis recovery is affected too; production
-API/DB/Redis/workers and two WARP proxy endpoints remain healthy at backend2.4.1,
-frontend2.4.0/images129. Generation remains disabled, checkout closed, no new notice.
+Next: verify production schema73, release this prepared beta reconciliation,
+then verify private chat generation/revision/download and publish the single
+shared announcement after production acceptance. Checkout/indexing remain closed.
 
-Next: restore/fence the CI host through the normal infrastructure workflow, verify
-the production release/migration72 and actual document workflow, then merge this
-prepared beta branch, enable/verify beta, and publish the production-only notice.
-Owner purchase policy/prices and Metrica/ad-budget answers are pending.
+## Production checkpoint carried into beta
 
-## Prior production checkpoint
+# Current objective — 2026-10-06 live document acceptance
 
-# Current objective — 2026-10-06 document/payment release
+Backend PR31/33/34 and frontend PR31/32 are merged. Production flow10114/#132
+targets backend master db2244a (image132) and frontend c870cb57 (reused image130),
+both2.5.0. Shared database schema72 is already verified. Earlier flows130/131
+timed out during cold image pulls; migration131 later succeeded. Tested PR35
+extends migration waiting to1200s without changing app behavior (2 tests passed).
+Production132 is still running; document generation remains disabled until both
+components are live. Beta sync PR32/backend and PR33/frontend merged while
+preserving Work; beta flow10119/#236 is running. Beta Redis is healthy again.
+
+Prior shipped baseline: backend2.4.1/image129, frontend2.4.0/image128, schema70;
+beta235. Registry publishing retries recovered after one slow PUT timeout.
+All four cluster nodes are Ready; no forced disk failover or reboot performed.
+Website CI10113/#22 passed for d10ecb9. Its verified immutable digest b34d5e1f
+is being rolled out to lightnyai-website; noindex and checkout closure stay in place.
+
+Beta236 completed all four jobs. The production2.5.0 canary is on schema72;
+private document storage is absent there while beta has it configured. A focused
+backend2.5.1 correction adds three explicit Secret refs using the existing audio
+private storage credentials. Schema73 stages the grouped announcement inactive;
+the release operator must activate it only after acceptance. Manifest refs and
+hidden/idempotent/scoped-rollback migration test pass.
+
+Next: release the storage correction, verify production/beta jobs and runtime versions, enable document generation,
+then prove create/revise/private-download/reload in the live app before publishing
+What's New. Owner renewal/prices and Metrica/ad-budget answers remain pending.
+
+## Earlier document/payment checkpoint
 
 Usage/settings and notice are live on production/beta (production129, beta235).
 Payment foundations are integrated at a2e9a46. Document migration is72 after payment71;
