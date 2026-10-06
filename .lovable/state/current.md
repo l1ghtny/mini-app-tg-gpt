@@ -1,5 +1,9 @@
 # Current objective — 2026-10-06 first paid launch
 
+Usage/settings PR27 and PR30 merged. Production VCS-triggered flow10031/#128 succeeded with all four children, backend/frontend images128 and versions2.4.0. Live backend migration69/customer_quote column and both Healthy2/2 rollouts verified. Fresh production UI shows independent shared AI/Luna/audio balances and the focused settings categories.
+
+Required bilingual grouped notice is now prepared at migration70, following69, after UI availability. Notice-only backend patch2.4.1; frontend2.4.0 unchanged. Six announcement/migration checks pass on disposable PostgreSQL. No draft or beta-only notice. Next: publish notice, reconcile production into beta preserving Work, and verify feed plus telemetry. DOCX/PDF work remains isolated and uncommitted in the attached managed worktree; purchase policy/prices still await owner answers.
+
 Owner authorized completing the pending usage/settings release, payment/entitlement correctness and ordinary-chat DOCX/PDF generation. Purchase renewal policy and public prices await the owner's answers; keep checkout closed until those are resolved. Indexing and Yandex ad funding follow launch acceptance and remain gated.
 
 Usage PR27 is reconciled with current production backend 2.3.2 and schema68. Customer quote migration is now69, sole head. Target versions: backend2.4.0/frontend2.4.0 (compatible minor, shared major2). Required grouped What's New remains draft until production UI availability.
