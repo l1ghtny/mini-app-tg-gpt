@@ -91,17 +91,24 @@ def _pdf(spec):
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, XPreformatted
     from reportlab.platypus.doctemplate import LayoutError
 
     fonts = Path(os.environ.get("CHAT_DOCUMENT_FONT_DIR", "/usr/share/fonts/truetype/dejavu"))
     for name, file in (("DocumentSans", "DejaVuSans.ttf"), ("DocumentBold", "DejaVuSans-Bold.ttf"), ("DocumentMono", "DejaVuSansMono.ttf")):
         if name not in pdfmetrics.getRegisteredFontNames():
             pdfmetrics.registerFont(TTFont(name, str(fonts / file)))
-    texts = [spec.title, *(text for block in spec.blocks for text in [block.text, *block.items, *(cell for row in block.rows for cell in row)])]
-    glyphs = pdfmetrics.getFont("DocumentSans").face.charToGlyph
-    if any(not character.isspace() and not glyphs.get(ord(character)) for text in texts for character in text):
-        raise ValueError("PDF font does not support this text; use DOCX to preserve it")
+    def validate_glyphs(value, font):
+        glyphs = pdfmetrics.getFont(font).face.charToGlyph
+        if any(not character.isspace() and not glyphs.get(ord(character)) for character in value):
+            raise ValueError("PDF font does not support this text; use DOCX to preserve it")
+    validate_glyphs(spec.title, "DocumentBold")
+    for block in spec.blocks:
+        font = "DocumentBold" if block.kind == "heading" else "DocumentMono" if block.kind == "code" else "DocumentSans"
+        for value in [block.text, *block.items, *(cell for row in block.rows for cell in row)]:
+            validate_glyphs(value, font)
+        if block.kind == "code" and any(pdfmetrics.stringWidth(line, font, 9) > 468 for line in block.text.expandtabs().splitlines()):
+            raise ValueError("PDF code lines cannot fit the page; use DOCX or shorter lines")
     normal = ParagraphStyle("Body", fontName="DocumentSans", fontSize=10.5, leading=15, spaceAfter=8, wordWrap="CJK")
     heading = ParagraphStyle("Heading", parent=normal, fontName="DocumentBold", fontSize=15, leading=20, spaceBefore=10, keepWithNext=True)
     title = ParagraphStyle("Title", parent=heading, fontSize=22, leading=28, spaceAfter=16)
@@ -130,8 +137,10 @@ def _pdf(spec):
             for index, item in enumerate(block.items, 1):
                 prefix = "• " if block.kind == "bullet_list" else f"{index}. "
                 story.append(Paragraph(text(prefix + item), normal))
+        elif block.kind == "code":
+            story.append(XPreformatted(escape(block.text.expandtabs()), code))
         else:
-            story.append(Paragraph(text(block.text), heading if block.kind == "heading" else code if block.kind == "code" else normal))
+            story.append(Paragraph(text(block.text), heading if block.kind == "heading" else normal))
     output = BytesIO()
     def page_number(canvas, doc):
         canvas.saveState()
