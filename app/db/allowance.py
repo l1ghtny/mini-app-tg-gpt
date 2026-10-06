@@ -77,6 +77,7 @@ class AllowanceRequest(SQLModel, table=True):
     luna_charged: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     status: str = "reserved"
     execution_plan: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    customer_quote: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     recovery_ceiling: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     admission_policy: str = "held-legacy"
     supplier_ceiling: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
