@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from pydantic import BaseModel
+from sqlalchemy import update
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -161,6 +162,11 @@ async def delete_account(
     # before settlement and cannot restore a deleted result.
     from app.services.chat_documents import delete_chat_documents
     await delete_chat_documents(session, user_id=current_user.id, batch_size=100)
+    # Expired files may already be purged; their model-authored names still
+    # belong to the account and can contain personal information.
+    await session.exec(update(models.ChatDocument).where(
+        models.ChatDocument.user_id == current_user.id
+    ).values(filename="deleted-document", spec={}))
     audio_jobs = (await session.exec(
         select(models.AudioTranscriptionJob)
         .where(models.AudioTranscriptionJob.user_id == current_user.id)
