@@ -137,15 +137,22 @@ async def test_account_export_and_deletion_cover_generated_content(private_objec
     from app.api.account import export_account_data, delete_account, DeleteAccountRequest
     user, run = await account()
     await chat_documents.create_chat_document(run, arguments())
+    expired = await chat_documents.create_chat_document(run, arguments(title="Expired private name"))
     async with AsyncSession(engine, expire_on_commit=False) as session:
+        old = await session.get(ChatDocument, uuid.UUID(expired["id"]))
+        old.expires_at = chat_documents.now() - timedelta(seconds=1)
+        await session.commit()
+        assert await chat_documents.delete_chat_documents(session) == 1
+        await session.commit()
         export = json.loads((await export_account_data(user, session)).body)
-        item = export["generated_documents"][0]
+        item = next(item for item in export["generated_documents"] if item["spec"].get("title") == "План запуска")
         assert item["spec"]["title"] == "План запуска"
         assert not {"bucket", "key", "request_key"} & item.keys()
         await delete_account(DeleteAccountRequest(confirmation="DELETE"), BackgroundTasks(), user, session)
         assert not private_objects
-        row = (await session.exec(select(ChatDocument))).one()
-        assert row.spec == {} and row.status == "deleted"
+        rows = (await session.exec(select(ChatDocument))).all()
+        assert len(rows) == 2
+        assert all(row.spec == {} and row.status == "deleted" and row.filename == "deleted-document" for row in rows)
 
 
 @pytest.mark.asyncio
