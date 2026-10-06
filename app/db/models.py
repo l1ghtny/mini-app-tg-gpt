@@ -443,6 +443,27 @@ class Message(SQLModel, table=True):
     )
 
 
+class ChatDocument(SQLModel, table=True):
+    __tablename__ = "chat_document"
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="app_user.id", index=True)
+    conversation_id: uuid.UUID = Field(index=True)
+    request_key: str = Field(unique=True)
+    filename: str
+    format: str
+    spec: dict = Field(sa_column=Column(JSONB, nullable=False))
+    parent_id: Optional[uuid.UUID] = Field(default=None)
+    version: int = 1
+    size_bytes: int = 0
+    bucket: str
+    key: str
+    status: str = "storing"
+    created_at: datetime = Field(default_factory=utcnow_naive)
+    expires_at: datetime = Field(sa_column=Column(DateTime, nullable=False, index=True))
+    cleanup_attempted_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
+
+
 class MessageActivityEvent(SQLModel, table=True):
     __tablename__ = "message_activity_event"
     __table_args__ = (
@@ -1388,6 +1409,14 @@ class Payment(SQLModel, table=True):
         default=None, foreign_key="payment_methods.id", index=True
     )
     flow_kind: str = Field(default="purchase", index=True)
+    confirmation_applied: bool = False
+    confirmed_at: Optional[datetime] = None
+    subscription_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user_subscription.id", index=True)
+    subscription_period_start: Optional[datetime] = None
+    subscription_period_end: Optional[datetime] = None
+    refund_requested_at: Optional[datetime] = None
+    refunded_at: Optional[datetime] = None
+    refund_applied: bool = False
     renewal_failure_reason: Optional[str] = Field(default=None, index=True)
     bound_method_snapshot: Optional[dict] = Field(
         default=None, sa_column=Column(JSONB, nullable=True)

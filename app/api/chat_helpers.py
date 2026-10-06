@@ -1921,6 +1921,8 @@ def _build_history_candidate(msg: Message) -> _HistoryCandidate | None:
             parts.append({"type": "input_text", "text": c.value})
         elif c.type == "text" and msg.role == "assistant":
             parts.append({"type": "output_text", "text": c.value})
+        elif c.type == "generated_document" and msg.role == "assistant":
+            parts.append({"type": "output_text", "text": f"Generated file: {c.value}. Document ID: {(c.data or {}).get('id')}; version: {(c.data or {}).get('version')}. Use read_document to read its complete content before revising."})
         elif (c.type in {"image_url", "image"}) and msg.role == "user":
             parts.append({"type": "input_image", "image_url": c.value})
         elif (c.type in {"image_url", "image"}) and msg.role == "assistant":
@@ -2269,6 +2271,8 @@ async def _shared_entitlements(session, user, request, conversation):
     if quality not in {"low", "medium", "high"}:
         raise HTTPException(400, detail={"error": "image_quality_unavailable"})
     tools = [{"type": "web_search"}]
+    if shared_settings.CHAT_DOCUMENT_GENERATION_ENABLED and getattr(request, "document_output_supported", False):
+        tools.extend([{"type": "create_document"}, {"type": "read_document"}])
     if stores:
         tools.append({"type": "file_search", "vector_store_ids": stores})
     if available(a) > 0:

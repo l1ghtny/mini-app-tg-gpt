@@ -29,6 +29,7 @@ class SubscriptionTier(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     name: str = Field(index=True, unique=True)
+    allowance_plan_key: Optional[str] = Field(default=None)
     name_ru: str = Field(unique=True, nullable=True)
     description: Optional[str] = None
     description_ru: Optional[str] = Field(nullable=True)

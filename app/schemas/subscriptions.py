@@ -159,7 +159,7 @@ class CurrentSubscriptionRefundResponse(BaseModel):
     payment_id: str
     status: str
     subscription_status: str
-    refunded_at: str
+    refunded_at: str | None
 
 
 class UserAgreementResponse(BaseModel):

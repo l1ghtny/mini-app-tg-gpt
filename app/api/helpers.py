@@ -405,6 +405,18 @@ async def _handle_stream_event(
             lifecycle["text_request_finalized"] = True
         return
 
+    if event_type == "document.ready":
+        from app.db.models import ChatDocument
+        document = await session.get(ChatDocument, uuid.UUID(ev["document"]["id"]))
+        if (not document or document.user_id != user_id or document.conversation_id != conversation_id
+                or document.status != "ready"):
+            raise RuntimeError("Generated document was not durably published for this chat")
+        await _upsert_rich(session, assistant_message_id, ev.get("index", 0), "generated_document", ev["document"],
+            document.filename)
+        await session.commit()
+        await bus.publish(str(assistant_message_id), {"type": "document", "document": ev["document"], "message_id": str(assistant_message_id)})
+        return
+
     if event_type == "image.ready":
         ordinal = ev.get("index", 0)
         prefix = await object_prefix_for_user(session, user_id, IMAGE_SOURCE_GENERATED)

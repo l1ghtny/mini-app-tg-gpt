@@ -45,6 +45,8 @@ webauthn = ">=2.2,<3"
 httpx = ">=0.28,<0.29"
 openpyxl = "^3.1.5"
 prometheus-client = "^0.23.1"
+python-docx = ">=1.2,<2"
+reportlab = ">=4.4.10,<5"
 
 
 [build-system]

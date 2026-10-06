@@ -105,6 +105,10 @@ async def export_account_data(
                 await session.exec(select(models.UserDocument).where(models.UserDocument.user_id == current_user.id))
             ).all()
         ],
+        "generated_documents": [
+            _safe_row(item, exclude={"bucket", "key", "request_key"})
+            for item in (await session.exec(select(models.ChatDocument).where(models.ChatDocument.user_id == current_user.id))).all()
+        ],
         "subscriptions": [
             _safe_row(item)
             for item in (
@@ -155,6 +159,8 @@ async def delete_account(
     # Remove recoverable transcript text and private raw input before the
     # account's identity is cleared. A running worker checks the job row again
     # before settlement and cannot restore a deleted result.
+    from app.services.chat_documents import delete_chat_documents
+    await delete_chat_documents(session, user_id=current_user.id, batch_size=100)
     audio_jobs = (await session.exec(
         select(models.AudioTranscriptionJob)
         .where(models.AudioTranscriptionJob.user_id == current_user.id)

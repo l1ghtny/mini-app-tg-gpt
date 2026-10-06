@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from app.r2.client import R2_BUCKET, s3_client
 from app.r2.settings import Settings
@@ -120,8 +121,11 @@ async def presign_document_source(
     filename: str,
     content_type: str | None,
     expires: int = 900,
+    disposition: str = "inline",
 ) -> str:
     _require_configured_bucket(bucket)
+    if disposition not in {"inline", "attachment"}:
+        raise ValueError("invalid document disposition")
     safe_filename = (
         "".join(
             character
@@ -130,13 +134,17 @@ async def presign_document_source(
         )
         or "document"
     )
+    content_disposition = f'{disposition}; filename="{safe_filename}"'
+    if disposition == "attachment":
+        safe_filename = f"document{Path(filename).suffix.lower()}"
+        content_disposition = f'{disposition}; filename="{safe_filename}"; filename*=UTF-8\'\'{quote(Path(filename).name, safe="")}'
     async with _private_s3_client() as s3:
         return await s3.generate_presigned_url(
             "get_object",
             Params={
                 "Bucket": bucket,
                 "Key": key,
-                "ResponseContentDisposition": f'inline; filename="{safe_filename}"',
+                "ResponseContentDisposition": content_disposition,
                 "ResponseContentType": content_type or "application/octet-stream",
             },
             ExpiresIn=expires,
