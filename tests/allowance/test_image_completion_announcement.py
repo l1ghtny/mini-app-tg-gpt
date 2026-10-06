@@ -52,4 +52,4 @@ def test_image_completion_notice_offline_sql_and_single_head():
     assert "on conflict (id) do nothing" in sql
     assert "drop table" not in sql and "delete from" not in sql
     assert migration.down_revision == "xw0e1f2a3b66"
-    assert ScriptDirectory.from_config(Config("alembic.ini")).get_heads() == ["xw0e1f2a3b69"]
+    assert ScriptDirectory.from_config(Config("alembic.ini")).get_heads() == ["xw0e1f2a3b70"]
