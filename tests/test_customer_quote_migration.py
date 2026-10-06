@@ -10,7 +10,7 @@ from app.db.database import engine
 
 @pytest.mark.asyncio
 async def test_quote_migration_roundtrip_preserves_legacy_accounting_rows():
-    migration=importlib.import_module("migrations.versions.xw0e1f2a3b67_customer_usage_quote")
+    migration=importlib.import_module("migrations.versions.xw0e1f2a3b69_customer_usage_quote")
     schema="quote_migration_"+uuid.uuid4().hex
     async with engine.begin() as connection:
         await connection.execute(text(f'CREATE SCHEMA "{schema}"'))

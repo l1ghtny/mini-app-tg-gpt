@@ -1,3 +1,15 @@
+# Current objective — 2026-10-06 first paid launch
+
+Owner authorized completing the pending usage/settings release, payment/entitlement correctness and ordinary-chat DOCX/PDF generation. Purchase renewal policy and public prices await the owner's answers; keep checkout closed until those are resolved. Indexing and Yandex ad funding follow launch acceptance and remain gated.
+
+Usage PR27 is reconciled with current production backend 2.3.2 and schema68. Customer quote migration is now69, sole head. Target versions: backend2.4.0/frontend2.4.0 (compatible minor, shared major2). Required grouped What's New remains draft until production UI availability.
+
+Current verification: 337 backend allowance/API/migration checks passed against disposable PostgreSQL; 580 frontend tests passed, production build and touched-file lint passed. EN/RU 390px phone and 1280px desktop renders checked with synthetic local account data; independent balances, private tier identity, tiny positive charges and actual dirty AI form protection verified. This is local UI proof, not deployed workflow proof.
+
+Next: merge and verify paired PR27/PR30 release and production/beta migration/rollout, publish notice only after live acceptance, then implement payments and DOCX/PDF. Preserve primary checkout changes and beta Work. No payment/provider mutations performed.
+
+## Prior checkpoints
+
 # Current objective — 2026-10-05 usage details and settings
 
 First batch Q06/Q09/Q07/focused M09 is merged and deployed: backend 2.3.1, frontend 2.3.0. Production flow9924/#125 and beta flow9919/#231 succeeded with all child jobs. Shared schema 66; rollout grace touched 22 files once, later jobs zero. Production cleanup scheduler enabled and completed a scheduled run; synthetic private-object create/head/delete/404 proof passed. Authenticated production/beta file views and published notice verified. API/bot Sentry runtime release configuration and received 2.3.1 telemetry verified: 11 API spans and 2 bot log entries in the two-hour aggregate query.
@@ -13,6 +25,25 @@ Paired review-ready PRs: backend https://github.com/l1ghtny/mini-app-tg-gpt/pull
 ## Previous checkpoints
 
 # Current objective — 2026-10-05 UX readiness batch
+## Previously shipped image completion hotfix
+# Current objective — 2026-10-05 image completion hotfix
+
+Owner authorized production and beta fix/deployment for backend7Q/frontend5R.
+Implemented delivered-image acknowledgement and successful completion for an empty
+optional follow-up; explicit refusal and all genuine failure paths preserved.
+80 focused local PostgreSQL regressions, Ruff and diff checks passed.
+Backend2.3.1->2.3.2; frontend2.3.0 unchanged. What's New required; draft stays in
+docs/operations/2026-10-05-image-completion-release.md until production verification.
+Production flow 9950/#126 and beta flow 9945/#232 succeeded. Actual image-only
+edits, persistence, duplicate deduplication, stream replay and resume passed in
+both. Production reproduced empty_answer after image delivery: overall complete,
+one settlement, failed optional attempt zero charge. Original remains refunded.
+Next: publish the shared notice via production migration 68 after verified
+availability, synchronize that history to beta, verify final runtime/Sentry and
+mobile UI. Two notice idempotency/rollback/head tests passed on disposable PG.
+No frontend source changes required; existing image/done contract retained.
+
+# Previous objective — 2026-10-05 UX readiness batch
 
 Implement Q06, Q09, Q07 and focused M09, run the built-in `codex review`, then merge/deploy to production and beta if clean. After that implement M02/M03 and Q16. Preserve beta Work and unrelated primary-checkout changes.
 

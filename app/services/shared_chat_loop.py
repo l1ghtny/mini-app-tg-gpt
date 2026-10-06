@@ -463,6 +463,8 @@ async def iterative_loop(
                                 )
                             elif event["type"] != "status":
                                 yield event
+                                if event["type"] == "image.ready":
+                                    run.image_delivered = True
                         run.executed_tools[key] = value
                         context_values[call["id"]] = value
                         digest = (
