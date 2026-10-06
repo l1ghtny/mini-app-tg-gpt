@@ -40,6 +40,18 @@ def test_pdf_rejects_unsupported_glyphs_instead_of_silently_losing_content():
         assert "中文" in archive.read("word/document.xml").decode()
 
 
+def test_pdf_checks_the_actual_code_font_before_delivering_a_file():
+    spec = DocumentSpec(title="Technical example", blocks=[{"kind":"code", "text":"print('😀')", "items":[], "rows":[]}])
+    with pytest.raises(ValueError, match="use DOCX"):
+        render_document(spec, "pdf")
+
+
+def test_pdf_rejects_code_that_would_overflow_the_page():
+    spec = DocumentSpec(title="Long code", blocks=[{"kind":"code", "text":"x"*160, "items":[], "rows":[]}])
+    with pytest.raises(ValueError, match="use DOCX"):
+        render_document(spec, "pdf")
+
+
 @pytest.mark.parametrize("change", [
     {"title":"bad\x00title"},
     {"blocks":[{"kind":"paragraph", "text":"bad\x00text", "items":[], "rows":[]}]},
