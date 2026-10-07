@@ -538,3 +538,124 @@ async def test_legacy_work_cannot_spend_saved_no_hold_final_protection(db, monke
             budget=100_000,
         )
     assert exc.value.detail["error"] == "provider_failure_spend_paused"
+
+
+@pytest.mark.asyncio
+async def test_user_loss_reset_preserves_global_costs_and_new_failures(db, monkeypatch):
+    _, session, original = db
+    user = SimpleNamespace(id=original.id)
+    for key, known in (("old-unknown", False), ("old-known", True)):
+        await task(session, user, key, supplier=1_000_000)
+        await allowance_tasks.claim(session, user.id, key, "worker")
+        aid = await attempt(session, user, key, budget=800_000)
+        if known:
+            await allowance.finish_attempt(session, aid, units=800_000, usage={})
+        await allowance.settle(
+            session, user.id, key, success=False, release_unknown=True
+        )
+    before = await allowance_tasks.exposure(session)
+    a = await allowance.account(session, user.id)
+    balance = (a.granted, a.spent, a.reserved, a.luna_spent, a.luna_reserved)
+    await task(session, user, "new-failure", supplier=1_000_000)
+    await allowance_tasks.claim(session, user.id, "new-failure", "worker")
+    with pytest.raises(HTTPException) as exc:
+        await attempt(session, user, "new-failure", budget=800_000)
+    assert exc.value.detail == {"error": "user_supplier_spend_paused"}
+    await session.rollback()
+    assert (
+        await allowance_tasks.reset_user_loss_guard(session, user.id, "reset-one") == 2
+    )
+    await session.commit()
+    assert await allowance_tasks.exposure(session) == before
+    assert await allowance_tasks.exposure(session, user_id=user.id, days=30) == (
+        1_600_000,
+        0,
+    )
+    assert (a.granted, a.spent, a.reserved, a.luna_spent, a.luna_reserved) == balance
+    with monkeypatch.context() as context:
+        context.setattr(settings, "SHARED_ALLOWANCE_PROVIDER_BUDGET_UNITS", 1_700_000)
+        with pytest.raises(HTTPException) as exc:
+            await attempt(session, user, "new-failure", budget=800_000)
+        assert exc.value.detail == {"error": "beta_spend_paused"}
+        await session.rollback()
+    aid = await attempt(session, user, "new-failure", budget=800_000)
+    await allowance.finish_attempt(session, aid, units=800_000, usage={})
+    await allowance.settle(session, user.id, "new-failure", success=False)
+    assert await allowance_tasks.exposure(session, user_id=user.id, days=30) == (
+        2_400_000,
+        800_000,
+    )
+    # Retrying the same reset never waives failures that occurred after it.
+    assert (
+        await allowance_tasks.reset_user_loss_guard(session, user.id, "reset-one") == 0
+    )
+    await session.commit()
+    assert await allowance_tasks.exposure(session, user_id=user.id, days=30) == (
+        2_400_000,
+        800_000,
+    )
+    events = (
+        await session.exec(
+            select(AllowanceEvent).where(
+                AllowanceEvent.kind.in_(["user_loss_reset", "user_loss_waived"])
+            )
+        )
+    ).all()
+    assert len(events) == 3
+    assert all(e.units == e.luna_units == 0 for e in events)
+    attempts = (await session.exec(select(ProviderAttempt))).all()
+    assert sum(p.supplier_units is None for p in attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_user_loss_reset_is_scoped_and_does_not_waive_active_work(db):
+    from app.db.models import AppUser
+
+    _, session, original = db
+    user = SimpleNamespace(id=original.id)
+    other = AppUser(default_prompt="Another test account")
+    session.add(other)
+    await session.commit()
+    for who, key in ((user, "active"), (other, "other-failed")):
+        await task(session, who, key)
+        await allowance_tasks.claim(session, who.id, key, "worker")
+        aid = await attempt(session, who, key)
+        await allowance.finish_attempt(session, aid, units=5000, usage={})
+        if who.id == other.id:
+            await allowance.settle(session, who.id, key, success=False)
+    other_before = await allowance_tasks.exposure(session, user_id=other.id, days=30)
+    assert await allowance_tasks.reset_user_loss_guard(session, user.id, "scoped") == 0
+    await session.commit()
+    await allowance.settle(session, user.id, "active", success=False)
+    assert await allowance_tasks.exposure(session, user_id=user.id, days=30) == (
+        5000,
+        5000,
+    )
+    assert (
+        await allowance_tasks.exposure(session, user_id=other.id, days=30)
+        == other_before
+    )
+    with pytest.raises(ValueError, match="different reset"):
+        await allowance_tasks.reset_user_loss_guard(session, other.id, "scoped")
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_user_loss_reset_rollback_is_atomic(db):
+    _, session, original = db
+    user = SimpleNamespace(id=original.id)
+    await task(session, user, "failed")
+    await allowance_tasks.claim(session, user.id, "failed", "worker")
+    aid = await attempt(session, user, "failed")
+    await allowance.finish_attempt(session, aid, units=5000, usage={})
+    await allowance.settle(session, user.id, "failed", success=False)
+    before = await allowance_tasks.exposure(session, user_id=user.id, days=30)
+    assert (
+        await allowance_tasks.reset_user_loss_guard(session, user.id, "rollback") == 1
+    )
+    await session.rollback()
+    assert await allowance_tasks.exposure(session, user_id=user.id, days=30) == before
+    assert (
+        await allowance_tasks.reset_user_loss_guard(session, user.id, "rollback") == 1
+    )
+    await session.commit()
