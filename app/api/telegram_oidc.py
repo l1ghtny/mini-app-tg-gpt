@@ -132,7 +132,7 @@ async def _exchange_code(
 ) -> str:
     try:
         async with httpx.AsyncClient(
-            timeout=settings.TELEGRAM_OIDC_HTTP_TIMEOUT_SECONDS
+            timeout=settings.TELEGRAM_OIDC_HTTP_TIMEOUT_SECONDS, trust_env=False
         ) as client:
             response = await client.post(
                 settings.TELEGRAM_OIDC_TOKEN_URL,
@@ -170,7 +170,7 @@ async def _load_jwks(redis: Redis) -> dict:
             pass
     try:
         async with httpx.AsyncClient(
-            timeout=settings.TELEGRAM_OIDC_HTTP_TIMEOUT_SECONDS
+            timeout=settings.TELEGRAM_OIDC_HTTP_TIMEOUT_SECONDS, trust_env=False
         ) as client:
             response = await client.get(settings.TELEGRAM_OIDC_JWKS_URL)
             response.raise_for_status()

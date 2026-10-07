@@ -25,6 +25,9 @@ async def create_browser_session(
     request: Request | None = None,
 ) -> str:
     ensure_deployment_user_allowed(user)
+    previous_token = request.cookies.get(settings.AUTH_COOKIE_NAME) if request else None
+    if previous_token:
+        await revoke_browser_session(session, previous_token)
     token = secrets.token_urlsafe(32)
     now = _utcnow_naive()
     user_agent = request.headers.get("user-agent", "")[:512] if request else None

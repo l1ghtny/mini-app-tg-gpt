@@ -1,3 +1,18 @@
+# Current objective — 2026-10-07 authentication acquisition batch
+
+Review candidate: Telegram auth transport isolation, Yandex code+PKCE sign-in, explicit identity linking and conflict recovery, session rotation and last-method protection. No deployment/merge or provider credentials/registration changes authorized.
+
+- Verified bases: backend caf0127/image133/2.5.1, frontend c870cb5/image130/2.5.0. Candidates isolated under /private/tmp/lightny-yandex-auth-{backend,frontend}-20261007; shared dirty work preserved.
+- Owner has a personal Yandex account and no OAuth app. Exact registration/callback/configuration checklist: docs/operations/2026-10-07-yandex-auth-setup.md.
+- Completed implementation,71 backend checks with PostgreSQL/Redis,606 frontend checks, production build, Ruff and changed-surface lint. Final query regression and typed UI fixtures also pass. Draft PR publication in progress.
+- UI: real local API/DB/Redis with synthetic provider; mobile/desktop login, session restore, email recovery, linking, cancel and confirmed unlink checked.
+- Frontend follow-up is implemented in the paired branch (API/types/AuthGate/Settings/PasskeyRow/translations/build flag). Coordinate both PRs; default provider flags remain disabled.
+- Release candidates2.6.0 both; What's New required at release, draft stays in documentation until real production availability.
+- Blocked live acceptance: real Yandex credentials/approval, fresh Telegram login, physical device/passkey checks. These do not block review of local code.
+- Next: finish final checks/PRs, owner registration and secure configuration, separately authorized live acceptance/release. No other launch batch included.
+
+## Earlier checkpoints retained below
+
 # Current objective — 2026-10-06 live document acceptance
 
 Backend PR31/33/34 and frontend PR31/32 are merged. Production flow10114/#132

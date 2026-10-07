@@ -81,7 +81,7 @@ class UserIdentity(SQLModel, table=True):
             ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False, index=True
         )
     )
-    provider: str = Field(index=True)  # telegram | email
+    provider: str = Field(index=True)  # telegram | email | yandex
     subject: str = Field(index=True)
     email: Optional[str] = Field(default=None, index=True)
     created_at: datetime = Field(
@@ -97,7 +97,7 @@ class UserIdentity(SQLModel, table=True):
             "provider", "subject", name="uq_user_identity_provider_subject"
         ),
         CheckConstraint(
-            "provider IN ('telegram','email')", name="ck_user_identity_provider"
+            "provider IN ('telegram','email','yandex')", name="ck_user_identity_provider"
         ),
     )
 

@@ -9,6 +9,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.auth_helpers import ensure_starter_bundle
+from app.api.identity_helpers import recoverable_passkeys
 from app.core.config import settings
 from app.api.browser_origins import resolve_browser_origin
 from app.core.security import create_access_token
@@ -175,6 +176,7 @@ async def build_user_profile(session: AsyncSession, user: models.AppUser) -> dic
         None,
     )
     providers = sorted({identity.provider for identity in identities})
+    passkeys = (await session.exec(select(models.PasskeyCredential).where(models.PasskeyCredential.user_id == user.id))).all()
     active_subscription = await get_current_subscription(session, user.id)
     tier_name = active_subscription.tier.name if active_subscription else "free"
     fallback_name = email.split("@", 1)[0] if email else "User"
@@ -189,4 +191,5 @@ async def build_user_profile(session: AsyncSession, user: models.AppUser) -> dic
         "photo_url": user.telegram_photo_url,
         "subscription_tier": tier_name,
         "auth_providers": providers,
+        "passkey_count": len(recoverable_passkeys(list(passkeys))),
     }

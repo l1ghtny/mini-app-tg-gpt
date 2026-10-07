@@ -1,12 +1,51 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db import models
+from app.core.config import settings
+
+
+def recoverable_passkeys(passkeys: list) -> list:
+    origins = settings.PASSKEY_ALLOWED_ORIGINS or (settings.WEBAPP_URL or "",)
+    rp_ids = (
+        {settings.PASSKEY_RP_ID}
+        if settings.PASSKEY_RP_ID
+        else {urlsplit(origin).hostname for origin in origins}
+    )
+    # Preserve legacy credentials whose RP metadata predates this field.
+    return [key for key in passkeys if key.rp_id is None or key.rp_id in rp_ids]
+
+
+async def lock_login_methods(session: AsyncSession, user_id) -> tuple[list, list]:
+    user = (
+        await session.exec(
+            select(models.AppUser)
+            .where(models.AppUser.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).first()
+    if not user or user.deleted_at is not None:
+        raise HTTPException(404, "login_account_unavailable")
+    identities = (
+        await session.exec(
+            select(models.UserIdentity).where(models.UserIdentity.user_id == user_id)
+        )
+    ).all()
+    passkeys = (
+        await session.exec(
+            select(models.PasskeyCredential).where(
+                models.PasskeyCredential.user_id == user_id
+            )
+        )
+    ).all()
+    return list(identities), recoverable_passkeys(list(passkeys))
 
 
 def _utcnow_naive() -> datetime:

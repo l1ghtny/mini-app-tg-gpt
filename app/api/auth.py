@@ -1,6 +1,7 @@
 import hashlib
 import ipaddress
 import smtplib
+import secrets
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -20,6 +21,7 @@ from app.api.session_helpers import (
     clear_session_cookie,
     create_browser_session,
     revoke_browser_session,
+    resolve_browser_session,
     set_session_cookie,
 )
 from app.api.telegram_oidc import (
@@ -28,7 +30,8 @@ from app.api.telegram_oidc import (
     frontend_redirect,
     oidc_return_origin,
 )
-from app.api.identity_helpers import issue_telegram_link
+from app.api.identity_helpers import issue_telegram_link, lock_login_methods
+from app.api import yandex_oauth
 from app.api.passkey_helpers import (
     begin_passkey_authentication,
     begin_passkey_registration,
@@ -64,6 +67,7 @@ class UserProfile(BaseModel):
     photo_url: str | None = None
     subscription_tier: str = "free"
     auth_providers: list[str] = Field(default_factory=list)
+    passkey_count: int = 0
 
 
 class Token(BaseModel):
@@ -329,8 +333,144 @@ async def start_telegram_oidc_login(
     origin: str | None = None,
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
-    authorization_url = await begin_telegram_oidc(redis, return_to=return_to, origin=origin)
+    authorization_url = await begin_telegram_oidc(
+        redis, return_to=return_to, origin=origin
+    )
     return RedirectResponse(authorization_url, status_code=status.HTTP_302_FOUND)
+
+
+async def _limit_yandex_attempts(redis: Redis, request: Request) -> None:
+    ip = _resolve_client_ip(request)
+    keys = [("rl:yandex:global", 1000)]
+    if ip:
+        keys.append((f"rl:yandex:ip:{hashlib.sha256(ip.encode()).hexdigest()}", 30))
+    for key, limit in keys:
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, 600)
+        if count > limit:
+            raise HTTPException(429, "too_many_login_attempts")
+
+
+@auth.get("/yandex/start")
+async def start_yandex_login(
+    request: Request,
+    return_to: str = "/",
+    origin: str | None = None,
+    redis: Redis = Depends(get_redis),
+) -> RedirectResponse:
+    await _limit_yandex_attempts(redis, request)
+    response = RedirectResponse(
+        "/",
+        status_code=302,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+    response.headers["location"] = await yandex_oauth.begin_login(
+        redis, request, response, origin=origin, return_to=return_to
+    )
+    return response
+
+
+class YandexLinkRequest(BaseModel):
+    origin: str | None = None
+    return_to: str = Field(default="/", max_length=2048)
+
+
+@auth.post("/identities/yandex/link")
+async def start_yandex_link(
+    payload: YandexLinkRequest,
+    request: Request,
+    response: Response,
+    current_user: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    redis: Redis = Depends(get_redis),
+) -> dict[str, str]:
+    await _limit_yandex_attempts(redis, request)
+    response.headers["Cache-Control"] = "no-store"
+    url = await yandex_oauth.begin_login(
+        redis,
+        request,
+        response,
+        origin=payload.origin,
+        return_to=payload.return_to,
+        user=current_user,
+        session=session,
+    )
+    return {"authorization_url": url}
+
+
+@auth.get("/yandex/callback")
+async def finish_yandex_login(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    redis: Redis = Depends(get_redis),
+) -> RedirectResponse:
+    saved = {
+        "frontend_origin": yandex_oauth.callback_return_origin(request),
+        "return_to": "/",
+    }
+    user = None
+    result = "error"
+    try:
+        saved = await yandex_oauth.consume_attempt(redis, request, state)
+        if error:
+            result = "cancelled"
+        elif not code or len(code) > 2048:
+            result = "error"
+        else:
+            target_id = saved.get("target_user_id")
+            if target_id:
+                cookie = request.cookies.get(settings.AUTH_COOKIE_NAME)
+                resolved = (
+                    await resolve_browser_session(session, cookie) if cookie else None
+                )
+                if (
+                    not resolved
+                    or str(resolved[0].id) != target_id
+                    or not secrets.compare_digest(
+                        hashlib.sha256(cookie.encode()).hexdigest(),
+                        saved["session_hash"],
+                    )
+                ):
+                    raise HTTPException(403, "yandex_link_session_changed")
+                ensure_deployment_user_allowed(resolved[0])
+                if is_beta_channel() and not settings.BETA_ALLOW_IDENTITY_MUTATIONS:
+                    raise HTTPException(403, "beta_identity_mutation_disabled")
+            subject = await yandex_oauth.fetch_subject(code, saved["code_verifier"])
+            user = await yandex_oauth.resolve_identity(
+                session,
+                subject,
+                uuid.UUID(target_id) if target_id else None,
+                saved.get("session_hash"),
+            )
+            result = "linked" if target_id else "success"
+    except HTTPException as exc:
+        await session.rollback()
+        if exc.detail == "yandex_already_linked":
+            result = "already_linked"
+        elif exc.status_code == 409:
+            result = "conflict"
+        elif exc.detail == "yandex_link_session_changed":
+            result = "session_changed"
+        elif exc.detail == "yandex_login_state_invalid":
+            result = "expired"
+        elif exc.detail == "beta_access_denied":
+            result = "beta_denied"
+        settings.custom_logger.warning("Yandex browser login failed: %s", exc.detail)
+    response = RedirectResponse(
+        yandex_oauth.frontend_redirect(saved, result),
+        status_code=302,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+    yandex_oauth.clear_binding(response, state)
+    if user:
+        set_session_cookie(
+            response, await create_browser_session(session, user, request)
+        )
+    return response
 
 
 @auth.get("/telegram/oidc/callback")
@@ -342,7 +482,9 @@ async def finish_telegram_oidc_login(
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
-    return_origin = await oidc_return_origin(redis, state, consume=bool(error or not code))
+    return_origin = await oidc_return_origin(
+        redis, state, consume=bool(error or not code)
+    )
     if error or not code or not state:
         return RedirectResponse(
             frontend_redirect("/", "cancelled" if error else "error", return_origin),
@@ -658,6 +800,14 @@ async def delete_passkey(
     passkey = await session.get(models.PasskeyCredential, passkey_id)
     if not passkey or passkey.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="passkey_not_found")
+    identities, passkeys = await lock_login_methods(session, current_user.id)
+    if (
+        any(key.id == passkey.id for key in passkeys)
+        and not identities
+        and current_user.telegram_id is None
+        and len(passkeys) <= 1
+    ):
+        raise HTTPException(409, "last_identity_cannot_be_removed")
     await session.delete(passkey)
     await session.commit()
 
@@ -794,19 +944,13 @@ async def unlink_identity(
     current_user: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    if provider not in {"email", "telegram"}:
+    if provider not in {"email", "telegram", "yandex"}:
         raise HTTPException(status_code=404, detail="identity_not_found")
-    identities = (
-        await session.exec(
-            select(models.UserIdentity).where(
-                models.UserIdentity.user_id == current_user.id
-            )
-        )
-    ).all()
+    identities, passkeys = await lock_login_methods(session, current_user.id)
     identity = next((item for item in identities if item.provider == provider), None)
     if not identity:
         raise HTTPException(status_code=404, detail="identity_not_found")
-    if len({item.provider for item in identities}) <= 1:
+    if len(identities) <= 1 and not passkeys:
         raise HTTPException(status_code=409, detail="last_identity_cannot_be_removed")
     await session.delete(identity)
     if provider == "telegram":

@@ -210,6 +210,13 @@ class Settings:
     )
     WEB_AUTH_CALLBACK_URL: str = os.getenv("WEB_AUTH_CALLBACK_URL", "")
     WEB_AUTH_FROM_EMAIL: str = os.getenv("WEB_AUTH_FROM_EMAIL", "")
+    YANDEX_OAUTH_ENABLED: bool = os.getenv("YANDEX_OAUTH_ENABLED", "false").lower() in ("true", "1")
+    YANDEX_OAUTH_CLIENT_ID: str = os.getenv("YANDEX_OAUTH_CLIENT_ID", "").strip()
+    YANDEX_OAUTH_CLIENT_SECRET: str = os.getenv("YANDEX_OAUTH_CLIENT_SECRET", "").strip()
+    YANDEX_OAUTH_REDIRECT_URI: str = os.getenv("YANDEX_OAUTH_REDIRECT_URI", "").strip()
+    YANDEX_OAUTH_STATE_TTL_SECONDS: int = 600
+    YANDEX_OAUTH_HTTP_TIMEOUT_SECONDS: float = 10.0
+
     TELEGRAM_OIDC_ENABLED: bool = os.getenv(
         "TELEGRAM_OIDC_ENABLED", "False"
     ).lower() in ("true", "1")

@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, Mock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import httpx
 from fastapi import HTTPException, Request
 
 import app.api.auth as auth_api
@@ -9,6 +10,40 @@ import app.api.telegram_oidc as telegram_oidc
 from app.api.telegram_oidc import TelegramOidcIdentity
 from app.core.config import settings
 from app.db.models import AppUser
+
+
+@pytest.mark.asyncio
+async def test_token_and_jwks_clients_ignore_ai_proxy(monkeypatch):
+    _configure(monkeypatch)
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        monkeypatch.setenv(name, "socks5://unreachable.invalid:1080")
+    real_client = httpx.AsyncClient
+    configs = []
+
+    def factory(**kwargs):
+        configs.append(kwargs)
+        transport = httpx.MockTransport(
+            lambda req: httpx.Response(
+                200,
+                json={"id_token": "signed-token"}
+                if req.method == "POST"
+                else {"keys": []},
+            )
+        )
+        return real_client(transport=transport, **kwargs)
+
+    monkeypatch.setattr(telegram_oidc.httpx, "AsyncClient", factory)
+    assert await telegram_oidc._exchange_code("code", "verifier") == "signed-token"
+    assert await telegram_oidc._load_jwks(FakeRedis()) == {"keys": []}
+    assert len(configs) == 2
+    assert all(config["trust_env"] is False for config in configs)
 
 
 class FakeRedis:
