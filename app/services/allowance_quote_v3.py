@@ -28,6 +28,7 @@ async def estimate_plan(
     document_stores,
     image_reserve,
     history,
+    image_estimate,
     references=0,
     summary_units=0,
     consent_instructions="",
@@ -52,12 +53,13 @@ async def estimate_plan(
     explicit_image = request.required_tool == "image_generation" or (
         not auto and "image_generation" in tools
     )
-    # Auto-discovered image actions require another deliberate user request.
-    if not explicit_image:
-        selected.discard("image_generation")
     paid_available = allowance.available(account)
     if paid_available <= 0:
         selected -= {"web_search", "file_search", "image_generation", "inspect_image"}
+    image_allowed = "image_generation" in selected
+    needs_confirmation = explicit_image or (
+        image_allowed and image_estimate >= max(1, account.granted * 5 // 100)
+    )
     if request.required_tool:
         if request.required_tool not in TOOL_DESCRIPTIONS:
             raise HTTPException(400, detail={"error": "tool_unavailable"})
@@ -134,6 +136,7 @@ async def estimate_plan(
         stores=sorted(document_stores),
         rates=RATE_VERSION,
         policy=ITERATIVE,
+        image_permission_policy="enabled-tools-v1",
     )
     fingerprint = hashlib.sha256(
         json.dumps(stable, sort_keys=True, ensure_ascii=False, default=str).encode()
@@ -174,7 +177,7 @@ async def estimate_plan(
             3 * direct
             + 300_000
             + summary_units
-            + (image_reserve if explicit_image else 0),
+            + (image_reserve if image_allowed else 0),
         ),
     )
     recovery_tokens = min(
@@ -201,7 +204,7 @@ async def estimate_plan(
         tools=sorted(selected),
         tool_rounds=policy["planning_turns"],
         recovery_tokens=recovery_tokens,
-        image_consent=explicit_image,
+        image_consent=image_allowed,
         required_tool=request.required_tool,
         supplier_ceiling=supplier,
         risk_policy=policy,
@@ -225,12 +228,12 @@ async def estimate_plan(
         ceiling_units=ceiling,
         minimum_ceiling_units=minimum,
         ceiling_percent=round(100 * ceiling / account.granted, 2),
-        needs_confirmation=explicit_image,
+        needs_confirmation=needs_confirmation,
         image_quality=(request.image_quality or conversation.image_quality or "medium")
-        if explicit_image
+        if image_allowed
         else None,
-        image_estimated_percent=round(100 * image_reserve / account.granted, 2)
-        if explicit_image
+        image_estimated_percent=round(100 * image_estimate / account.granted, 2)
+        if image_allowed
         else None,
         luna_minimum=luna_minimum,
         luna_ceiling=luna_ceiling,

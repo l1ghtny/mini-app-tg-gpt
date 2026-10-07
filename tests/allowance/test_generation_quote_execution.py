@@ -55,6 +55,10 @@ async def send_case(db, monkeypatch):
     monkeypatch.setattr(
         chat, "list_conversation_ready_vector_store_ids", AsyncMock(return_value=[])
     )
+    from app.api import document_helpers
+    monkeypatch.setattr(
+        document_helpers, "list_conversation_ready_vector_store_ids", AsyncMock(return_value=[])
+    )
 
     async def reserve_legacy(*args, **kwargs):
         await session.commit()
@@ -592,8 +596,14 @@ async def test_zero_paid_balance_luna_quote_send_and_provider_capacity_match(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("choice,required", [
+    (["image_generation"], "image_generation"),
+    ("auto", None),
+    (["auto"], None),
+    (["web_search", "image_generation"], None),
+])
 async def test_multibyte_image_query_fits_quote_after_real_routing_admission(
-    send_case, monkeypatch
+    send_case, monkeypatch, choice, required
 ):
     session, user, conversation, queued = send_case
     query = "красочный рисунок " * 300
@@ -626,14 +636,20 @@ async def test_multibyte_image_query_fits_quote_after_real_routing_admission(
         client_request_id="multibyte-image",
         role="user",
         model=LUNA,
-        tool_choice=["image_generation"],
-        required_tool="image_generation",
+        tool_choice=choice,
+        required_tool=required,
         image_quality="low",
         content=[{"type": "text", "value": "Нарисуй иллюстрацию"}],
     )
     quote, _, events = await send_and_execute(
         session, user, conversation, queued, request
     )
+    assert quote["execution_plan"]["image_consent"]
+    assert "image_generation" in quote["execution_plan"]["tools"]
+    if choice == "auto" or choice == ["auto"]:
+        assert not quote["needs_confirmation"]
+        assert "image_generation" in {tool["name"] for tool in payloads[0]["tools"]}
+        assert "deliberately selected image action" not in payloads[0]["instructions"]
     attempts = (
         await session.exec(select(ProviderAttempt).order_by(ProviderAttempt.created_at))
     ).all()
