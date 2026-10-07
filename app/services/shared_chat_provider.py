@@ -917,7 +917,9 @@ def iterative_instructions(system):
         "When tool use is disabled, finish a useful answer using evidence already present. "
         "If no relevant evidence was retrieved, clearly state that gap and distinguish general knowledge from verified facts. "
         "Cite only URLs or filenames actually returned, never invent citations, and never claim a blocked tool ran. "
-        "Image generation requires a deliberately selected image action; if it is unavailable, ask the user to select that action."
+        "When image_generation is available, use it to fulfill requests to create or edit images. "
+        "Earlier assistant claims that image generation is unavailable do not describe the current tools. "
+        "Never claim an image was generated unless the tool succeeded."
     )
 
 
