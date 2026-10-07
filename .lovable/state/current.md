@@ -1838,3 +1838,7 @@ production version/publication gate. No deployment is authorized by this task.
 
 Backend draft PR: https://github.com/l1ghtny/mini-app-tg-gpt/pull/40
 Frontend draft PR: https://github.com/l1ghtny/chat-bot-telegram/pull/34
+
+## 2026-10-07 email preview correction
+
+Email login/recovery is unavailable without a delivery provider and stays off for this batch. The local preview now uses VITE_EMAIL_AUTH_ENABLED=false. Earlier email recovery acceptance used test-only debug tokens, with no email sent. Launch methods: Telegram, Yandex ID and passkeys. Email sender/domain configuration and actual delivery acceptance remain a separate future step.
