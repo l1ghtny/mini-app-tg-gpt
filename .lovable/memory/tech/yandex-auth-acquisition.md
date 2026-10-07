@@ -25,3 +25,6 @@ Owner has only a personal Yandex account and no OAuth app at this checkpoint. Us
 Candidate migration74 extends the provider constraint. Downgrade refuses while Yandex identities exist rather than deleting login data. Source versions2.6.0 both; production basis2.5.1/backend133 and2.5.0/frontend130. No merge/deployment/registration/secrets changed. What's New is required at release but stays a documentation draft until actual production availability.
 
 Local PostgreSQL/Redis tests and in-app desktop/mobile checks use synthetic identity/provider data. Do not claim real Yandex exchange, fresh real Telegram callback, physical-device/passkey acceptance, received Sentry2.6.0 releases, or production announcement from these checks. Next: review candidate PRs, owner secure setup and separately authorized live acceptance/release.
+
+Backend draft PR: https://github.com/l1ghtny/mini-app-tg-gpt/pull/40
+Frontend draft PR: https://github.com/l1ghtny/chat-bot-telegram/pull/34

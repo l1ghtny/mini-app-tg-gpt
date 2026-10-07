@@ -1,6 +1,6 @@
 # Yandex ID and dependable browser authentication — 7 October 2026
 
-Status: review candidate. No merge, deployment, OAuth registration, live credentials, payment policy, indexing or campaign settings have been changed. The owner currently has a personal Yandex account and no OAuth application.
+Status: review candidate — [backend draft PR40](https://github.com/l1ghtny/mini-app-tg-gpt/pull/40), [frontend draft PR34](https://github.com/l1ghtny/chat-bot-telegram/pull/34). No merge, deployment, OAuth registration, live credentials, payment policy, indexing or campaign settings have been changed. The owner currently has a personal Yandex account and no OAuth application.
 
 ## Owner checklist
 

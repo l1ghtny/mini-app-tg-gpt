@@ -4,12 +4,12 @@ Review candidate: Telegram auth transport isolation, Yandex code+PKCE sign-in, e
 
 - Verified bases: backend caf0127/image133/2.5.1, frontend c870cb5/image130/2.5.0. Candidates isolated under /private/tmp/lightny-yandex-auth-{backend,frontend}-20261007; shared dirty work preserved.
 - Owner has a personal Yandex account and no OAuth app. Exact registration/callback/configuration checklist: docs/operations/2026-10-07-yandex-auth-setup.md.
-- Completed implementation,71 backend checks with PostgreSQL/Redis,606 frontend checks, production build, Ruff and changed-surface lint. Final query regression and typed UI fixtures also pass. Draft PR publication in progress.
+- Completed implementation,71 backend checks with PostgreSQL/Redis,606 frontend checks, production build, Ruff and changed-surface lint. Final query regression and typed UI fixtures also pass. Review complete locally; paired draft PRs40/backend and34/frontend published.
 - UI: real local API/DB/Redis with synthetic provider; mobile/desktop login, session restore, email recovery, linking, cancel and confirmed unlink checked.
 - Frontend follow-up is implemented in the paired branch (API/types/AuthGate/Settings/PasskeyRow/translations/build flag). Coordinate both PRs; default provider flags remain disabled.
 - Release candidates2.6.0 both; What's New required at release, draft stays in documentation until real production availability.
 - Blocked live acceptance: real Yandex credentials/approval, fresh Telegram login, physical device/passkey checks. These do not block review of local code.
-- Next: finish final checks/PRs, owner registration and secure configuration, separately authorized live acceptance/release. No other launch batch included.
+- Next: owner registration and secure configuration, review PR40/backend and PR34/frontend, then separately authorize live acceptance/release. No other launch batch included.
 
 ## Earlier checkpoints retained below
 
@@ -1833,3 +1833,8 @@ release drafts. Current frontend confirmation contract checked read-only on main
 Next: backend PR review. Activation requires funded
 supplier envelope sizing, paid provider benchmarks, compatible UI acceptance and
 production version/publication gate. No deployment is authorized by this task.
+
+## Authentication review links
+
+Backend draft PR: https://github.com/l1ghtny/mini-app-tg-gpt/pull/40
+Frontend draft PR: https://github.com/l1ghtny/chat-bot-telegram/pull/34
