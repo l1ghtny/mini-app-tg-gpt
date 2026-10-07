@@ -7,8 +7,81 @@ from sqlalchemy import func
 from sqlmodel import select
 
 from app.core.config import settings
-from app.db.allowance import AllowanceRequest, ProviderAttempt
+from app.db.allowance import (
+    AllowanceAccount,
+    AllowanceEvent,
+    AllowanceRequest,
+    ProviderAttempt,
+)
 from app.services.allowance_task_policy import NO_HOLD
+
+USER_LOSS_WAIVER = "user_loss_waived"
+
+
+async def reset_user_loss_guard(session, user_id, operation_id):
+    """Waive existing failed tasks for one user; caller commits the audit events."""
+    if not operation_id or len(operation_id) > 100:
+        raise ValueError("A bounded, stable operation ID is required")
+    await lock(session)
+    key = f"user-loss-reset:{operation_id}"
+    existing = (
+        await session.exec(
+            select(AllowanceEvent, AllowanceAccount)
+            .join(AllowanceAccount, AllowanceAccount.id == AllowanceEvent.account_id)
+            .where(AllowanceEvent.event_key == key)
+        )
+    ).first()
+    if existing:
+        event, account = existing
+        if account.user_id != user_id or event.kind != "user_loss_reset":
+            raise ValueError("Operation ID belongs to a different reset")
+        return 0
+    account = (
+        await session.exec(
+            select(AllowanceAccount)
+            .where(AllowanceAccount.user_id == user_id)
+            .order_by(AllowanceAccount.period_start.desc())
+        )
+    ).first()
+    if account is None:
+        raise ValueError("User has no allowance account")
+    waived = select(AllowanceEvent.request_id).where(
+        AllowanceEvent.kind == USER_LOSS_WAIVER,
+        AllowanceEvent.request_id.is_not(None),
+        AllowanceEvent.units == 0,
+        AllowanceEvent.luna_units == 0,
+    )
+    rows = (
+        await session.exec(
+            select(AllowanceRequest).where(
+                AllowanceRequest.user_id == user_id,
+                AllowanceRequest.status == "failed",
+                AllowanceRequest.id.not_in(waived),
+            )
+        )
+    ).all()
+    session.add(
+        AllowanceEvent(
+            account_id=account.id,
+            event_key=key,
+            kind="user_loss_reset",
+            units=0,
+            luna_units=0,
+        )
+    )
+    for row in rows:
+        session.add(
+            AllowanceEvent(
+                account_id=row.account_id,
+                request_id=row.id,
+                event_key=f"user-loss-waived:{row.id}",
+                kind=USER_LOSS_WAIVER,
+                units=0,
+                luna_units=0,
+            )
+        )
+    await session.flush()
+    return len(rows)
 
 
 def now():
@@ -117,6 +190,27 @@ async def exposure(session, *, user_id=None, days=None):
     if user_id is not None:
         q = q.where(AllowanceRequest.user_id == user_id)
     rows = (await session.exec(q)).all()
+    waived = set()
+    if user_id is not None:
+        waived = set(
+            (
+                await session.exec(
+                    select(AllowanceEvent.request_id)
+                    .join(
+                        AllowanceRequest,
+                        AllowanceRequest.id == AllowanceEvent.request_id,
+                    )
+                    .where(
+                        AllowanceRequest.user_id == user_id,
+                        AllowanceRequest.status == "failed",
+                        AllowanceEvent.account_id == AllowanceRequest.account_id,
+                        AllowanceEvent.kind == USER_LOSS_WAIVER,
+                        AllowanceEvent.units == 0,
+                        AllowanceEvent.luna_units == 0,
+                    )
+                )
+            ).all()
+        )
     costs = {}
     requests = {}
     recent = {}
@@ -157,6 +251,7 @@ async def exposure(session, *, user_id=None, days=None):
             ),
         )
         for rid, cost in costs.items()
+        if rid not in waived
     )
     return supplier, loss
 
