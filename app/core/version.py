@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-APP_VERSION = "2.5.3"
+APP_VERSION = "2.5.4"
 
 
 def sentry_release(component: str) -> str:
