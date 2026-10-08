@@ -37,5 +37,21 @@ def test_download_notice_has_localized_copy_and_idempotent_insert():
 
 def test_download_notice_extends_single_shared_head():
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert scripts.get_heads() == ["xw0e1f2a3b74"]
+    assert scripts.get_heads() == ["xw0e1f2a3b75"]
     assert scripts.get_revision("xw0e1f2a3b74").down_revision == "xw0e1f2a3b73"
+    assert scripts.get_revision("xw0e1f2a3b75").down_revision == "xw0e1f2a3b74"
+
+
+def test_download_feedback_updates_one_notice_and_restores_previous_copy():
+    migration = import_module("migrations.versions.xw0e1f2a3b75_clarify_document_download_feedback")
+    previous = import_module("migrations.versions.xw0e1f2a3b74_announce_document_downloads")
+    sql = render(migration.upgrade)
+    assert "INSERT" not in sql
+    assert "WHERE id = '2026-10-08-document-downloads'" in sql
+    assert "min_app_version = '2.5.2'" in sql
+    assert "progress and completion" in migration.BODY_EN
+    assert "завершение" in migration.BODY_RU
+    reverted = render(migration.downgrade)
+    assert "min_app_version = '2.5.1'" in reverted
+    assert previous.BODY_EN.replace("'", "''") in reverted
+    assert previous.BODY_RU in reverted
